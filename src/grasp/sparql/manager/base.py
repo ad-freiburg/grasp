@@ -1,18 +1,12 @@
 import logging
 import math
 import os
-import re
 import sys
 import tempfile
 import time
-from collections import Counter
 from typing import Any, Iterable, Type
 
-import numpy as np
-from search_index import (
-    PrefixIndex,
-    SearchIndex,
-)
+from search_index import PrefixIndex, SearchIndex
 from universal_ml_utils.table import generate_table
 
 from grasp.sparql.constants import (
@@ -25,7 +19,6 @@ from grasp.sparql.constants import (
     SelectResult,
     SelectRow,
     get_endpoint,
-    obj_types_before,
 )
 from grasp.sparql.manager.utils import (
     get_common_sparql_prefixes,
@@ -46,7 +39,6 @@ from grasp.sparql.sparql import (
     has_iri,
     load_iri_and_literal_parser,
     load_sparql_parser,
-    normalize,
     parse_string,
     prettify,
     query_type,
