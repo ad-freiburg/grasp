@@ -4,11 +4,12 @@ import os
 from enum import Enum
 from time import sleep
 
+import torch
 from pydantic import BaseModel
 from tqdm import tqdm
+from universal_ml_utils.io import dump_json, load_json, load_jsonl
 from universal_ml_utils.logging import get_logger, setup_logging
-from universal_ml_utils.ops import run_parallel, batch
-from universal_ml_utils.io import load_json, dump_json, load_jsonl
+from universal_ml_utils.ops import batch
 from vllm import LLM, SamplingParams
 from vllm.sampling_params import GuidedDecodingParams
 
@@ -49,9 +50,9 @@ def parse_args() -> argparse.Namespace:
         default="Qwen/Qwen2.5-7B-Instruct",
     )
     parser.add_argument(
-        "--base-url", 
-        type=str,
-        default="http://localhost:8000/v1",
+        "--seed",
+        type=int,
+        default=22,
     )
     parser.add_argument(
         "-b",
@@ -164,7 +165,6 @@ class Output(BaseModel):
     generation: Generation | None
 
 
-
 def remove_service(manager: KgManager, sparql: str) -> str:
     parse, _ = parse_string(sparql, manager.sparql_parser)
 
@@ -207,7 +207,9 @@ def remove_unused_variables(manager: KgManager, sparql: str) -> str:
 
     return parse_to_string(parse)
 
+
 MAX_RETRIES = 5
+
 
 def preprocess(
     sparql: str,
@@ -282,6 +284,7 @@ def postprocess(output: Output, manager: KgManager) -> dict:
 
     return postprocessed
 
+
 def complete(llm: LLM, sampling_params: SamplingParams, inputs: list) -> list[Output]:
     try:
         completions = llm.chat(
@@ -313,12 +316,9 @@ def run(args: argparse.Namespace) -> None:
     if os.path.exists(args.output) and not args.overwrite:
         outputs = load_json(args.output)
 
-    manager = load_kg_manager(
-        args.knowledge_graph,
-        endpoint=args.kg_endpoint
-    )
+    manager = load_kg_manager(args.knowledge_graph, endpoint=args.kg_endpoint)
 
-    llm = LLM(args.model)
+    llm = LLM(args.model, tensor_parallel_size=torch.cuda.device_count())
     params = SamplingParams(
         seed=args.seed,
         top_p=0.9,
