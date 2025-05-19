@@ -376,8 +376,7 @@ def run(args: argparse.Namespace) -> None:
             logger.debug(f"Postprocessed:\n{json.dumps(post, indent=2)}")
             outputs[id] = {"pre": pre, "output": output.model_dump(), "post": post}
 
-        if (len(outputs) + 1) % 100 == 0:
-            dump_json(outputs, args.output, indent=2)
+        dump_json(outputs, args.output, indent=2)
 
     dump_json(outputs, args.output, indent=2)
 
