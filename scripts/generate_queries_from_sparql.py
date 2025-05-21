@@ -62,6 +62,11 @@ def parse_args() -> argparse.Namespace:
         help="Batch size",
     )
     parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -208,12 +213,10 @@ def remove_unused_variables(manager: KgManager, sparql: str) -> str:
     return parse_to_string(parse)
 
 
-MAX_RETRIES = 5
-
-
 def preprocess(
     sparql: str,
     manager: KgManager,
+    max_retries: int,
 ) -> tuple[dict, list]:
     preprocessed: dict = {"raw_sparql": sparql, "errors": []}
 
@@ -239,7 +242,7 @@ def preprocess(
             result = manager.format_sparql_result(result)
             break
         except Exception as e:
-            if i < MAX_RETRIES:
+            if i < max_retries:
                 sleep(i**2)
                 i += 1
                 continue
@@ -339,7 +342,7 @@ def run(args: argparse.Namespace) -> None:
                 continue
 
             try:
-                res = preprocess(sparql, manager)
+                res = preprocess(sparql, manager, args.max_retries)
             except Exception as e:
                 logger.error(f"Error in preprocessing: {e}")
                 outputs[id] = {"error": str(e)}
