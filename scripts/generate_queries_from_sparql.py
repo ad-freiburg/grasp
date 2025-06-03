@@ -32,7 +32,7 @@ MAX_RESULTS = 8192
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("input", type=str, help="Input file")
-    parser.add_argument("output", type=str, help="Output file")
+    parser.add_argument("output", type=str, help="Output dir")
     parser.add_argument(
         "-kg",
         "--knowledge-graph",
@@ -53,6 +53,18 @@ def parse_args() -> argparse.Namespace:
         "--seed",
         type=int,
         default=22,
+    )
+    parser.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        help="Skip the first N examples from the input file (before taking)",
+    )
+    parser.add_argument(
+        "--take",
+        type=int,
+        default=None,
+        help="Take only the first N examples from the input file",
     )
     parser.add_argument(
         "-b",
@@ -80,7 +92,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite output file",
+        help="Overwrite outputs",
     )
     return parser.parse_args()
 
@@ -250,7 +262,7 @@ def preprocess(
             raise RuntimeError(f"execute_sparql: {e}") from e
 
     if result is None:
-        raise RuntimeError(f"execute_sparql: no result within {MAX_RETRIES} retries")
+        raise RuntimeError(f"execute_sparql: no result within {max_retries} retries")
 
     preprocessed["result"] = result
     selections = manager.format_selections(selections_from_items(items))
@@ -309,15 +321,29 @@ def complete(llm: LLM, sampling_params: SamplingParams, inputs: list) -> list[Ou
     return parsed
 
 
+def output_path(dir: str, id: int) -> str:
+    return os.path.join(dir, f"{id:07d}.json")
+
+
+def write_output(dir: str, id: int, data: dict) -> None:
+    dump_json(data, output_path(dir, id), indent=2)
+
+
+def load_output(dir: str, id: int) -> dict | None:
+    path = output_path(dir, id)
+    if not os.path.exists(path):
+        return None
+    return load_json(path)
+
+
 def run(args: argparse.Namespace) -> None:
     setup_logging()
     logger = get_logger("SPARQL TO QUESTION", args.log_level)
 
     sparqls = list(enumerate(load_jsonl(args.input)))
 
-    outputs = {}
-    if os.path.exists(args.output) and not args.overwrite:
-        outputs = load_json(args.output)
+    upper = len(sparqls) if args.take is None else args.skip + args.take
+    sparqls = sparqls[args.skip : upper]
 
     manager = load_kg_manager(args.knowledge_graph, endpoint=args.kg_endpoint)
 
@@ -337,15 +363,17 @@ def run(args: argparse.Namespace) -> None:
         for id, sparql in batched:
             pbar.update(1)
 
+            output = load_output(args.output, id)
+
             # skip existing
-            if id in outputs and (not args.retry_failed or "error" not in outputs[id]):
+            if output is not None and (not args.retry_failed or "error" in output):
                 continue
 
             try:
                 res = preprocess(sparql, manager, args.max_retries)
             except Exception as e:
                 logger.error(f"Error in preprocessing: {e}")
-                outputs[id] = {"error": str(e)}
+                write_output(args.output, id, {"error": str(e)})
                 continue
 
             pre, inp = res
@@ -372,16 +400,20 @@ def run(args: argparse.Namespace) -> None:
                 post = postprocess(output, manager)
             except Exception as e:
                 logger.error(f"Error in postprocessing: {e}")
-                outputs[id] = {"error": str(e)}
+                write_output(args.output, id, {"error": str(e)})
                 continue
 
             logger.debug(f"Output:\n{output.model_dump_json(indent=2)}")
             logger.debug(f"Postprocessed:\n{json.dumps(post, indent=2)}")
-            outputs[id] = {"pre": pre, "output": output.model_dump(), "post": post}
-
-        dump_json(outputs, args.output, indent=2)
-
-    dump_json(outputs, args.output, indent=2)
+            write_output(
+                args.output,
+                id,
+                {
+                    "pre": pre,
+                    "output": output.model_dump(),
+                    "post": post,
+                },
+            )
 
     pbar.close()
 
