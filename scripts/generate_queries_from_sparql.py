@@ -314,9 +314,13 @@ def complete(llm: LLM, sampling_params: SamplingParams, inputs: list) -> list[Ou
     for completion in completions:
         try:
             text = completion.outputs[0].text
-            parsed.append(Output(**json.loads(text)))
         except Exception as e:
-            raise RuntimeError(f"output_parsing: {e}") from e
+            raise RuntimeError(f"completion_output: {e}") from e
+
+        try:
+            parsed.append(Output.model_validate_json(text))
+        except Exception as e:
+            raise RuntimeError(f"output_parsing: {e} for output '{text}'") from e
 
     return parsed
 
