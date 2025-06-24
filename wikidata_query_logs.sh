@@ -12,6 +12,7 @@
 
 skip=${SKIP:-0}
 take=${TAKE:-1000000}
+args=${ARGS:-""}
 
 srun python scripts/generate_queries_from_sparql.py \
   data/wikidata-query-logs/organic.raw.jsonl \
@@ -21,4 +22,5 @@ srun python scripts/generate_queries_from_sparql.py \
   --model Qwen/Qwen2.5-72B-Instruct \
   --skip "$skip" \
   --take "$take" \
+  $args \
   -b 8
