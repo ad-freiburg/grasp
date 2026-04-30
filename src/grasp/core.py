@@ -176,7 +176,18 @@ def generate(
         config.search_max_pages,
     )
     fns.extend(task.function_definitions())
-    yield {"type": "input", "input": input}
+
+    raw_input = input
+    image_url = None
+    if (isinstance(raw_input, dict)):
+        image_url = raw_input.get("image_url")
+        text_input = raw_input.get("input", "")
+    else:
+        text_input = raw_input
+
+    text_input = task.setup(text_input)
+
+    yield {"type": "input", "input": text_input}
 
     model = custom_model or get_model(config)
 
@@ -223,7 +234,18 @@ def generate(
     start = time.monotonic()
 
     # add user input
-    messages.append(Message.user(content=input))
+    if image_url:
+        messages.append(
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": text_input},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            )
+        )
+    else:
+        messages.append(Message.user(content=text_input))
 
     if (
         config.force_examples
@@ -236,7 +258,7 @@ def generate(
             managers,
             example_indices,  # type: ignore
             config.force_examples,
-            input,
+            text_input,
             config.random_examples,
             config.num_examples,
             task.known,
@@ -451,11 +473,17 @@ def generate(
 
         # provide feedback
         try:
-            inputs = [
-                message.content
-                for message in messages
-                if isinstance(message.content, str) and message.role == "user"
-            ]
+            inputs = []
+            for message in messages:
+                if message.role != "user":
+                    continue
+                c = message.content
+                if isinstance(c, str):
+                    inputs.append(c)
+                if isinstance(c, list):
+                    text = "".join(part.get("text", "") for part in c if part.get("type") == "text")
+                    inputs.append(text)
+
             feedback = generate_feedback(
                 model,
                 task,
