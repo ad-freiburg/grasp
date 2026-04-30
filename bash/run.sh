@@ -18,6 +18,12 @@ IFS=" " read -ra benchmarks <<<"$BENCHMARKS"
 
 args=${ARGS:-""}
 flags=${FLAGS:-""}
+image_input=${IMAGE_INPUT:-""}
+
+extra_args=()
+if [ -n "$image_input" ]; then
+  extra_args+=(--image-input "$image_input")
+fi
 
 for benchmark in "${benchmarks[@]}"; do
   dir="data/benchmark/$kg/$benchmark"
@@ -38,6 +44,7 @@ for benchmark in "${benchmarks[@]}"; do
     "$config" \
     --input-file "$file" \
     --output-file "$dir/outputs/$name.jsonl" \
+    "${extra_args[@]}" \
     $args \
     --shuffle
 

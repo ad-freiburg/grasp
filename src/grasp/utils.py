@@ -1,8 +1,12 @@
 import json
 import os
+import io
+import base64
+from urllib.request import Request, urlopen
 from importlib import resources
 from typing import Any, Callable, Iterable, Iterator, TypeVar
 from urllib.parse import unquote_plus
+from PIL import Image
 
 from pydantic import BaseModel
 from termcolor import colored
@@ -178,6 +182,21 @@ def format_message(message: Message) -> str:
         name = message.name or message.role
         header = colored(f"{name.upper()}", "magenta")
         return f"{header}\n{message.content}"
+    elif isinstance(message.content, list):
+        header = colored(f"{message.role.upper()}", "magenta")
+        parts = []
+        for part in message.content:
+            t = part.get("type")
+            if t == "text":
+                parts.append(f"[text] {part.get("text", "")}")
+            elif t == "image_url":
+                url = part.get("image_url", {}).get("url", "")
+                short = (url[:80] + "...") if len(url) > 80 else url
+                parts.append(f"[image_url] {short}")
+            else:
+                parts.append(f"[{t}]  {json.dumps(part, indent=2)}")
+        content = "\n".join(parts)
+        return f"{header}\n{content}"
     else:
         return format_response(message.content)
 
@@ -449,3 +468,52 @@ def ordered_unique(
 def read_resource(package: str, resource: str) -> str:
     with resources.files(package).joinpath(resource).open() as f:
         return f.read()
+
+
+MAX_IMAGE_BYTES = 50 * 1048  # 50 KB Images at most
+
+
+def image_file_to_base64(path: str) -> str:
+    """
+    Converts a local image path into a base64 encoded image_url
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Image not found: {path}")
+    with open(path, "rb") as file:
+        data = base64.b64encode(file.read()).decode("utf-8")
+    mime_type = "image/jpeg"
+    if (len(data) > MAX_IMAGE_BYTES):
+        raise ValueError(f"Image {path} is too large,\n image size: {len(data)}\n limit: {MAX_IMAGE_BYTES}")
+    return f"data:{mime_type};base64,{data}"
+
+
+def image_url_to_base64(url: str) -> str:
+    """
+    Downloads and converts an external image into a base64 encoded image_url
+    """
+    request = Request(
+        url,
+        headers={"User-Agent": "GRASP https://github.com/ad-freiburg/grasp"}
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            content_type = response.headers.get("Content-Type", "image/jpeg").split(";")[0]
+            image_bytes = response.read()
+    except Exception as e:
+        raise FunctionCallException(f"Failed to download image from {url}: \n{e}") from e
+
+    if (len(image_bytes) <= MAX_IMAGE_BYTES):
+        data = base64.b64encode(image_bytes).decode("utf-8")
+        return f"data:{content_type};base64,{data}"
+    else:
+        img = Image.open(io.BytesIO(image_bytes))
+        scale = (MAX_IMAGE_BYTES / len(image_bytes)) ** 0.5
+        new_size = (int(img.width * scale), int(img.height * scale))
+        img = img.resize(new_size, resample=Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        format = content_type.split("/")[-1].upper()
+        format = "JPEG" if format not in ("JPEG", "PNG", "WEBP") else format
+        img.save(buffer, format=format, quality=85)
+        image_bytes = buffer.getvalue()
+        data = base64.b64encode(image_bytes).decode("utf-8")
+        return f"data:{content_type};base64,{data}"

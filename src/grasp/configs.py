@@ -92,7 +92,7 @@ class ModelConfig(BaseModel):
     seed: int | None = None
 
     # model parameters
-    model: str = "gpt-5.4-mini"
+    model: str = "gemma-4-31b-llmlb"
     model_provider: Literal[
         "openai/completions",
         "openai/responses",

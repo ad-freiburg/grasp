@@ -32,7 +32,7 @@ from grasp.sparql.utils import (
     parse_string,
     wrap_iri,
 )
-from grasp.utils import FunctionCallException, format_enumerate, format_list
+from grasp.utils import FunctionCallException, format_enumerate, format_list, image_url_to_base64
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -161,7 +161,38 @@ list(kg="wikidata", property="wdt:P19")""",
                 "additionalProperties": False,
             },
             "strict": True,
-        },
+        },{
+            "name": "load_entity_image",
+            "description": """\
+Load the image of an entity from the KG and return it as a base64 encoded \
+data URL for visual analysis.
+
+For example if a question is asked, which can not be solved by the structured \
+KG data alone, e.g. a visual question like appearances, image styles, lookalikes etc.
+
+If solving the question does not require visual information, this function \
+shall not be used, as it quickly fills context.
+
+For example, to load the image of Angela Merkel from Wikidata, do the following:
+load_entity_image(kg="wikidata", entity="wd:Q567")""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kg": {
+                        "type": "string",
+                        "enum": kgs,
+                        "description": "The knowledge graph to query for the image",
+                    },
+                    "entity": {
+                        "type": "string",
+                        "description": "The IRI of the entity whose image to load",
+                    },
+                },
+                "required": ["kg", "entity"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
     ]
 
     if fn_set == "base":
@@ -792,6 +823,14 @@ def call_function(
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
+        )
+    elif fn_name == "load_entity_image":
+        return load_entity_image(
+            managers,
+            fn_args["kg"],
+            fn_args["entity"],
+            config.sparql_request_timeout,
+            config.sparql_read_timeout,
         )
 
     elif fn_name in {"search_shape", "get_shape"}:
@@ -1664,3 +1703,55 @@ search index due to:
     update_known_from_alts(known, alternatives, normalizer)
 
     return info + format_index_alternatives(alternatives, k, page, total_pages, more)
+
+
+def load_entity_image(
+    managers: list[KgManager],
+    kg: str,
+    entity: str,
+    request_timeout: float | tuple[float, float] | None = None,
+    read_timeout: float | None = None,
+) -> str:
+    manager, _ = find_manager(managers, kg)
+
+    verified_entity = parse_iri_or_literal(
+        entity,
+        manager.iri_literal_parser,
+        manager.prefixes,
+    )
+    if verified_entity is None or verified_entity.typ != "uri":
+        raise FunctionCallException(
+            format_iri_or_literal_error(entity, Position.SUBJECT)
+        )
+
+    query = f"""\
+SELECT ?image WHERE {{
+    {verified_entity.sparql()} <http://www.wikidata.org/prop/direct/P18> ?image .
+}}
+LIMIT 1"""
+
+    try:
+        result = manager.execute_sparql(query, request_timeout, read_timeout)
+    except Exception as e:
+        raise FunctionCallException(
+            f"Failed to query image for {entity}:\n{e}"
+        ) from e
+
+    assert isinstance(result, SelectResult)
+
+    rows = list(result.rows())
+    if not rows:
+        return f"No image found for entity {entity} in {kg}."
+
+    image_binding = rows[0].get("image")
+    if image_binding is None:
+        return f"No image found for entity {entity} in {kg}."
+
+    image_url = image_binding.identifier()
+
+    try:
+        return image_url_to_base64(image_url)
+    except Exception as e:
+        raise FunctionCallException(
+            f"Unexpected error loading image for entity {entity}:\n{e}"
+        ) from e

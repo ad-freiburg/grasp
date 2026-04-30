@@ -8,7 +8,8 @@ ENV PYTHONUNBUFFERED=1 \
 COPY . .
 
 # Install GRASP
-RUN pip install --no-cache-dir .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir .
 
 # Run GRASP by default; override flags via `docker run grasp -- <args>`
 ENTRYPOINT ["grasp"]

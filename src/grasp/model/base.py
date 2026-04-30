@@ -1,11 +1,12 @@
 import json
 import time
-from typing import Any
+from typing import Any, TypeAlias
 
 from pydantic import BaseModel, Field
 
 from grasp.configs import ModelConfig
 
+ContentPart: TypeAlias = dict[str, Any]
 
 class ToolCall(BaseModel):
     id: str
@@ -126,7 +127,7 @@ class Response(BaseModel):
 class Message(BaseModel):
     name: str | None = Field(default=None, exclude=True)
     role: str
-    content: str | Response
+    content: str | Response | list[ContentPart]  # multimodaler content mit text + image_url
 
     @staticmethod
     def system(content: str, name: str | None = None) -> "Message":

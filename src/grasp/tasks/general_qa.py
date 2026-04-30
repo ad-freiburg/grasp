@@ -24,7 +24,14 @@ applicable, constrain the searches with already identified entities and properti
 identified entities and properties. You may need to refine or rethink your \
 current plan based on the query results and go back to step 2 if needed, \
 possibly multiple times.
-4. Output your final answer to the question and stop."""
+4. Output your final answer to the question and stop. \
+5. If the question asks about a visually observable attribute (e.g. \
+physical appearance, hair color, clothing style, likeness) and the \
+structured knowledge graph data does not contain the answer, check \
+if the entity has an image available. If so, load the image using \
+load_entity_image and answer the question based on visual analysis. \
+Note that load_entity_image should only be used as a last resort \
+when structured data is insufficient, as it consumes significant context."""
 
 
 def rules() -> list[str]:

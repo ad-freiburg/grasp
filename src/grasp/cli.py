@@ -60,6 +60,7 @@ from grasp.utils import (
     is_invalid_output,
     link,
     parse_key_value_pairs,
+    image_file_to_base64,
 )
 
 
@@ -197,6 +198,16 @@ def get_embedding_search_params(
     return EmbeddingSearchParams.model_validate(given)
 
 
+def add_image_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--image-input",
+        "-img",
+        type=str,
+        default=None,
+        help="Path to Image File for loading into Context",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     available_kgs = get_available_knowledge_graphs()
 
@@ -245,6 +256,7 @@ def parse_args() -> argparse.Namespace:
         "but only if input format is 'json')",
     )
     add_task_arg(run_parser)
+    add_image_arg(run_parser)
 
     # run GRASP on file with inputs
     file_parser = subparsers.add_parser(
@@ -303,6 +315,7 @@ def parse_args() -> argparse.Namespace:
     )
     add_task_arg(file_parser)
     add_overwrite_arg(file_parser)
+    add_image_arg(file_parser)
 
     # run GRASP note taking
     note_parser = subparsers.add_parser(
@@ -828,17 +841,27 @@ def run_grasp(args: argparse.Namespace) -> None:
             ipt = sys.stdin.read()
         else:
             ipt = args.input
+        
+        image_url = None
+        if getattr(args, "image_input", None):
+            image_url = image_file_to_base64(args.image_input)
 
         if args.input_format == "json":
-            inputs = [json.loads(ipt)]
+            obj = json.loads(ipt)
+            if image_url is not None:
+                obj["image_url"] = image_url
+            inputs = [obj]
         else:
-            inputs = [{"input": ipt}]
-            input_field = "input"  # overwrite
+            inputs = [{
+                "input": ipt,
+                "image_url": image_url,
+            }]
+            input_field = None  # overwrite
 
     for i, ipt in enumerate(inputs):
         id = extract_field(ipt, "id") or "unknown"
 
-        if input_field is not None:
+        if input_field is not None and not (isinstance(ipt, dict) and "image_url" in ipt and "input" in ipt):
             ipt = extract_field(ipt, input_field)
 
         assert ipt is not None, f"Input not found for input {i:,}"

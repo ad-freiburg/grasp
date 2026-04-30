@@ -76,8 +76,20 @@ class OpenAICompletionsModel(Model):
         msgs = []
         for msg in messages:
             if isinstance(msg.content, str):
-                msgs.append(msg.model_dump())
+                msgs.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                })
                 continue
+
+            if isinstance(msg.content, list):
+                msgs.append({
+                    "role": msg.role,
+                    "content": msg.content
+                })
+                continue
+            
+            assert isinstance(msg.content, Response)
 
             if msg.content.raw is not None:
                 assert isinstance(msg.content.raw, ChatCompletion)
@@ -234,7 +246,28 @@ class OpenAIResponsesModel(Model):
 
         for msg in messages:
             if isinstance(msg.content, str):
-                msgs.append(msg.model_dump())
+                role = msg.role if msg.role != "feedback" else "user"
+                msgs.append({
+                    "type": "message",
+                    "role": role,
+                    "content": [{"type": "input_text", "text": msg.content}],
+                })
+                continue
+
+            if isinstance(msg.content, list):
+                role = msg.role if msg.role != "feedback" else "user"
+                parts = []
+                for part in msg.content:
+                    if part.get("type") == "text":
+                        parts.append({"type": "input_text", "text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        url = part.get("image_url", {}).get("url")
+                        parts.append({"type": "input_image", "image_url": url})
+                msgs.append({
+                    "type": "message",
+                    "role": role,
+                    "content": parts,
+                })
                 continue
 
             if msg.content.raw is not None:
