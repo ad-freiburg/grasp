@@ -266,6 +266,9 @@ def get_answer_or_cancel(
         if isinstance(message.content, str):
             # not assistant message
             continue
+        if isinstance(message.content, list):
+            # not assistant message
+            continue
 
         if isinstance(message.content.message, ResponseMessage):
             last_message = message.content.message.content
@@ -381,10 +384,15 @@ def output(
         output["type"] = "cancel"
         output["explanation"] = cancel.args["explanation"].strip()
 
+        # If best attempt has no result and is just a str, it crashes, so checking types...
         best_attempt = cancel.args.get("best_attempt")
         if best_attempt:
-            output["sparql"] = best_attempt.get("sparql")
-            output["kg"] = best_attempt.get("kg")
+            if isinstance(best_attempt, dict):
+                output["sparql"] = best_attempt.get("sparql")
+                output["kg"] = best_attempt.get("kg")
+        elif isinstance(best_attempt, str):
+            output["sparql"] = best_attempt
+            output["kg"] = None
 
         formatted = output["explanation"]
 
