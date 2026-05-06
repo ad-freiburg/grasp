@@ -165,6 +165,9 @@ def generate(
 
     task = get_task(task_name, managers, config, past_known, example_indices)
 
+    # save the raw input, in case an image is attached
+    raw_input = input
+
     input = task.setup(input)
 
     # setup functions (after setup so tasks can configure based on input)
@@ -177,7 +180,6 @@ def generate(
     )
     fns.extend(task.function_definitions())
 
-    raw_input = input
     image_url = None
     if (isinstance(raw_input, dict)):
         image_url = raw_input.get("image_url")

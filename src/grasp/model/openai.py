@@ -140,6 +140,9 @@ class OpenAICompletionsModel(Model):
     ) -> Response:
         if config is None:
             config = self.config
+        
+        kwargs = config.model_kwargs
+        kwargs.pop("reasoning", None)
 
         response: ChatCompletion = self.client.chat.completions.create(
             model=config.model,
@@ -148,7 +151,7 @@ class OpenAICompletionsModel(Model):
             tool_choice=config.tool_choice,  # type: ignore
             parallel_tool_calls=config.parallel_tool_calls,
             max_completion_tokens=config.max_completion_tokens,
-            **config.model_kwargs,
+            **kwargs,
         )
 
         check_api_response(response, ChatCompletion, config.model_endpoint)
@@ -359,6 +362,10 @@ class OpenAIResponsesModel(Model):
     ) -> Response:
         if config is None:
             config = self.config
+        
+        # remove reasoning
+        kwargs = config.model_kwargs
+        kwargs.pop("reasoning", None)
 
         # use responses API
         response = self.client.responses.create(
@@ -368,7 +375,7 @@ class OpenAIResponsesModel(Model):
             tool_choice=config.tool_choice,  # type: ignore
             parallel_tool_calls=config.parallel_tool_calls,
             max_output_tokens=config.max_completion_tokens,
-            **config.model_kwargs,
+            **kwargs,
             store=False,
             include=["reasoning.encrypted_content", "message.input_image.image_url"],
         )
