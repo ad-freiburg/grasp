@@ -43,7 +43,14 @@ Execute intermediate queries to get feedback and to verify your assumptions. \
 You may need to refine or rethink your current plan based on the query \
 results and go back to step 2 if needed, possibly multiple times.
 4. Use the answer or cancel function to finalize your answer and stop the \
-generation process."""
+generation process.\
+5. If the question asks about a visually observable attribute (e.g. \
+physical appearance, hair color, clothing style, likeness) and the \
+structured knowledge graph data does not contain the answer, check \
+if the entity has an image available. If so, load the image using \
+"load" and answer the question based on visual analysis. \
+Note that the function "load" should only be used as a last resort \
+when structured data is insufficient, as it consumes significant context."""
 
 
 def rules() -> list[str]:
