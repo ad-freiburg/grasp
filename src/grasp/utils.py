@@ -487,6 +487,16 @@ def image_file_to_base64(path: str) -> str:
     return f"data:{mime_type};base64,{data}"
 
 
+# def audio_file_to_base64(path: str) -> str:
+#     """
+#     Converts a local audio path into a base64 encoded audio_url
+#     """
+#     if not os.path.exists(path):
+#         raise FileNotFoundError(f"Audio not found: {path}")
+#     mime_type = "audio/wav"
+#     format = 
+
+
 def image_url_to_base64(url: str) -> str:
     """
     Downloads and converts an external image into a base64 encoded image_url
@@ -517,3 +527,31 @@ def image_url_to_base64(url: str) -> str:
         image_bytes = buffer.getvalue()
         data = base64.b64encode(image_bytes).decode("utf-8")
         return f"data:{content_type};base64,{data}"
+
+def audio_url_to_base64(url: str) -> dict:
+    request = Request(
+        url,
+        headers={"User-Agent": "GRASP https://github.com/ad-freiburg/grasp"}
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            content_type = response.headers.get("Content-Type", "audio/wav").split(";")[0].strip()
+            audio_bytes = response.read()
+    except Exception as e:
+        raise FunctionCallException(f"Failed to download audio from {url}: \n{e}") from e
+
+    format = _AUDIO_FORMAT_MAP.get(content_type)
+    data = base64.b64encode(audio_bytes).decode("utf-8")
+    return {"type": "input_audio", "input_audio": {"data": data, "format": format}}
+
+
+_AUDIO_FORMAT_MAP = {
+    "audio/wav":  "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/mpeg": "mp3",
+    "audio/mp3":  "mp3",
+    "audio/ogg":  "ogg",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+}

@@ -61,6 +61,7 @@ from grasp.utils import (
     link,
     parse_key_value_pairs,
     image_file_to_base64,
+    audio_url_to_base64,
 )
 
 
@@ -201,11 +202,19 @@ def get_embedding_search_params(
 def add_image_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--image-input",
-        "-img",
         type=str,
         default=None,
         help="Path to Image File for loading into Context",
     )
+
+
+# def add_audio_arg(parser: argparse.ArgumentParser) -> None:
+#     parser.add_argument(
+#         "--audio-input",
+#         type=str,
+#         default=None,
+#         help="Path to Audio File for loading into Context",
+#     )
 
 
 def parse_args() -> argparse.Namespace:
@@ -257,6 +266,7 @@ def parse_args() -> argparse.Namespace:
     )
     add_task_arg(run_parser)
     add_image_arg(run_parser)
+    # add_audio_arg(run_parser)
 
     # run GRASP on file with inputs
     file_parser = subparsers.add_parser(
@@ -316,6 +326,7 @@ def parse_args() -> argparse.Namespace:
     add_task_arg(file_parser)
     add_overwrite_arg(file_parser)
     add_image_arg(file_parser)
+    # add_audio_arg(file_parser)
 
     # run GRASP note taking
     note_parser = subparsers.add_parser(
@@ -845,6 +856,10 @@ def run_grasp(args: argparse.Namespace) -> None:
         image_url = None
         if getattr(args, "image_input", None):
             image_url = image_file_to_base64(args.image_input)
+        
+#        audio_url = None
+#        if getattr(args, "audio_input", None):
+#            audio_url = audio_url_to_base64(args.audio_input)
 
         if args.input_format == "json":
             obj = json.loads(ipt)
@@ -855,6 +870,7 @@ def run_grasp(args: argparse.Namespace) -> None:
             inputs = [{
                 "input": ipt,
                 "image_url": image_url,
+        #       audio_url["input_audio"]: None
             }]
             input_field = None  # overwrite
 

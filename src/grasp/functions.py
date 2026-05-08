@@ -3,6 +3,8 @@ import time
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Iterable
+from enum import Enum
+import json
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
@@ -32,7 +34,12 @@ from grasp.sparql.utils import (
     parse_string,
     wrap_iri,
 )
-from grasp.utils import FunctionCallException, format_enumerate, format_list, image_url_to_base64
+from grasp.utils import (
+    FunctionCallException,
+    format_enumerate, format_list,
+    image_url_to_base64,
+    audio_url_to_base64,
+)
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -162,33 +169,55 @@ list(kg="wikidata", property="wdt:P19")""",
             },
             "strict": True,
         },{
-            "name": "load_entity_image",
+            "name": "load",
             "description": """\
-Load the image of an entity from the KG and return it as a base64 encoded \
-data URL for visual analysis.
+Load external content and return it in a format suitable for visual or \
+auditory analysis. Supported modalities are:
 
-For example if a question is asked, which can not be solved by the structured \
-KG data alone, e.g. a visual question like appearances, image styles, lookalikes etc.
+- "image_url": Download an image from a public URL and return it as a \
+base64-encoded data URL. Use this for any visual question that cannot be \
+answered from structured KG data alone, e.g. appearances, styles, \
+color schemes, or visual comparisons.
+- "base64": Normalize an already-encoded base64 string or data URL into \
+a standardized image data URL.
+- "audio_url": Download audio from a public URL and return it for \
+auditory analysis.
 
-If solving the question does not require visual information, this function \
-shall not be used, as it quickly fills context.
+Only use this function when visual or auditory information is strictly \
+necessary to answer the question — loading images fills context quickly.
 
-For example, to load the image of Angela Merkel from Wikidata, do the following:
-load_entity_image(kg="wikidata", entity="wd:Q567")""",
+Examples:
+
+To load the image of Angela Merkel from a Wikidata image URL, first \
+retrieve the image URL via a SPARQL query or list call, then do:
+load(input="https://upload.wikimedia.org/...", modality="image_url")
+
+To load an audio file:
+load(input="https://example.com/audio.mp3", modality="audio_url")""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "kg": {
+                    "input": {
                         "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to query for the image",
+                        "description": (
+                            "The URL or encoded data to load. "
+                            "For modality 'image_url', provide a public HTTP(S) image URL. "
+                            "For modality 'base64', provide a raw base64 string or data URL. "
+                            "For modality 'audio_url', provide a public HTTP(S) audio URL."
+                        ),
                     },
-                    "entity": {
+                    "modality": {
                         "type": "string",
-                        "description": "The IRI of the entity whose image to load",
+                        "enum": [m.value for m in Modality],
+                        "description": (
+                            "The type of content to load. "
+                            "Use 'image_url' for images from the web (most common). "
+                            "Use 'base64' for already-encoded image data. "
+                            "Use 'audio_url' for audio files from the web."
+                        ),
                     },
                 },
-                "required": ["kg", "entity"],
+                "required": ["input", "modality"],
                 "additionalProperties": False,
             },
             "strict": True,
@@ -824,6 +853,11 @@ def call_function(
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
+    elif fn_name == "load":
+        return json.dumps(load(
+            fn_args["input"],
+            fn_args["modality"],
+        ))
     elif fn_name == "load_entity_image":
         return load_entity_image(
             managers,
@@ -1755,3 +1789,24 @@ LIMIT 1"""
         raise FunctionCallException(
             f"Unexpected error loading image for entity {entity}:\n{e}"
         ) from e
+
+
+class Modality(str, Enum):
+    IMAGE_URL = "image_url",
+    AUDIO_URL = "audio_url",
+    BASE64 = "base64"
+    TEXT = "text"
+
+
+def load(input: str, modality: str | None = None) -> dict:
+    if (modality == "base64" or modality == None):
+        return {"type": "image_url", "image_url": {"url": input}}
+    elif (modality == "image_url"):
+        output = image_url_to_base64(input)
+        return {"type": "image_url", "image_url": {"url": output}}
+    elif (modality == "audio_url"):
+        return audio_url_to_base64(input)
+    else:
+        raise ValueError(f"Could not load input of type: {modality}")
+
+    

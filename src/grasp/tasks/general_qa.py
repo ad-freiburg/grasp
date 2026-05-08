@@ -29,8 +29,8 @@ possibly multiple times.
 physical appearance, hair color, clothing style, likeness) and the \
 structured knowledge graph data does not contain the answer, check \
 if the entity has an image available. If so, load the image using \
-load_entity_image and answer the question based on visual analysis. \
-Note that load_entity_image should only be used as a last resort \
+"load" and answer the question based on visual analysis. \
+Note that the function "load" should only be used as a last resort \
 when structured data is insufficient, as it consumes significant context."""
 
 
