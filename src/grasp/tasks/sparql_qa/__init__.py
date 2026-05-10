@@ -37,6 +37,14 @@ You should follow a step-by-step approach to generate the SPARQL query:
 1. Determine possible entities and properties implied by the user question.
 2. Search for the entities and properties in the knowledge graphs. Where \
 applicable, constrain the searches with already identified entities and properties.
+2b. If the user question contains an image of a visually identifiable \
+subject (person, artwork, landmark, animal, flag, logo, or other \
+recognizable object), verify each candidate entity against the image \
+before proceeding: \
+First retrieve the entity's reference image URL via SPARQL \
+then call verify_entity_image. \
+Only if the resulting similarity score is NOT 0 should you assume, that \
+the entity was correctly identified from the input image.
 3. Gradually build up the SPARQL query using the identified entities \
 and properties. Start with simple queries and add more complexity as needed. \
 Execute intermediate queries to get feedback and to verify your assumptions. \

@@ -83,9 +83,17 @@ class OpenAICompletionsModel(Model):
                 continue
 
             if isinstance(msg.content, list):
+                content = []
+                for part in msg.content:
+                    if part.get("type") == "image_url":
+                        url = (part.get("image_url") or {}).get("url")
+                        if url is not None:
+                            content.append({"type": "image_url", "image_url": {"url": url}})
+                    else:
+                        content.append(dict(part))
                 msgs.append({
                     "role": msg.role,
-                    "content": msg.content
+                    "content": content,
                 })
                 continue
             
@@ -265,7 +273,8 @@ class OpenAIResponsesModel(Model):
                         parts.append({"type": "input_text", "text": part.get("text", "")})
                     elif part.get("type") == "image_url":
                         url = part.get("image_url", {}).get("url")
-                        parts.append({"type": "input_image", "image_url": url})
+                        if url is not None:
+                            parts.append({"type": "input_image", "image_url": url})
                 msgs.append({
                     "type": "message",
                     "role": role,

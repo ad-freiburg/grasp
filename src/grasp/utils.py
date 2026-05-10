@@ -7,6 +7,7 @@ from importlib import resources
 from typing import Any, Callable, Iterable, Iterator, TypeVar
 from urllib.parse import unquote_plus
 from PIL import Image
+import numpy as np
 
 from pydantic import BaseModel
 from termcolor import colored
@@ -543,6 +544,12 @@ def audio_url_to_base64(url: str) -> dict:
     format = _AUDIO_FORMAT_MAP.get(content_type)
     data = base64.b64encode(audio_bytes).decode("utf-8")
     return {"type": "input_audio", "input_audio": {"data": data, "format": format}}
+
+
+def convert_base64_to_np_array(image_url: str) -> np.ndarray:
+    _, b64data = image_url.split(",", 1)
+    img_bytes = base64.b64decode(b64data)
+    return np.array(Image.open(io.BytesIO(img_bytes)).convert("RGB"))
 
 
 _AUDIO_FORMAT_MAP = {
