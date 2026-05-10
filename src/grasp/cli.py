@@ -61,7 +61,7 @@ from grasp.utils import (
     link,
     parse_key_value_pairs,
     image_file_to_base64,
-    audio_url_to_base64,
+    image_url_to_base64,
 )
 
 
@@ -822,6 +822,22 @@ def run_grasp(args: argparse.Namespace) -> None:
             if id is None:
                 ipt["id"] = str(i)
 
+            image_url = None
+            if isinstance(ipt, dict):
+                image_url = ipt.get("image_url")
+
+            if input_field is not None and not (isinstance(ipt, dict) and "image_url" in ipt and "input" in ipt):
+                ipt = extract_field(ipt, input_field)
+            
+            if image_url is not None:
+                if isinstance(ipt, dict):
+                    ipt["image_url"] = image_url
+                else:
+                    ipt = {"input": ipt, "image_url": image_url}
+            
+            assert ipt is not None, (f"Input not found for input {i:,}")
+            
+
         if args.shuffle:
             assert config.seed is not None, (
                 "Seed must be set for deterministic shuffling"
@@ -855,7 +871,10 @@ def run_grasp(args: argparse.Namespace) -> None:
         
         image_url = None
         if getattr(args, "image_input", None):
-            image_url = image_file_to_base64(args.image_input)
+            if (args.image_input.startswith("http")):
+                image_url = image_url_to_base64(args.image_input)
+            else:
+                image_url = image_file_to_base64(args.image_input)
         
 #        audio_url = None
 #        if getattr(args, "audio_input", None):

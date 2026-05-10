@@ -33,6 +33,7 @@ from grasp.utils import (
     format_prefixes,
     format_response,
     format_section,
+    image_url_to_base64,
 )
 
 
@@ -107,7 +108,7 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
-        models = manager.load_models(models, embedding_model=config.embedding_model)
+        models = manager.load_models(models, embedding_model=config.embedding_model, clip_model=config.clip_model)
         managers.append(manager)
 
     return managers, models
@@ -159,8 +160,6 @@ def generate(
     # save the raw input, in case an image is attached
     raw_input = input
 
-    input = task.setup(input)
-
     # setup functions (after setup so tasks can configure based on input)
     fns = kg_functions(
         managers,
@@ -177,6 +176,9 @@ def generate(
         text_input = raw_input.get("input", "")
     else:
         text_input = raw_input
+    
+    if isinstance(image_url, str) and image_url.startswith("http"):
+        image_url = image_url_to_base64(image_url)
 
     text_input = task.setup(text_input)
 
@@ -383,6 +385,7 @@ def generate(
                     task.known,
                     task,
                     example_indices,
+                    image_url
                 )
             except Exception as e:
                 tool_call.error = str(e)

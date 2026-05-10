@@ -5,6 +5,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Iterable
 from enum import Enum
 import json
+import numpy as np
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
@@ -39,6 +40,10 @@ from grasp.utils import (
     format_enumerate, format_list,
     image_url_to_base64,
     audio_url_to_base64,
+    convert_base64_to_np_array
+)
+from search_rdf.model.embedding import (
+    OpenClipModel
 )
 
 if TYPE_CHECKING:
@@ -218,6 +223,57 @@ load(input="https://example.com/audio.mp3", modality="audio_url")""",
                     },
                 },
                 "required": ["input", "modality"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },{
+            "name": "verify_entity_image",
+            "description": """\
+Verify whether an input image matches a given entity image by computing \
+their CLIP embedding cosine similarity.
+
+Use this function after identifying a candidate entity via searchEntity() \
+if the Query contained an Image and you guessed the entity from the Image.
+
+Returns the cosine similarity score (float between 0 and 1) if the images \
+are sufficiently similar, or 0.0 if the similarity is below the threshold \
+(i.e. the images likely depict different subjects).
+
+The Parameter entity_image_url can be either a base64 Image URL starting \
+with "data:..." or a weblink to an image like "https://...".
+
+A score of 0.0 means the entity candidate should be discarded — try the \
+next candidate from searchEntity() or fall back to textual reasoning.
+A score > 0 means the input image is consistent with the entity.
+
+Examples:
+
+To verify that the uploaded image matches the Wikidata image of the Mona Lisa:
+verify_entity_image(
+    entity_image_url="https://upload.wikimedia.org/wikipedia/commons/..."
+)
+
+
+To retrieve the entity image URL, use a SPARQL query for P18 (image) \
+on the candidate entity before calling this function.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kg": {
+                        "type": "string",
+                        "enum": kgs,
+                        "description": "The knowledge graph the candidate entity belongs to",
+                    },
+                    "entity_image_url": {
+                        "type": "string",
+                        "description": (
+                            "The reference image of the candidate entity. "
+                            "Typically retrieved via a SPARQL query"
+                            "Can be a public HTTP(S) URL or a base64-encoded data URL. "
+                        ),
+                    },
+                },
+                "required": ["kg", "entity_image_url"],
                 "additionalProperties": False,
             },
             "strict": True,
@@ -692,6 +748,7 @@ def call_function(
     known: set[str],
     task: "GraspTask | None" = None,
     example_indices: dict | None = None,
+    image_url: str | None = None,
 ) -> str:
     if fn_name == "execute":
         return execute_sparql(
@@ -853,11 +910,26 @@ def call_function(
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
+
     elif fn_name == "load":
         return json.dumps(load(
             fn_args["input"],
             fn_args["modality"],
         ))
+
+    elif fn_name == "verify_entity_image":
+        manager, _ = find_manager(managers, fn_args["kg"])
+        print("[DEBUG]", image_url[:100] if image_url else "no image")
+        print(type(image_url))
+        assert manager.clip_model is not None, ("No Clip Model for verifying loaded")
+        assert image_url is not None, ("No input Image found")
+
+        return  str(verify(
+            manager.clip_model,
+            image_url,
+            fn_args["entity_image_url"]
+        ))
+
     elif fn_name == "load_entity_image":
         return load_entity_image(
             managers,
@@ -1809,4 +1881,32 @@ def load(input: str, modality: str | None = None) -> dict:
     else:
         raise ValueError(f"Could not load input of type: {modality}")
 
-    
+def verify(
+        model: OpenClipModel,
+        input_image_url: str,
+        entity_image_url: str
+    ) -> float:
+    """
+    returns the cosine similarity for images above the threshold, else 0
+    """
+    THRESHOLD_IMAGE_TO_IMAGE = 0.25
+
+    # load images
+    if input_image_url.startswith("data"):  # base64 url
+        input_image = convert_base64_to_np_array(input_image_url)
+    elif input_image_url.startswith("http"):
+        input_image = convert_base64_to_np_array(image_url_to_base64(input_image_url))
+    if entity_image_url.startswith("data"):  # base64 url
+        entity_image = convert_base64_to_np_array(entity_image_url)
+    elif entity_image_url.startswith("http"):
+        entity_image = convert_base64_to_np_array(image_url_to_base64(entity_image_url))
+
+    if input_image is None or entity_image is None:
+        raise ValueError("input could not be loaded properly for comparison")
+
+    # embed images
+    embedding_input_image = model.embed_image([input_image])
+    embedding_entity_image = model.embed_image([entity_image])
+
+    score = float(np.dot(embedding_entity_image[0], embedding_input_image[0]))
+    return score if score >= THRESHOLD_IMAGE_TO_IMAGE else 0.0

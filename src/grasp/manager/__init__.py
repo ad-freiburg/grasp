@@ -130,6 +130,7 @@ class KgManager:
         self,
         models: dict[str, EmbeddingModel] | None = None,
         embedding_model: str | None = None,
+        clip_model: str | None = None,
     ) -> dict[str, EmbeddingModel]:
         if models is None:
             models = {}
@@ -154,6 +155,12 @@ class KgManager:
             )
 
         self.embedding_models = models
+
+        if clip_model:
+            self.clip_model = OpenClipModel(clip_model)
+        else:
+            self.clip_model = None
+
         return models
 
     def set_info_retrieval(self, enable: bool) -> None:
