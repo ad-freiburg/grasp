@@ -14,6 +14,7 @@ from grasp.tasks.question_generation import QuestionGenerationTask
 from grasp.tasks.sparql_qa import SparqlQaTask
 from grasp.tasks.sparql_to_question import SparqlToQuestionTask
 from grasp.tasks.wikidata_query_logs import WdqlTask
+from grasp.tasks.om import OmTask
 
 
 # official tasks supported by GRASP, excluding exploration
@@ -24,6 +25,7 @@ class Task(StrEnum):
     CEA = "cea"
     WDQL = "wikidata-query-logs"
     S2Q = "sparql-to-question"
+    OM = "om"
 
 
 _REGISTRY: dict[str, type[GraspTask]] = {
@@ -38,6 +40,7 @@ _REGISTRY: dict[str, type[GraspTask]] = {
         StructuralExplorationTask,
         QuestionGenerationTask,
         AutoSetupTask,
+        OmTask
     ]
 }
 

@@ -1,6 +1,5 @@
 import random
-import sys
-from typing import Any, Iterator
+from typing import Any
 from enum import StrEnum
 
 from pydantic import BaseModel
@@ -10,10 +9,7 @@ from grasp.configs import GraspConfig
 from grasp.functions import find_manager
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
-from grasp.sparql.types import Alternative, ObjType
-from grasp.sparql.utils import parse_into_binding
 from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.tasks.examples import Sample
 from grasp.utils import FunctionCallException, format_list, format_notes
 from grasp.tasks.cea import prepare_annotation as prepare_entity, Annotation
 
@@ -140,11 +136,11 @@ Use this to lock in your alignment decisions.""",
                 "properties": {
                     "source_entity": {
                         "type": "string",
-                        "description": "The IRI of the source entity to be matched with a target entity",
+                        "description": "The exact IRI of the source entity",
                     },
                     "target_entity": {
                         "type": "string",
-                        "description": "The IRI of the target entity matching the source entity",
+                        "description": "The exact IRI of the target entity",
                     },
                     "overwrite": {
                         "type": "boolean",
@@ -152,7 +148,7 @@ Use this to lock in your alignment decisions.""",
                         "correspondences involving these entities.",
                     },
                 },
-                "required": ["source_entity", "target_entity"],
+                "required": ["source_entity", "target_entity", "overwrite"],
                 "additionalProperties": False,
             },
             "strict": True,
@@ -235,9 +231,12 @@ def rules() -> list[str]:
         "When multiple target candidates exist, select the one that best fits the structural context "
         "(hierarchy, properties) or represents the most accurate level of abstraction.",
         "Leverage the semantic context of both graphs. To improve efficiency, favor batch-retrieval "
-        "via SPARQL queries over repetitive individual searches when identifying patterns across "
+        "SPARQL queries over repetitive individual searches when identifying patterns across "
         "multiple entities",
+        "Before writing custom SPARQL queries, prioritize using the built-in search_entities and list_entities functions to explore the target ontology quickly."
         "Perform a final comprehensive review of all established correspondences before concluding the task.",
+        "You must explicitly evaluate EVERY SINGLE entity provided in the source list. Do not stop until you" "have attempted to match all of them. If an entity truly has no match, explain briefly why,"
+        "but do not simply skip it."
     ]
 
 
@@ -304,8 +303,8 @@ def call_function(
     if fn_name == "set_correspondence":
         if state is None:
             return "No AlignmentState was provided. Cannot set correspondences without AlignmentState"
-        kg1 = state.task_input.source_kg.kg  # type: ignore
-        kg2 = state.task_input.target_kg.kg  # type: ignore
+        kg1 = state.task_input.source_kg  # type: ignore
+        kg2 = state.task_input.target_kg  # type: ignore
         overwrite = fn_args.get("overwrite", False)
 
         ent1, ent2 = fn_args["source_entity"], fn_args["target_entity"]
@@ -355,7 +354,48 @@ def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AlignmentStat
     return instructions, state
 
 
-class OmTask(GraspTask):
+def feedback_system_message(
+    managers: list[KgManager],
+    kg_notes: dict[str, list[str]],
+    notes: list[str],
+) -> str:
+    # Der Kritiker braucht den Kontext der Ontologien
+    return f"""\
+You are an expert ontology matching judge. Your task is to evaluate if the assistant has correctly identified and set correspondences between the entities.
+
+The system has access to the following knowledge graphs:
+{format_kgs(managers, kg_notes)}
+
+The system was provided the following notes across all knowledge graphs:
+{format_notes(notes)}
+
+The system was provided the following rules to follow:
+{format_list(rules()) if rules() else "None"}
+
+Provide your feedback with the give_feedback function.\
+"""
+
+
+def feedback_instructions(inputs: list[str], output: dict) -> str:
+    assert inputs, "At least one input is required for feedback"
+
+    if len(inputs) > 1:
+        prompt = (
+            "Previous inputs:\n" + "\n\n".join(i.strip() for i in inputs[:-1]) + "\n\n"
+        )
+    else:
+        prompt = ""
+
+    prompt += f"Input:\n{inputs[-1].strip()}"
+    prompt += f"Current Alignment State:\n{output['formatted']}\n\n"
+    prompt += (
+        "Does the current state fulfill the task? If the system has" +
+        "not finished the matching process yet, provide prompts describing" +
+        "the concrete next step for the system to continue and fininalize the matching.")
+    return prompt
+
+
+class OmTask(GraspTask, FeedbackTask):
     name = "om"
 
     def setup(self, input: Any) -> str:
@@ -396,4 +436,12 @@ class OmTask(GraspTask):
 
     @property
     def default_input_field(self) -> str | None:
-        return "source_data"
+        return None
+
+    def feedback_system_message(
+        self, kg_notes: dict[str, list[str]], notes: list[str]
+    ) -> str:
+        return feedback_system_message(self.managers, kg_notes, notes)
+
+    def feedback_instructions(self, inputs: list[str], output: dict) -> str:
+        return feedback_instructions(inputs, output)
