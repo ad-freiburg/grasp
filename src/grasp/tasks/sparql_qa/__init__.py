@@ -45,6 +45,9 @@ First retrieve the entity's reference image URL via SPARQL \
 then call verify_entity_image. \
 Only if the resulting similarity score is NOT 0 should you assume, that \
 the entity was correctly identified from the input image.
+2c. For better clarity always use the 'analyze_image' function to double check \
+# what you think you see in an image. use the function with a prompt to the vision AI \
+# to find out visual detailes about the input_image which you require for the question anwering.
 3. Gradually build up the SPARQL query using the identified entities \
 and properties. Start with simple queries and add more complexity as needed. \
 Execute intermediate queries to get feedback and to verify your assumptions. \
@@ -58,7 +61,7 @@ structured knowledge graph data does not contain the answer, check \
 if the entity has an image available. If so, load the image using \
 "load" and answer the question based on visual analysis. \
 Note that the function "load" should only be used as a last resort \
-when structured data is insufficient, as it consumes significant context."""
+when structured data is insufficient, as it consumes significant context. """
 
 
 def rules() -> list[str]:
