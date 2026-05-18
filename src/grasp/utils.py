@@ -480,12 +480,18 @@ def image_file_to_base64(path: str) -> str:
     """
     if not os.path.exists(path):
         raise FileNotFoundError(f"Image not found: {path}")
+
     with open(path, "rb") as file:
-        data = base64.b64encode(file.read()).decode("utf-8")
-    mime_type = "image/jpeg"
-    if (len(data) > MAX_IMAGE_BYTES):
-        raise ValueError(f"Image {path} is too large,\n image size: {len(data)}\n limit: {MAX_IMAGE_BYTES}")
-    return f"data:{mime_type};base64,{data}"
+        image_bytes = file.read()
+
+    extention = os.path.splitext(path)[1].lower()
+    content_type = "image/" + extention.lstrip(".")
+
+    if (len(image_bytes) <= MAX_IMAGE_BYTES):
+        data = base64.b64encode(image_bytes).decode("utf-8")
+        return f"data:{content_type};base64,{data}"
+    else:
+        return resize_image(image_bytes, content_type)
 
 
 # def audio_file_to_base64(path: str) -> str:
@@ -495,7 +501,7 @@ def image_file_to_base64(path: str) -> str:
 #     if not os.path.exists(path):
 #         raise FileNotFoundError(f"Audio not found: {path}")
 #     mime_type = "audio/wav"
-#     format = 
+#     format =
 
 
 def image_url_to_base64(url: str) -> str:
@@ -517,17 +523,8 @@ def image_url_to_base64(url: str) -> str:
         data = base64.b64encode(image_bytes).decode("utf-8")
         return f"data:{content_type};base64,{data}"
     else:
-        img = Image.open(io.BytesIO(image_bytes))
-        scale = (MAX_IMAGE_BYTES / len(image_bytes)) ** 0.5
-        new_size = (int(img.width * scale), int(img.height * scale))
-        img = img.resize(new_size, resample=Image.Resampling.LANCZOS)
-        buffer = io.BytesIO()
-        format = content_type.split("/")[-1].upper()
-        format = "JPEG" if format not in ("JPEG", "PNG", "WEBP") else format
-        img.save(buffer, format=format, quality=85)
-        image_bytes = buffer.getvalue()
-        data = base64.b64encode(image_bytes).decode("utf-8")
-        return f"data:{content_type};base64,{data}"
+        return resize_image(image_bytes, content_type)
+
 
 def audio_url_to_base64(url: str) -> dict:
     request = Request(
@@ -552,13 +549,27 @@ def convert_base64_to_np_array(image_url: str) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(img_bytes)).convert("RGB"))
 
 
+def resize_image(bytes: bytes, content_type: str) -> str:
+    img = Image.open(io.BytesIO(bytes))
+    scale = (MAX_IMAGE_BYTES / len(bytes)) ** 0.5
+    new_size = (int(img.width * scale), int(img.height * scale))
+    img = img.resize(new_size, resample=Image.Resampling.LANCZOS)
+    buffer = io.BytesIO()
+    format = content_type.split("/")[-1].upper()
+    format = "JPEG" if format not in ("JPEG", "PNG", "WEBP") else format
+    img.save(buffer, format=format, quality=85)
+    image_bytes = buffer.getvalue()
+    data = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{content_type};base64,{data}"
+
+
 _AUDIO_FORMAT_MAP = {
-    "audio/wav":  "wav",
+    "audio/wav": "wav",
     "audio/x-wav": "wav",
     "audio/wave": "wav",
     "audio/mpeg": "mp3",
-    "audio/mp3":  "mp3",
-    "audio/ogg":  "ogg",
+    "audio/mp3": "mp3",
+    "audio/ogg": "ogg",
     "audio/flac": "flac",
     "audio/x-flac": "flac",
 }

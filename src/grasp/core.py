@@ -176,7 +176,7 @@ def generate(
         text_input = raw_input.get("input", "")
     else:
         text_input = raw_input
-    
+
     if isinstance(image_url, str) and image_url.startswith("http"):
         image_url = image_url_to_base64(image_url)
 

@@ -137,6 +137,9 @@ class GraspConfig(ModelConfig):
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+    vision_model: str = "openai/qwen-3.6-27b-llmlb"
+
+    vision_model_config: ModelConfig | None = None
 
     # optional task specific parameters
     # map[task_name, map[param_name, param_value]]
@@ -184,6 +187,25 @@ class GraspConfig(ModelConfig):
     @property
     def sparql_request_timeout(self) -> tuple[float, float]:
         return self.sparql_connection_timeout, self.sparql_query_timeout
+
+    @property
+    def get_vision_config(self) -> ModelConfig:
+        """Returns a ModelConfig for a Vision Model used for `analyze_image()`"""
+        if self.vision_model_config is not None:
+            return self.vision_model_config
+        else:
+            return ModelConfig(
+                model=self.vision_model,
+                model_provider=self.model_provider,
+                model_endpoint=self.model_endpoint,
+                model_api_key=self.model_api_key,
+                model_timeout=self.model_timeout,
+                model_kwargs={},
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                max_completion_tokens=512,
+                num_retries=self.num_retries,
+            )
 
 
 class SpeechToTextConfig(BaseModel):

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 from enum import Enum
 import json
 import numpy as np
+from litellm import completion
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
@@ -17,6 +18,8 @@ from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
 from grasp.shapes import ShapeSample
 from grasp.sparql.item import parse_into_binding
+from grasp.model.openai import OpenAICompletionsModel
+from grasp.model.base import Message, Response, ResponseMessage
 from grasp.sparql.types import (
     Alternative,
     AskResult,
@@ -173,7 +176,7 @@ list(kg="wikidata", property="wdt:P19")""",
                 "additionalProperties": False,
             },
             "strict": True,
-        },{
+        }, {
             "name": "load",
             "description": """\
 Load external content and return it in a format suitable for visual or \
@@ -226,7 +229,7 @@ load(input="https://example.com/audio.mp3", modality="audio_url")""",
                 "additionalProperties": False,
             },
             "strict": True,
-        },{
+        }, {
             "name": "verify_entity_image",
             "description": """\
 Verify whether an input image matches a given entity image by computing \
@@ -275,6 +278,25 @@ on the candidate entity before calling this function.""",
                 },
                 "required": ["kg", "entity_image_url"],
                 "additionalProperties": False,
+            },
+            "strict": True,
+        },{
+            "name": "analyze_image",
+            "description": """Funtion used for visually analyzing images, should be used with the image_url from \
+the input, if one is provided for better visual interpretation and qa.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Question about visual details of the image"
+                        )
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+
             },
             "strict": True,
         }
@@ -924,7 +946,7 @@ def call_function(
         assert manager.clip_model is not None, ("No Clip Model for verifying loaded")
         assert image_url is not None, ("No input Image found")
 
-        return  str(verify(
+        return str(verify(
             manager.clip_model,
             image_url,
             fn_args["entity_image_url"]
@@ -937,6 +959,14 @@ def call_function(
             fn_args["entity"],
             config.sparql_request_timeout,
             config.sparql_read_timeout,
+        )
+
+    elif fn_name == "analyze_image":
+        assert image_url is not None, ("No input Image found")
+        return analyze_image(
+            image_url,
+            fn_args["query"],
+            config,
         )
 
     elif fn_name in {"search_shape", "get_shape"}:
@@ -1871,7 +1901,7 @@ class Modality(str, Enum):
 
 
 def load(input: str, modality: str | None = None) -> dict:
-    if (modality == "base64" or modality == None):
+    if (modality == "base64" or modality is None):
         return {"type": "image_url", "image_url": {"url": input}}
     elif (modality == "image_url"):
         output = image_url_to_base64(input)
@@ -1881,11 +1911,12 @@ def load(input: str, modality: str | None = None) -> dict:
     else:
         raise ValueError(f"Could not load input of type: {modality}")
 
+
 def verify(
         model: OpenClipModel,
         input_image_url: str,
         entity_image_url: str
-    ) -> float:
+        ) -> float:
     """
     returns the cosine similarity for images above the threshold, else 0
     """
@@ -1909,4 +1940,36 @@ def verify(
     embedding_entity_image = model.embed_image([entity_image])
 
     score = float(np.dot(embedding_entity_image[0], embedding_input_image[0]))
+    print(f"[DEBUG] verified with score: {score}")
     return score if score >= THRESHOLD_IMAGE_TO_IMAGE else 0.0
+
+
+def analyze_image(image_url: str, prompt: str, config: GraspConfig) -> str:
+    print(f"[DEBUG] vision query: {prompt}")
+    vision_config = config.get_vision_config
+    model = OpenAICompletionsModel(vision_config)
+
+    system_prompt = """You analyze images for a knowledge-graph based question answering system. \
+                    1. Only describe what is DIRECTLY and UNAMBIGUOUSLY visible in the image (e.g., clothing, facial features, setting, objects, text in frame). \
+                    2. DO NOT use your training knowledge to add context, background information, dates, roles, or facts about recognized entities. \
+                    3. If you recognize a person, name or label, report ONLY the name — do not add any biographical, historical, or factual information that is not visible in the image. \
+                    4. If a visual question cannot be answered from the image alone, explicitly state: 'I cannot determine the answer from the image. \
+                    5. Never infer, extrapolate, or supplement visual observations with world knowledge. """
+
+    messages = [
+        Message.system(content=system_prompt),
+        Message(
+            role="user",
+            content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        ),
+    ]
+
+    response: Response = model.call(messages, fns=[])
+    if isinstance(response.message, ResponseMessage):
+        message = response.message.content
+    else:
+        message = response.message
+    return message or "Error: no answer from vision model"

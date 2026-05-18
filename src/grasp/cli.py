@@ -828,15 +828,14 @@ def run_grasp(args: argparse.Namespace) -> None:
 
             if input_field is not None and not (isinstance(ipt, dict) and "image_url" in ipt and "input" in ipt):
                 ipt = extract_field(ipt, input_field)
-            
+
             if image_url is not None:
                 if isinstance(ipt, dict):
                     ipt["image_url"] = image_url
                 else:
                     ipt = {"input": ipt, "image_url": image_url}
-            
+
             assert ipt is not None, (f"Input not found for input {i:,}")
-            
 
         if args.shuffle:
             assert config.seed is not None, (
@@ -847,7 +846,7 @@ def run_grasp(args: argparse.Namespace) -> None:
 
         skip = max(0, args.skip)
         take = args.take or len(inputs)
-        inputs = inputs[skip : skip + take]
+        inputs = inputs[skip: skip + take]
 
         if args.output_file:
             if os.path.exists(args.output_file) and not args.overwrite:
@@ -868,14 +867,14 @@ def run_grasp(args: argparse.Namespace) -> None:
             ipt = sys.stdin.read()
         else:
             ipt = args.input
-        
+
         image_url = None
         if getattr(args, "image_input", None):
             if (args.image_input.startswith("http")):
                 image_url = image_url_to_base64(args.image_input)
             else:
                 image_url = image_file_to_base64(args.image_input)
-        
+
 #        audio_url = None
 #        if getattr(args, "audio_input", None):
 #            audio_url = audio_url_to_base64(args.audio_input)
@@ -889,7 +888,7 @@ def run_grasp(args: argparse.Namespace) -> None:
             inputs = [{
                 "input": ipt,
                 "image_url": image_url,
-        #       audio_url["input_audio"]: None
+                # audio_url["input_audio"]: None
             }]
             input_field = None  # overwrite
 
