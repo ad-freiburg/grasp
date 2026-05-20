@@ -96,7 +96,7 @@ class OpenAICompletionsModel(Model):
                     "content": content,
                 })
                 continue
-            
+
             assert isinstance(msg.content, Response)
 
             if msg.content.raw is not None:
