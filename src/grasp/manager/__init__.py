@@ -13,6 +13,8 @@ from search_rdf.model import (
     OpenClipModel,
     SentenceTransformerModel,
 )
+from search_rdf.model.embedding import ClapCapModel
+from universal_ml_utils.io import load_text
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
@@ -131,6 +133,7 @@ class KgManager:
         models: dict[str, EmbeddingModel] | None = None,
         embedding_model: str | None = None,
         clip_model: str | None = None,
+        clap_model: str | None = None,
     ) -> dict[str, EmbeddingModel]:
         if models is None:
             models = {}
@@ -160,6 +163,11 @@ class KgManager:
             self.clip_model = OpenClipModel(clip_model)
         else:
             self.clip_model = None
+
+        if clap_model:
+            self.clap_model = ClapCapModel(version=clap_model)
+        else:
+            self.clap_model = None
 
         return models
 

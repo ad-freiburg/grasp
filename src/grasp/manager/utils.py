@@ -13,6 +13,7 @@ from search_rdf.model import (
     OpenClipModel,
     SentenceTransformerModel,
 )
+from search_rdf.model.embedding import ClapCapModel
 from universal_ml_utils.configuration import load_config
 from universal_ml_utils.io import load_json, load_text
 
@@ -24,7 +25,7 @@ from grasp.sparql.utils import find_longest_prefix
 from grasp.utils import get_index_dir
 
 SearchIndex = KeywordIndex | EmbeddingIndex | FuzzyIndex
-EmbeddingModel = HuggingFaceImageModel | OpenClipModel | SentenceTransformerModel
+EmbeddingModel = HuggingFaceImageModel | OpenClipModel | SentenceTransformerModel | ClapCapModel
 
 
 @dataclass

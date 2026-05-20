@@ -208,13 +208,13 @@ def add_image_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
-# def add_audio_arg(parser: argparse.ArgumentParser) -> None:
-#     parser.add_argument(
-#         "--audio-input",
-#         type=str,
-#         default=None,
-#         help="Path to Audio File for loading into Context",
-#     )
+def add_audio_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--audio-input",
+        type=str,
+        default=None,
+        help="Path to Audio File for loading into context"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -266,7 +266,7 @@ def parse_args() -> argparse.Namespace:
     )
     add_task_arg(run_parser)
     add_image_arg(run_parser)
-    # add_audio_arg(run_parser)
+    add_audio_arg(run_parser)
 
     # run GRASP on file with inputs
     file_parser = subparsers.add_parser(
@@ -326,7 +326,7 @@ def parse_args() -> argparse.Namespace:
     add_task_arg(file_parser)
     add_overwrite_arg(file_parser)
     add_image_arg(file_parser)
-    # add_audio_arg(file_parser)
+    add_audio_arg(file_parser)
 
     # run GRASP note taking
     note_parser = subparsers.add_parser(
@@ -802,6 +802,8 @@ def run_grasp(args: argparse.Namespace) -> None:
 
     notes, kg_notes = load_notes(config)
 
+    audio_caption = None
+
     if args.input_field is None:
         input_field = get_task(args.task, managers, config).default_input_field
     else:
@@ -874,10 +876,12 @@ def run_grasp(args: argparse.Namespace) -> None:
                 image_url = image_url_to_base64(args.image_input)
             else:
                 image_url = image_file_to_base64(args.image_input)
-
-#        audio_url = None
-#        if getattr(args, "audio_input", None):
-#            audio_url = audio_url_to_base64(args.audio_input)
+        if getattr(args, "audio_input", None):
+            if not os.path.exists(args.audio_path):
+                raise FileNotFoundError(f"Audio input not found: {args.audio_input}")
+            if not hasattr(managers[0], "clap_model") or managers[0].clap_model is None:
+                raise ValueError("No Clap Model found")
+            audio_caption = "Audio caption: " + ",".join(managers[0].clap_model.generate_captions([args.audio_input]))
 
         if args.input_format == "json":
             obj = json.loads(ipt)
@@ -888,7 +892,7 @@ def run_grasp(args: argparse.Namespace) -> None:
             inputs = [{
                 "input": ipt,
                 "image_url": image_url,
-                # audio_url["input_audio"]: None
+                # "audio_caption": audio_caption,
             }]
             input_field = None  # overwrite
 

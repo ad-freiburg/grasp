@@ -46,7 +46,8 @@ from grasp.utils import (
     convert_base64_to_np_array
 )
 from search_rdf.model.embedding import (
-    OpenClipModel
+    OpenClipModel,
+    ClapCapModel,
 )
 
 if TYPE_CHECKING:
@@ -280,7 +281,7 @@ on the candidate entity before calling this function.""",
                 "additionalProperties": False,
             },
             "strict": True,
-        },{
+        }, {
             "name": "analyze_image",
             "description": """Funtion used for visually analyzing images, should be used with the image_url from \
 the input, if one is provided for better visual interpretation and qa.""",
@@ -295,6 +296,32 @@ the input, if one is provided for better visual interpretation and qa.""",
                     },
                 },
                 "required": ["query"],
+                "additionalProperties": False,
+
+            },
+            "strict": True,
+        }, {
+            "name": "analyze_audio",
+            "description": """Funtion used for accoustically analyzing audio files, should be used with the audio url from \
+the KG, which must be found via SPAQL Queries prior to use.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kg": {
+                        "type": "string",
+                        "enum": kgs,
+                        "description": "The knowledge graph the candidate entity belongs to",
+                    },
+                    "audio_url": {
+                        "type": "string",
+                        "description": (
+                            "The reference audio of the candidate entity. "
+                            "Typically retrieved via a SPARQL query"
+                            "Can be a public HTTP(S) URL or a base64-encoded data URL. "
+                        ),
+                    }
+                },
+                "required": ["audio_url", "kg"],
                 "additionalProperties": False,
 
             },
@@ -967,6 +994,17 @@ def call_function(
             image_url,
             fn_args["query"],
             config,
+        )
+
+    elif fn_name == "analyze_audio":
+        audio_url = fn_args["audio_url"]
+        assert audio_url is not None, ("No input Audio found")
+        manager, _ = find_manager(managers, fn_args["kg"])
+        model = manager.clap_model
+        assert model is not None, ("No Clap Model initialized")
+        return analyze_audio(
+            audio_url,
+            model
         )
 
     elif fn_name in {"search_shape", "get_shape"}:
@@ -1946,6 +1984,7 @@ def verify(
 
 def analyze_image(image_url: str, prompt: str, config: GraspConfig) -> str:
     print(f"[DEBUG] vision query: {prompt}")
+    print(f"[DEBUG] model: {config.vision_model}")
     vision_config = config.get_vision_config
     model = OpenAICompletionsModel(vision_config)
 
@@ -1973,3 +2012,9 @@ def analyze_image(image_url: str, prompt: str, config: GraspConfig) -> str:
     else:
         message = response.message
     return message or "Error: no answer from vision model"
+
+
+def analyze_audio(audio_url: str, model: ClapCapModel) -> str:
+    output = model.generate_captions([audio_url])
+    print(f"audio {audio_url} = {output}")
+    return "Audio Description: [" + ",".join(output) + "]"

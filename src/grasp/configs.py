@@ -137,7 +137,8 @@ class GraspConfig(ModelConfig):
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
-    vision_model: str = "openai/qwen-3.6-27b-llmlb"
+    clap_model: str = "clapcap"
+    vision_model: str = "qwen3.5-9b-llmlb"
 
     vision_model_config: ModelConfig | None = None
 
