@@ -70,10 +70,13 @@ class AlignmentTaskInput(BaseModel):
 
 
 class AlignmentState:
+
+    __global_correspondences: dict[str, Correspondence] = {}
+
     def __init__(self):
         self.task_input: AlignmentTaskInput | None = None
         # mapping from each processed entity IRI to its correspondence object
-        self.correspondences: dict[str, Correspondence] = {}
+        self.correspondences: dict[str, Correspondence] = AlignmentState.__global_correspondences
         # self.proccessed: set[str] = set()
 
     def add_1_to_1_correspondence(self, correspondence: Correspondence):
@@ -233,7 +236,7 @@ def rules() -> list[str]:
         "Leverage the semantic context of both graphs. To improve efficiency, favor batch-retrieval "
         "SPARQL queries over repetitive individual searches when identifying patterns across "
         "multiple entities",
-        "Before writing custom SPARQL queries, prioritize using the built-in search_entities and list_entities functions to explore the target ontology quickly."
+        "Before writing custom SPARQL queries, prioritize using the built-in search_entity and list functions to explore the target ontology quickly."
         "Perform a final comprehensive review of all established correspondences before concluding the task.",
         "You must explicitly evaluate EVERY SINGLE entity provided in the source list. Do not stop until you" "have attempted to match all of them. If an entity truly has no match, explain briefly why,"
         "but do not simply skip it."
@@ -265,13 +268,28 @@ def add_1_to_1_correspondence(
         ) -> str:
     manager1, _ = find_manager(managers, kg1)
     manager2, _ = find_manager(managers, kg2)
+    if not overwrite:
+        existing_source_corr = state.get_correspondence(entity1)
+        existing_target_corr = state.get_correspondence(entity2)
+
+        if existing_source_corr is not None:
+            return (
+                f"Collision Error: The source entity {entity1} is already mapped to"
+                f"{existing_source_corr.entity2.entity}. If you want to change this mapping, "
+                "you must set 'overwrite' to True."
+                )
+        if existing_target_corr is not None:
+            return (
+                f"Collision Error: The target entity {entity2} is already mapped to"
+                f"{existing_target_corr.entity1.entity}. If you want to change this mapping, "
+                "you must set 'overwrite' to True."
+                )
     try:
         correspondence = prepare_correspondence(manager1, manager2, entity1, entity2)
         # TODO: Handle know_before_use
         state.add_1_to_1_correspondence(correspondence)
     except ValueError as e:
         raise FunctionCallException(str(e)) from e
-    # TODO: Handle overwriting feedback to LLM message
     return f"Aligned {entity1} from {kg1} with {entity2} from {kg2}"
 
 
@@ -337,6 +355,8 @@ with entities from the target ontology {task_input.target_kg}:
 
     for entity in task_input.source_data:
         instructions += f"- {entity.format()}\n"
+
+    # instructions += f"first entity to match: {task_input.source_data[0].format()}"
 
     return instructions
 
