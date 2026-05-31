@@ -11,14 +11,14 @@ from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import FunctionCallException, format_list, format_notes
-from grasp.tasks.cea import prepare_annotation as prepare_entity, Annotation
+from grasp.tasks.cea import prepare_annotation, Annotation
 
 
 # TODO: If we keep this design, the class hierarchy should
 # obviously be refactored...
 class Entity(Annotation):
     def format(self) -> str:
-        output = f"IRI: {self.entity}"
+        output = f"Full IRI: {self.identifier}, Shortened IRI: {self.entity}"
         if self.label is not None:
             output += f", label: {self.label}"
         if self.aliases is not None and self.aliases != []:
@@ -80,13 +80,13 @@ class AlignmentState:
         # self.proccessed: set[str] = set()
 
     def add_1_to_1_correspondence(self, correspondence: Correspondence):
-        self.correspondences[correspondence.entity1.entity] = correspondence
-        self.correspondences[correspondence.entity2.entity] = correspondence
+        self.correspondences[correspondence.entity1.identifier] = correspondence
+        self.correspondences[correspondence.entity2.identifier] = correspondence
 
     def get_correspondence(self, entity: str) -> Correspondence | None:
         """
-        returns a `Correspondence`-object in which the IRI `entity` 
-        is mapped to antoher entity or `None`, if `entity` is not
+        returns a `Correspondence`-object in which the full IRI `entity`
+        is mapped to another entity or `None`, if `entity` is not
         matched yet.
         """
         return self.correspondences.get(entity)
@@ -243,54 +243,50 @@ def rules() -> list[str]:
     ]
 
 
-# TODO: If we keep this design, the class hierarchy and inheritance should
-# obviously be refactored...
-def prepare_correspondence(manager1: KgManager, manager2: KgManager, entity1: str, entity2: str) -> Correspondence:
-    entity_object_1 = Entity.from_annotation_object(prepare_entity(manager1, entity1))
-    entity_object_2 = Entity.from_annotation_object(prepare_entity(manager2, entity2))
-    return Correspondence(
-        entity1=entity_object_1,
-        entity2=entity_object_2
-        )
-
-
 # TODO: Refactor to eliminate code duplicates to `annotate`-method from cea.py
 def add_1_to_1_correspondence(
         managers: list[KgManager],
-        kg1: str,
-        kg2: str,
-        entity1: str,
-        entity2: str,
+        kg_source: str,
+        kg_target: str,
+        entity_source: str,
+        entity_target: str,
         state: AlignmentState,
         known: set[str],
         know_before_use: bool = True,
         overwrite: bool = False
         ) -> str:
-    manager1, _ = find_manager(managers, kg1)
-    manager2, _ = find_manager(managers, kg2)
-    if not overwrite:
-        existing_source_corr = state.get_correspondence(entity1)
-        existing_target_corr = state.get_correspondence(entity2)
 
-        if existing_source_corr is not None:
-            return (
-                f"Collision Error: The source entity {entity1} is already mapped to"
-                f"{existing_source_corr.entity2.entity}. If you want to change this mapping, "
-                "you must set 'overwrite' to True."
-                )
-        if existing_target_corr is not None:
-            return (
-                f"Collision Error: The target entity {entity2} is already mapped to"
-                f"{existing_target_corr.entity1.entity}. If you want to change this mapping, "
-                "you must set 'overwrite' to True."
-                )
     try:
-        correspondence = prepare_correspondence(manager1, manager2, entity1, entity2)
-        # TODO: Handle know_before_use
+        manager_source, _ = find_manager(managers, kg_source)
+        manager_target, _ = find_manager(managers, kg_target)
+        entity_object_source = Entity.from_annotation_object(prepare_annotation(manager_source, entity_source))
+        entity_object_target = Entity.from_annotation_object(prepare_annotation(manager_target, entity_target))
+        full_iri_source = entity_object_source.identifier
+        full_iri_target = entity_object_target.identifier
+
+        if not overwrite:
+            existing_source_corr = state.get_correspondence(full_iri_source)
+            existing_target_corr = state.get_correspondence(full_iri_target)
+
+            if existing_source_corr is not None:
+                return (
+                    f"Collision Error: The source entity {entity_source} is already mapped to"
+                    f"{existing_source_corr.entity2.entity}. If you want to change this mapping, "
+                    "you must set 'overwrite' to True."
+                    )
+            if existing_target_corr is not None:
+                return (
+                    f"Collision Error: The target entity {entity_target} is already mapped to"
+                    f"{existing_target_corr.entity1.entity}. If you want to change this mapping, "
+                    "you must set 'overwrite' to True."
+                    )
+
+        correspondence = Correspondence(entity1=entity_object_source, entity2=entity_object_target)
         state.add_1_to_1_correspondence(correspondence)
+        return f"Aligned {entity_source} from {kg_source} with {entity_target} from {kg_target}"
+
     except ValueError as e:
         raise FunctionCallException(str(e)) from e
-    return f"Aligned {entity1} from {kg1} with {entity2} from {kg2}"
 
 
 def delete_correspondence(entity1: str, entity2: str, state: AlignmentState) -> str:
@@ -298,7 +294,8 @@ def delete_correspondence(entity1: str, entity2: str, state: AlignmentState) -> 
     correspondence2 = state.get_correspondence(entity2)
     if correspondence1 is None or correspondence1 is not correspondence2:
         raise FunctionCallException(
-            f"There is no Correspondence aligning {entity1} to {entity2} yet"
+            f"There is no Correspondence aligning {entity1} to {entity2} yet. "
+            "Notice you have to use the full IRI as entity reference."
             )
     state.remove_correspondence(entity1, entity2)
     return f"Deleted correspondence between {entity1} and {entity2}"
@@ -379,7 +376,6 @@ def feedback_system_message(
     kg_notes: dict[str, list[str]],
     notes: list[str],
 ) -> str:
-    # Der Kritiker braucht den Kontext der Ontologien
     return f"""\
 You are an expert ontology matching judge. Your task is to evaluate if the assistant has correctly identified and set correspondences between the entities.
 
