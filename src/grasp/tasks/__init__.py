@@ -41,11 +41,8 @@ _REGISTRY: dict[str, type[GraspTask]] = {
         StructuralExplorationTask,
         QuestionGenerationTask,
         AutoSetupTask,
-<<<<<<< HEAD
-        OmTask
-=======
+        OmTask,
         ShapesSetupTask,
->>>>>>> 86c16e9268c63c963ce695139a82f2155d96308b
     ]
 }
 
