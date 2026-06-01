@@ -2,8 +2,8 @@ type: env(TYPE:both)
 
 knowledge_graph:
   kg: env(KG:wikidata)
-  entities_type: env(ENTITIES_TYPE:fuzzy)
-  properties_type: env(PROPERTIES_TYPE:embedding)
+  entities: env(ENTITIES_TYPE:fuzzy)
+  properties: env(PROPERTIES_TYPE:embedding)
   info:
     endpoint: env(ENDPOINT:null)
 

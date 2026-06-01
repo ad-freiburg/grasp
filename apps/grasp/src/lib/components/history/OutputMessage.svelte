@@ -30,11 +30,13 @@ if (task === 'sparql-qa') {
     output?.type === 'answer'
       ? output?.answer ?? ''
       : output?.explanation ?? '';
+} else if (task === 'sparql-to-question') {
+  primaryText = output?.formatted ?? '';
 } else if (task === 'general-qa') {
   primaryText = output?.output ?? '';
 }
 
-const sparql = output?.sparql ?? null;
+const sparql = task === 'sparql-to-question' ? null : output?.sparql ?? null;
 const selections = output?.selections ?? null;
 const result = output?.result ?? null;
 const endpoint = output?.endpoint ?? null;

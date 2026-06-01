@@ -37,9 +37,9 @@ num_examples: env(NUM_EXAMPLES:3)
 
 knowledge_graphs:
   - kg: wikidata
-    example_index: env(WD_EXAMPLES:null)
-    entities_type: env(WD_ENT_TYPE:fuzzy)
-    properties_type: env(WD_PROP_TYPE:embedding)
+    examples: env(WD_EXAMPLES:null)
+    entities: env(WD_ENT_TYPE:fuzzy)
+    properties: env(WD_PROP_TYPE:embedding)
     notes_file: env(WD_NOTES_FILE:null)
     info:
       endpoint: env(WD_ENDPOINT:null)

@@ -8,3 +8,8 @@ model_kwargs:
     summary: env(REASONING_SUMMARY:null)
 
 seed: env(SEED:22)
+
+knowledge_graph:
+  kg: env(KG:wikidata)
+  info:
+    endpoint: env(ENDPOINT:null)

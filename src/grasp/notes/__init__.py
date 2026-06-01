@@ -96,12 +96,18 @@ def take_notes_from_samples(
     with open(os.path.join(out_dir, "config.yaml"), "w") as f:
         yaml.dump(config.model_dump(), f)
 
+    # Pre-generate sample sequence in epochs so every sample is seen once
+    # per epoch before any is revisited across rounds.
+    n_per_round = min(config.samples_per_round, len(all_samples))
+    sequence: list[tuple[str, Sample]] = []
+    epoch = 0
+    while len(sequence) < config.num_rounds * n_per_round:
+        random.seed(config.seed + epoch)
+        sequence.extend(random.sample(all_samples, len(all_samples)))
+        epoch += 1
+
     for r in trange(config.num_rounds, desc="Taking notes from samples"):
-        random.seed(config.seed + r)
-        samples = random.sample(
-            all_samples,
-            min(config.samples_per_round, len(all_samples)),
-        )
+        samples = sequence[r * n_per_round : (r + 1) * n_per_round]
 
         outputs = []
         for kg, sample in tqdm(samples, desc="Running GRASP on samples", leave=False):
@@ -314,7 +320,7 @@ def generate_questions(
     for r in trange(config.num_rounds, desc="Generating questions"):
         output = consume_generator(
             generate(
-                "question_generation",
+                "question-generation",
                 state,
                 config,
                 managers,
@@ -326,7 +332,7 @@ def generate_questions(
 
         dump_json(
             output,
-            os.path.join(out_dir, f"output.question_generation.round_{r}.json"),
+            os.path.join(out_dir, f"question-generation.trace.round_{r}.json"),
         )
 
         for kg, kg_questions in state.questions.items():

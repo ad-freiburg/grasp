@@ -3,7 +3,10 @@ import math
 import os
 import random
 from logging import Logger
+from typing import Any
 
+import torch
+import torch.nn.functional as F
 import yaml
 from peft import LoraConfig, PeftModel, get_peft_model
 from pydantic import BaseModel
@@ -22,6 +25,7 @@ from universal_ml_utils.io import load_json
 from universal_ml_utils.logging import get_logger
 
 from grasp.baselines.grisp.data import (
+    IGNORE_INDEX,
     GRISPCollator,
     GRISPMaterializedSelectionDataset,
     GRISPMaterializedSkeletonDataset,
@@ -65,7 +69,9 @@ class GRISPTrainConfig(BaseModel):
 
     # data augmentation
     skeleton_p: float = 0.2
-    selection_p: float = 0.2
+    drop_infos_p: float = 0.05
+    drop_target_p: float = 0.1
+    shuffle_alts_p: float = 0.1
 
     # training hyperparameters
     lr: float = 1e-4
@@ -170,7 +176,9 @@ def load_datasets(
             manager = load_kg_manager(cfg.knowledge_graph)
             dataset_kwargs["manager"] = manager
             dataset_kwargs["skeleton_p"] = cfg.skeleton_p
-            dataset_kwargs["selection_p"] = cfg.selection_p
+            dataset_kwargs["drop_infos_p"] = cfg.drop_infos_p
+            dataset_kwargs["drop_target_p"] = cfg.drop_target_p
+            dataset_kwargs["shuffle_alts_p"] = cfg.shuffle_alts_p
             logger.warning("Setting num workers to 0 for online selection training")
             cfg.num_workers = 0
     else:
@@ -255,6 +263,62 @@ class GRISPTrainer(Trainer):
             epoch=self.epochs_trained,
         )
 
+    def compute_loss(  # type: ignore
+        self,
+        model: PreTrainedModel,
+        inputs: dict[str, torch.Tensor],
+        return_outputs: bool = False,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, Any] | torch.Tensor:
+        option_ids = inputs.pop("option_token_ids")
+        option_mask = inputs.pop("option_mask")
+        target_idx = inputs.pop("target_idx")
+        answer_pos = inputs.pop("answer_pos")
+        is_select = inputs.pop("is_selection")
+        labels = inputs.pop("labels")
+
+        outputs = model(**inputs)
+        logits = outputs.logits  # (B, T, V)
+        T = logits.size(1)
+
+        total_loss = torch.zeros((), device=logits.device, dtype=logits.dtype)
+        total_n = torch.zeros((), device=logits.device, dtype=logits.dtype)
+
+        if (~is_select).any():
+            skel_logits = logits[~is_select]
+            skel_labels = labels[~is_select]
+            shift_logits = skel_logits[:, :-1].contiguous()
+            shift_labels = skel_labels[:, 1:].contiguous()
+            ntp = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=IGNORE_INDEX,
+                reduction="sum",
+            )
+            n_ntp = (shift_labels != IGNORE_INDEX).sum().to(logits.dtype)
+            total_loss = total_loss + ntp
+            total_n = total_n + n_ntp
+
+        # Drop selection rows whose answer position fell beyond the (possibly
+        # truncated) sequence; indexing them would go out of bounds.
+        sel_valid = is_select & (answer_pos >= 1) & (answer_pos < T)
+        if sel_valid.any():
+            sel_rows = sel_valid.nonzero(as_tuple=True)[0]
+            # logit at position t-1 predicts token at position t
+            pred_pos = answer_pos[sel_rows] - 1
+            ans_logits = logits[sel_rows, pred_pos]  # (M, V)
+            opt_logits = ans_logits.gather(1, option_ids[sel_rows])  # (M, K)
+            opt_logits = opt_logits.masked_fill(~option_mask[sel_rows], float("-inf"))
+            sel = F.cross_entropy(opt_logits, target_idx[sel_rows], reduction="sum")
+            n_sel = torch.tensor(
+                len(sel_rows), device=logits.device, dtype=logits.dtype
+            )
+            total_loss = total_loss + sel
+            total_n = total_n + n_sel
+
+        loss = total_loss / total_n.clamp(min=1)
+        return (loss, outputs) if return_outputs else loss
+
 
 def main(args: argparse.Namespace) -> None:
     logger = get_logger("GRISP TRAIN", args.log_level)
@@ -299,7 +363,7 @@ def main(args: argparse.Namespace) -> None:
 
     # save config
     with open(os.path.join(args.output_dir, "config.yaml"), "w") as f:
-        yaml.dump(config.model_dump(), f)
+        yaml.safe_dump(config.model_dump(), f)
 
     batches_per_epoch = math.ceil(len(train_data) / config.batch_size)  # type: ignore
     steps_per_epoch = math.ceil(batches_per_epoch / config.gradient_accumulation_steps)
@@ -353,7 +417,7 @@ def main(args: argparse.Namespace) -> None:
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         learning_rate=config.lr,
         lr_scheduler_type="cosine",
-        warmup_ratio=config.warmup_ratio,
+        warmup_steps=int(total_steps * config.warmup_ratio),
         weight_decay=config.weight_decay,
         num_train_epochs=config.num_epochs,
         seed=config.seed,
@@ -366,6 +430,9 @@ def main(args: argparse.Namespace) -> None:
         torch_compile=config.do_compile,
         dataloader_num_workers=config.num_workers,
         dataloader_prefetch_factor=4 if config.num_workers > 0 else None,
+        # keep selection-specific keys (option_token_ids, answer_pos, etc.)
+        # that compute_loss uses for restricted CE
+        remove_unused_columns=False,
     )
 
     trainer = GRISPTrainer(

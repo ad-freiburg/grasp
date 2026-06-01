@@ -24,6 +24,7 @@ from universal_ml_utils.ops import consume_generator, extract_field
 from grasp.build import get_data
 from grasp.build.data import merge_kgs
 from grasp.build.index import build_index
+from grasp.build.shapes import build_shapes
 from grasp.configs import (
     GraspConfig,
     JudgeConfig,
@@ -32,9 +33,11 @@ from grasp.configs import (
     NotesFromSamplesConfig,
     NotesGenerateQuestionsConfig,
     ServerConfig,
+    ShapeConfig,
 )
 from grasp.core import generate, load_notes, setup
 from grasp.evaluate import evaluate_f1, evaluate_with_expert, evaluate_with_judge
+from grasp.examples import load_example_indices, task_to_index
 from grasp.functions import find_manager
 from grasp.notes import (
     generate_questions,
@@ -43,8 +46,8 @@ from grasp.notes import (
     take_notes_from_samples,
 )
 from grasp.server import serve
+from grasp.shapes import ShapeIndex, ShapeSample
 from grasp.tasks import Task, get_task
-from grasp.examples import load_example_indices, task_to_index
 from grasp.utils import (
     format_trace,
     get_available_knowledge_graphs,
@@ -513,15 +516,21 @@ def parse_args() -> argparse.Namespace:
     )
     index_parser.add_argument(
         "index",
-        choices=["entities", "properties", "literals"],
+        choices=["entities", "properties", "literals", "shapes"],
         help="Index to build",
+    )
+    index_parser.add_argument(
+        "config",
+        nargs="?",
+        default=None,
+        help="Path to GRASP configuration file (required when building the shapes index)",
     )
     index_parser.add_argument(
         "--index-type",
         type=str,
         choices=["auto", "keyword", "fuzzy", "embedding"],
         default="auto",
-        help="Type of index to build",
+        help="Type of index to build (not applicable for shapes)",
     )
     index_parser.add_argument(
         "--emb-model",
@@ -545,6 +554,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=256,
         help="Batch size when building embedding index",
+    )
+    index_parser.add_argument(
+        "--max-classes",
+        type=int,
+        default=500,
+        help="Maximum number of classes to profile (shapes only)",
     )
     add_overwrite_arg(index_parser)
 
@@ -583,56 +598,39 @@ def parse_args() -> argparse.Namespace:
     add_task_arg(example_parser)
     add_overwrite_arg(example_parser)
 
-    # auto-setup a knowledge graph
-    auto_setup_parser = subparsers.add_parser(
-        "auto-setup",
-        help="Automatically configure a knowledge graph by exploring its SPARQL endpoint",
+    # AI-assisted setup for a knowledge graph
+    setup_parser = subparsers.add_parser(
+        "setup",
+        help="Configure a knowledge graph using an AI agent",
     )
-    add_config_arg(auto_setup_parser)
-    auto_setup_parser.add_argument(
-        "-kg",
-        "--knowledge-graph",
+    setup_parser.add_argument(
+        "knowledge_graph",
         type=str,
-        default=None,
-        help="Knowledge graph to configure (required if config has multiple KGs)",
+        help="Knowledge graph to configure",
     )
-    auto_setup_parser.add_argument(
-        "--info-notes",
-        type=str,
-        default=None,
-        help="User notes for the info phase (prefixes and description)",
-    )
-    auto_setup_parser.add_argument(
-        "--entity-index-notes",
-        type=str,
-        default=None,
-        help="User notes for the entity index (entity index and info SPARQL)",
-    )
-    auto_setup_parser.add_argument(
-        "--property-index-notes",
-        type=str,
-        default=None,
-        help="User notes for the property index (property index and info SPARQL)",
-    )
-    auto_setup_parser.add_argument(
-        "--literal-index-notes",
-        type=str,
-        default=None,
-        help="User notes for the literal index (literal index and info SPARQL)",
-    )
-    auto_setup_parser.add_argument(
-        "phases",
-        nargs="?",
+    setup_parser.add_argument(
+        "phase",
         choices=[
-            "all",
+            "standard",
             "info",
-            "indices",
             "entities",
             "properties",
             "literals",
+            "indices",
+            "shapes",
         ],
-        default="all",
-        help="Which phase(s) to run (default: all)",
+        help="Setup phase to run: 'standard' runs info+indices (entities+properties+literals); 'indices' runs the three index phases only",
+    )
+    setup_parser.add_argument(
+        "config",
+        type=str,
+        help="Path to GRASP configuration file",
+    )
+    setup_parser.add_argument(
+        "--notes",
+        type=str,
+        default=None,
+        help="Notes passed to the setup agent (single-phase runs only: info, entities, properties, literals, shapes)",
     )
 
     # visualize trace from GRASP output
@@ -942,65 +940,60 @@ def show_grasp(args: argparse.Namespace) -> None:
         print(format_trace(trace, skip_system=args.skip_system))
 
 
-def auto_setup_grasp(args: argparse.Namespace) -> None:
-    logger = get_logger("GRASP AUTO-SETUP", args.log_level)
+def setup_grasp(args: argparse.Namespace) -> None:
+    phase = args.phase
+
+    if phase == "shapes":
+        _shapes_setup_grasp(args)
+        return
+
+    logger = get_logger("GRASP SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    # load KG manager, gracefully handling missing indices
     managers, _ = setup(config)
     if not managers:
-        logger.error("No KG managers available for auto-setup")
+        logger.error("No KG managers available for setup")
         return
     elif len(managers) == 1:
         manager = managers[0]
     else:
-        assert args.knowledge_graph is not None, (
-            "Knowledge graph must be specified for auto-setup when config has more than one"
-        )
         manager, _ = find_manager(managers, args.knowledge_graph)
 
     notes, kg_notes = load_notes(config)
     kg_dir = get_index_dir(manager.kg)
 
-    # run phases sequentially: info first (so prefixes are available),
-    # then entity index, then property index
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    all_phases = [
-        ("info", {"phase": "info", "notes": args.info_notes}),
-        (
-            "entities",
-            {"phase": "index", "name": "entities", "notes": args.entity_index_notes},
-        ),
-        (
-            "properties",
-            {
-                "phase": "index",
-                "name": "properties",
-                "notes": args.property_index_notes,
-            },
-        ),
-        (
-            "literals",
-            {
-                "phase": "index",
-                "name": "literals",
-                "notes": args.literal_index_notes,
-            },
-        ),
-    ]
+    multi_phase = phase in ("standard", "indices")
+
+    if multi_phase and args.notes is not None:
+        logger.error(
+            f"--notes is not supported for phase '{phase}'; "
+            "it is only supported for single-phase runs "
+            "(info, entities, properties, literals, shapes)"
+        )
+        return
+
+    phase_note = args.notes if not multi_phase else None
+
     selected = {
-        "all": {"info", "entities", "properties", "literals"},
-        "info": {"info"},
+        "standard": {"info", "entities", "properties", "literals"},
         "indices": {"entities", "properties", "literals"},
+        "info": {"info"},
         "entities": {"entities"},
         "properties": {"properties"},
         "literals": {"literals"},
-    }[args.phases]
+    }[phase]
+
+    all_phases = [
+        ("info", {"phase": "info", "notes": phase_note}),
+        ("entities", {"phase": "index", "name": "entities", "notes": phase_note}),
+        ("properties", {"phase": "index", "name": "properties", "notes": phase_note}),
+        ("literals", {"phase": "index", "name": "literals", "notes": phase_note}),
+    ]
     phases = [payload for tag, payload in all_phases if tag in selected]
 
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
     def dump_latest(path: str, payload, text: bool = False) -> str:
-        # write to a timestamped sibling, then point `path` at it via a
-        # relative symlink. prior timestamped files are preserved.
         stem, ext = os.path.splitext(path)
         stamped = f"{stem}.{timestamp}{ext}"
         if text:
@@ -1011,16 +1004,14 @@ def auto_setup_grasp(args: argparse.Namespace) -> None:
         return stamped
 
     for phase_input in phases:
-        phase = phase_input["phase"]
-        if phase == "index":
+        p = phase_input["phase"]
+        if p == "index":
             trace_dir = os.path.join(kg_dir, phase_input["name"])
-            phase += f" ({phase_input['name']})"
+            p += f" ({phase_input['name']})"
         else:
             trace_dir = kg_dir
 
-        logger.info(
-            f"Starting auto-setup {phase} phase for knowledge graph {manager.kg}"
-        )
+        logger.info(f"Starting setup {p} phase for knowledge graph {manager.kg}")
 
         result = consume_generator(
             generate(
@@ -1034,21 +1025,16 @@ def auto_setup_grasp(args: argparse.Namespace) -> None:
             )
         )
 
-        # save the full trace so we can inspect it
-        # independent of success or failure
-        trace_path = os.path.join(trace_dir, "auto_setup.json")
+        trace_path = os.path.join(trace_dir, "auto-setup.trace.json")
         stamped = dump_latest(trace_path, result)
-        logger.info(
-            f"Saved auto-setup {phase} trace to {stamped} (latest: {trace_path})"
-        )
+        logger.info(f"Saved setup {p} trace to {stamped} (latest: {trace_path})")
 
         output = result.get("output")
         if output is None:
-            logger.error(f"Auto-setup {phase} phase did not produce output")
+            logger.error(f"Setup {p} phase did not produce output")
             continue
 
-        # save outputs to disk
-        if phase == "info":
+        if phase_input["phase"] == "info":
             path = os.path.join(kg_dir, "info.json")
             stamped = dump_latest(path, output["info"])
             logger.info(f"Saved prefixes and description to {stamped} (latest: {path})")
@@ -1075,6 +1061,133 @@ def auto_setup_grasp(args: argparse.Namespace) -> None:
         logger.info(f"Saved {name} description to {stamped} (latest: {path})")
 
 
+def _shapes_setup_grasp(args: argparse.Namespace) -> None:
+    logger = get_logger("GRASP SHAPES SETUP", args.log_level)
+    config = GraspConfig(**load_config(args.config))
+
+    managers, _ = setup(config)
+    if not managers:
+        logger.error("No KG managers available")
+        return
+    elif len(managers) == 1:
+        manager = managers[0]
+    else:
+        manager, _ = find_manager(managers, args.knowledge_graph)
+
+    notes, kg_notes = load_notes(config)
+    kg_dir = get_index_dir(manager.kg)
+
+    logger.info(f"Starting shape index setup for knowledge graph '{manager.kg}'")
+
+    result = consume_generator(
+        generate(
+            "shapes-setup",
+            {"kg": manager.kg, "notes": args.notes},
+            config,
+            [manager],
+            kg_notes,
+            notes,
+            logger=logger,
+        )
+    )
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+    def dump_latest(path: str, payload, text: bool = False) -> str:
+        stem, ext = os.path.splitext(path)
+        stamped = f"{stem}.{timestamp}{ext}"
+        if text:
+            dump_text(payload, stamped)
+        else:
+            dump_json(payload, stamped, indent=2)
+        link(stamped, path)
+        return stamped
+
+    shapes_dir = os.path.join(kg_dir, "shapes")
+    os.makedirs(shapes_dir, exist_ok=True)
+
+    trace_path = os.path.join(shapes_dir, "shapes-setup.trace.json")
+    stamped = dump_latest(trace_path, result)
+    logger.info(f"Saved setup trace to {stamped} (latest: {trace_path})")
+
+    output = result.get("output")
+    if output is None or output.get("pattern") is None:
+        logger.error("Setup did not produce a pattern")
+        return
+
+    setup_path = os.path.join(shapes_dir, "setup.json")
+    stamped = dump_latest(
+        setup_path,
+        {"pattern": output["pattern"], "description": output.get("description")},
+    )
+    logger.info(f"Saved pattern to {stamped} (latest: {setup_path})")
+
+
+def shapes_build_grasp(args: argparse.Namespace) -> None:
+    assert args.config is not None, (
+        "A config file is required: grasp index <kg> shapes <config>"
+    )
+
+    logger = get_logger("GRASP SHAPES BUILD", args.log_level)
+    config = GraspConfig(**load_config(args.config))
+
+    managers, _ = setup(config)
+    if not managers:
+        logger.error("No KG managers available")
+        return
+
+    manager, _ = find_manager(managers, args.knowledge_graph)
+
+    kg_dir = get_index_dir(manager.kg)
+    setup_path = os.path.join(kg_dir, "shapes", "setup.json")
+    if not os.path.exists(setup_path):
+        logger.error(
+            f"No setup found at {setup_path}. "
+            f"Run 'grasp setup {manager.kg} shapes <config>' first."
+        )
+        return
+
+    setup_data = load_json(setup_path)
+    pattern = setup_data.get("pattern")
+    if not pattern:
+        logger.error("setup.json does not contain a pattern")
+        return
+
+    shapes_dir = os.path.join(kg_dir, "shapes")
+    index_dir = os.path.join(shapes_dir, "index")
+    samples_file = os.path.join(index_dir, "samples.jsonl")
+
+    total_classes: int | None = None
+    if os.path.exists(samples_file) and not args.overwrite:
+        logger.info(f"Shapes already exist at {samples_file}, skipping profiling")
+        samples = [ShapeSample.model_validate(s) for s in load_jsonl(samples_file)]
+        info_path = os.path.join(index_dir, "info.json")
+        if os.path.exists(info_path):
+            total_classes = load_json(info_path).get("total_classes")
+    else:
+        samples, total_classes = build_shapes(
+            pattern,
+            shapes_dir,
+            manager,
+            shape_config=manager.shape_config or ShapeConfig(),
+            max_classes=args.max_classes,
+            log_level=args.log_level,
+            request_timeout=config.sparql_request_timeout,
+            read_timeout=config.sparql_read_timeout,
+        )
+
+    model = SentenceTransformerModel(args.emb_model)
+    ShapeIndex.build(
+        samples,
+        index_dir,
+        model,
+        args.emb_batch_size,
+        args.overwrite,
+        args.log_level,
+        total_classes=total_classes,
+    )
+
+
 def main():
     args = parse_args()
     if args.all_loggers:
@@ -1093,17 +1206,20 @@ def main():
         )
 
     elif args.command == "index":
-        build_index(
-            args.knowledge_graph,
-            args.index,
-            args.index_type,
-            args.emb_model,
-            args.emb_device,
-            args.emb_batch_size,
-            args.emb_dim,
-            args.log_level,
-            args.overwrite,
-        )
+        if args.index == "shapes":
+            shapes_build_grasp(args)
+        else:
+            build_index(
+                args.knowledge_graph,
+                args.index,
+                args.index_type,
+                args.emb_model,
+                args.emb_device,
+                args.emb_batch_size,
+                args.emb_dim,
+                args.log_level,
+                args.overwrite,
+            )
 
     elif args.command == "notes":
         take_grasp_notes(args)
@@ -1117,8 +1233,8 @@ def main():
     elif args.command == "evaluate":
         evaluate_grasp(args)
 
-    elif args.command == "auto-setup":
-        auto_setup_grasp(args)
+    elif args.command == "setup":
+        setup_grasp(args)
 
     elif args.command == "show":
         show_grasp(args)

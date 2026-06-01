@@ -178,16 +178,13 @@ def calculate_average_steps_and_time(
     count = 0
 
     for output in outputs_dict.values():
-        if "messages" not in output:
-            continue
+        if "messages" in output:
+            total_steps += sum(
+                1
+                for msg in output["messages"]
+                if msg.get("role") not in ["user", "system"]
+            )
 
-        # Count steps (messages that are not user or system)
-        steps = sum(
-            1 for msg in output["messages"] if msg.get("role") not in ["user", "system"]
-        )
-        total_steps += steps
-
-        # Get elapsed time
         if "elapsed" in output:
             total_time += output["elapsed"]
 
@@ -218,8 +215,6 @@ def calculate_metrics(
     num_retryable_evaluations = 0
     total_f1 = 0.0
     total_accuracy = 0.0
-    total_time = 0.0
-    time_count = 0
 
     for id, evaluation in model_evaluations.items():
         invalid_evaluation = is_invalid_evaluation(
@@ -234,10 +229,6 @@ def calculate_metrics(
         # get f1 score
         if "prediction" in evaluation:
             f1_score = evaluation["prediction"]["score"]
-            # Get elapsed time directly from the prediction
-            elapsed = evaluation["prediction"]["elapsed"]
-            total_time += elapsed
-            time_count += 1
         else:
             f1_score = 0.0
 
@@ -248,10 +239,9 @@ def calculate_metrics(
 
     f1_score = total_f1 / max(num_valid_evaluations, 1)
     accuracy = total_accuracy / max(num_valid_evaluations, 1)
-    avg_time = total_time / max(time_count, 1)
 
-    # Calculate average steps using the average steps and time function
-    avg_steps, _ = calculate_average_steps_and_time(model_outputs)
+    # Calculate average steps and time over the (possibly filtered) outputs
+    avg_steps, avg_time = calculate_average_steps_and_time(model_outputs)
 
     return {
         "num_total": total,
@@ -262,7 +252,7 @@ def calculate_metrics(
         "num_retryable_evaluations": num_retryable_evaluations,
         "accuracy": accuracy,
         "f1": f1_score,
-        "time": avg_time,
+        "time": avg_time if avg_time is not None else 0,
         "steps": avg_steps if avg_steps is not None else 0,
     }
 
@@ -922,20 +912,22 @@ def show_ranking_view(ranking_data: dict) -> None:
 
     selected_entry = selected_entries[0] if selected_entries else None
 
+    selected_kg_entries = entries_by_kg[selected_kg]
+
     judge_labels = sorted(
         {
             judge_label_from_rank(
                 entry["ranking"], rank_data_by_path.get(entry["filepath"], {})
             )
-            for entry in benchmark_entries
+            for entry in selected_kg_entries
         }
     )
     if judge_labels:
         st.caption(f"**Judge Models:** {', '.join(judge_labels)}")
 
-    # First pass: collect all unique models across all benchmarks to establish global ordering
+    # First pass: collect all unique models for the selected group to establish ordering
     sorted_models = None
-    for entry in benchmark_entries:
+    for entry in selected_kg_entries:
         rank_data = rank_data_by_path.get(entry["filepath"])
         if not rank_data or "prediction_files" not in rank_data:
             continue
@@ -952,7 +944,7 @@ def show_ranking_view(ranking_data: dict) -> None:
 
     if sorted_models is None:
         st.warning(
-            "Could not establish a consistent set of models across all benchmarks for this judge comparison."
+            "Could not establish a consistent set of models across benchmarks for this group and judge comparison."
         )
         return
 
@@ -984,7 +976,7 @@ def show_ranking_view(ranking_data: dict) -> None:
             )
         )
 
-    for entry in benchmark_entries:
+    for entry in selected_kg_entries:
         kg = entry["kg"]
         benchmark = entry["benchmark"]
         rank_file = entry["filepath"]
@@ -1019,7 +1011,6 @@ def show_ranking_view(ranking_data: dict) -> None:
             )
 
             row_data = {
-                "Group": kg,
                 "Benchmark": benchmark,
                 "Judge": judge_label_from_rank(
                     entry["ranking"], rank_data_by_path.get(rank_file, {})
@@ -1132,11 +1123,11 @@ def show_ranking_view(ranking_data: dict) -> None:
 
     # Create DataFrame
     df = pd.DataFrame(table_rows).sort_values(
-        ["Group", "Benchmark", "Judge", "Variant"]
+        ["Benchmark", "Judge", "Variant"]
     )
 
     # Define column order
-    display_columns = ["Group", "Benchmark", "Judge", "Variant"]
+    display_columns = ["Benchmark", "Judge", "Variant"]
     for model in sorted_models:
         letter = model_to_letter[model]
         display_columns.append(f"{letter} Wins")
@@ -1168,7 +1159,7 @@ def show_ranking_view(ranking_data: dict) -> None:
 
     # Show summary statistics
     st.caption(
-        f"Showing {len(benchmark_entries)} judge file(s) for {len(entries_by_benchmark)} benchmark(s)"
+        f"Showing {len(selected_kg_entries)} judge file(s) for {len(table_rows)} benchmark(s) in group '{selected_kg}'"
     )
 
     # Detailed sample view for the selected group and benchmark

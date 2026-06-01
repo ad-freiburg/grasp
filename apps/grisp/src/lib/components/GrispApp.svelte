@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { wsEndpoint, kgEndpoint, COPYRIGHT } from '../constants.js';
+  import { wsEndpoint, kgEndpoint, COPYRIGHT, MATERIAL_URL } from '../constants.js';
   import StepCard from './StepCard.svelte';
   import OutputCard from './OutputCard.svelte';
   import SparqlBlock from './SparqlBlock.svelte';
@@ -272,7 +272,7 @@
     <p>&copy; {new Date().getFullYear()} {COPYRIGHT}</p>
     <nav class="footer-links">
       <a href="evaluate">Evaluation</a>
-      <a href="data">Data</a>
+      <a href={MATERIAL_URL}>Material</a>
     </nav>
   </footer>
 

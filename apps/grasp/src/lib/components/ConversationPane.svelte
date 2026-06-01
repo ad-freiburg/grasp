@@ -110,7 +110,7 @@
         status = query
           ? `Searching for object "${query}" of ${property}...`
           : `Searching for objects of ${property}...`;
-      } else if (toolName === 'search_constrained' || toolName === 'search_with_constraints' || toolName === 'search') {
+      } else if (toolName === 'search_with_constraints' || toolName === 'search') {
         const query = args.query || '';
         const position = args.position || 'item';
         const constraints = args.constraints || {};
@@ -125,7 +125,7 @@
             ? `Searching for ${position} "${query}"...`
             : `Searching for ${position}...`;
         }
-      } else if (toolName === 'search_autocomplete' || toolName === 'search_with_filter') {
+      } else if (toolName === 'search_with_filter') {
         const query = args.query || '';
         status = query
           ? `Searching for "${query}" with SPARQL query constraint...`
@@ -159,12 +159,21 @@
         status = 'Providing final answer...';
       } else if (toolName === 'cancel') {
         status = 'Cancelling query generation...';
-      } else if (toolName === 'find_examples') {
+      } else if (toolName === 'get_random_examples') {
         const kg = args.kg;
         status = kg ? `Finding examples for ${kg}...` : 'Finding examples...';
-      } else if (toolName === 'find_similar_examples') {
+      } else if (toolName === 'search_example') {
         const kg = args.kg;
         status = kg ? `Finding similar examples for ${kg}...` : 'Finding similar examples...';
+      } else if (toolName === 'search_literal') {
+        const query = args.query || '';
+        status = query ? `Searching for literal "${query}"...` : 'Searching for literal...';
+      } else if (toolName === 'search_shape') {
+        const query = args.query || '';
+        status = query ? `Searching for shapes matching "${query}"...` : 'Searching for shapes...';
+      } else if (toolName === 'get_shape') {
+        const iri = args.iri || 'IRI';
+        status = `Fetching shape for ${iri}...`;
       } else {
         status = `Calling ${toolName}...`;
       }

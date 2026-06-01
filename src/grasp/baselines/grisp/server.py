@@ -16,6 +16,7 @@ from universal_ml_utils.configuration import load_config
 from universal_ml_utils.logging import get_logger
 
 from grasp.baselines.grisp.run import (
+    GRISPModel,
     GRISPRunConfig,
     generate,
     load_model_and_tokenizer,
@@ -89,22 +90,26 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
     train_cfg = GRISPTrainConfig(**load_config(train_cfg_path))
 
     logger.info(f"Loading model from {config.run_directory}")
-    skeleton_model, skeleton_tokenizer = load_model_and_tokenizer(
+    _model, skeleton_tokenizer = load_model_and_tokenizer(
         config.run_directory,
         config.device,
         config.dtype,
         logger,
     )
+    skeleton_model = GRISPModel(_model, config.skeleton_disable_adapter)
 
-    selection_model, selection_tokenizer = None, None
     if train_cfg.type == "skeleton" and config.selection_run is not None:
         logger.info(f"Loading selection model from {config.selection_run}")
-        selection_model, selection_tokenizer = load_model_and_tokenizer(
+        _sel, selection_tokenizer = load_model_and_tokenizer(
             config.selection_run,
             config.device,
             config.dtype,
             logger,
         )
+        selection_model = GRISPModel(_sel, config.selection_disable_adapter)
+    else:
+        selection_model = GRISPModel(_model, config.selection_disable_adapter)
+        selection_tokenizer = skeleton_tokenizer
 
     # load KG manager
     manager = load_kg_manager(config.knowledge_graph)
@@ -116,7 +121,7 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
 
     logger.info(
         f"GRISP server ready: kg={config.knowledge_graph.kg}, "
-        f"model={skeleton_model.config.name_or_path}"  # type: ignore
+        f"model={skeleton_model.model.config.name_or_path}"  # type: ignore
     )
 
     @app.get("/knowledge_graphs")

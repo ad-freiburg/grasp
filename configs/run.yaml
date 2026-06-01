@@ -31,9 +31,9 @@ num_examples: env(NUM_EXAMPLES:3)
 
 knowledge_graphs:
   - kg: env(KG:wikidata)
-    example_index: env(KG_EXAMPLES:null)
-    entities_type: env(ENTITIES_TYPE:fuzzy)
-    properties_type: env(PROPERTIES_TYPE:embedding)
+    examples: env(KG_EXAMPLES:null)
+    entities: env(ENTITIES_TYPE:fuzzy)
+    properties: env(PROPERTIES_TYPE:embedding)
     notes_file: env(KG_NOTES_FILE:null)
     indices: env(KG_INDICES:[])
     info:

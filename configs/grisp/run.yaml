@@ -1,7 +1,7 @@
 knowledge_graph:
   kg: env(KG:wikidata)
-  entities_type: env(ENTITIES_TYPE:fuzzy)
-  properties_type: env(PROPERTIES_TYPE:embedding)
+  entities: env(ENTITIES_TYPE:fuzzy)
+  properties: env(PROPERTIES_TYPE:embedding)
   info:
     endpoint: env(ENDPOINT:null)
 
@@ -16,7 +16,10 @@ skeleton_n: env(SKELETON_N:8)
 skeleton_top_k: env(SKELETON_TOP_K:3)
 
 selection_top_k: env(SELECTION_TOP_K:10)
-autocomplete: env(AUTOCOMPLETE:true)
+constrain: env(CONSTRAIN:true)
 backtrack: env(BACKTRACK:true)
 rerank: env(RERANK:true)
 check_empty: env(CHECK_EMPTY:true)
+
+skeleton_disable_adapter: env(SKELETON_DISABLE_ADAPTER:false)
+selection_disable_adapter: env(SELECTION_DISABLE_ADAPTER:false)

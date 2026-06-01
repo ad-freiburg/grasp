@@ -78,9 +78,15 @@ class GRISPSample(BaseModel):
         return any(isinstance(part, IRI) for part in self.sparql)
 
 
+class SelectionSample(BaseModel):
+    messages: Messages
+    options: list[str]
+    target: str
+
+
 class GRISPMaterializedSample(BaseModel):
     skeletons: list[Messages]
-    selections: list[Messages]
+    selections: list[SelectionSample]
 
     @property
     def has_skeletons(self) -> bool:
@@ -314,15 +320,19 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
     for label, (alternative, obj_type, variant) in zip(ALT_LABELS, alternatives):
         alt = alternative.get_selection_string(
             show_matched_label=False,
-            include_variants=[variant] if variant else None,
+            include_variants=[],
         )
         if obj_type not in grouped:
             grouped[obj_type] = []
         grouped[obj_type].append(f"{label}. {alt}")
 
+    multiple_types = len(grouped) > 1
     alt_groups = []
     for obj_type, alts in grouped.items():
-        alt_group = f"{obj_type.value.capitalize()} alternatives:\n"
+        if multiple_types:
+            alt_group = f"{obj_type.value.capitalize()} alternatives:\n"
+        else:
+            alt_group = "Alternatives:\n"
         alt_group += "\n".join(alts)
         alt_groups.append(alt_group)
 
@@ -460,6 +470,52 @@ fitting alternative."""
     return messages, list(options)
 
 
+class OracleSkeletonUnavailable(Exception):
+    pass
+
+
+def gold_sparql_to_nl_skeleton(sparql: str, manager: KgManager) -> str:
+    # match the training data pipeline (see preparation in main below):
+    # fix/strip known prefixes and prettify before extracting items, so the
+    # resulting NL skeleton lies on the training distribution.
+    sparql = manager.fix_prefixes(sparql, remove_known=True)
+    sparql = manager.prettify(sparql)
+    sparql, items = extract_sparql_items(sparql, manager)
+
+    # same validity rules as training data prep (main below):
+    # unindexed items must have a label, and unknown items are not allowed
+    invalid = [
+        item
+        for item in items
+        if (item.is_unindexed and not item.has_label) or item.is_unknown
+    ]
+    if invalid:
+        raise OracleSkeletonUnavailable(
+            "invalid items: "
+            + ", ".join(
+                f"{it.alternative.get_identifier()} ({it.obj_type.name})"
+                for it in invalid
+            )
+        )
+
+    parts: list[str | IRI] = []
+    cursor = 0
+    for item in items:
+        # literals/common/unknown are emitted as-is; everything else becomes a placeholder
+        if item.is_literal or item.is_common or item.is_unknown:
+            continue
+
+        start, end = item.item_span
+        parts.append(sparql[cursor:start])
+        parts.append(IRI.from_item(item, manager))
+        cursor = end
+
+    parts.append(sparql[cursor:])
+
+    # is_val=True -> deterministic canonical label, no alias sampling
+    return materialize_skeleton(parts, is_val=True)
+
+
 def materialize_skeleton(
     parts: list[str | IRI],
     is_val: bool = False,
@@ -594,6 +650,70 @@ def tokenize_and_log(
     return output
 
 
+def tokenize_selection(
+    sample: SelectionSample,
+    tokenizer: PreTrainedTokenizerBase,
+) -> dict:
+    enc: dict = tokenizer.apply_chat_template(
+        sample.messages,
+        return_dict=True,
+        enable_thinking=False,
+    )  # type: ignore
+    prompt_enc: dict = tokenizer.apply_chat_template(
+        sample.messages[:-1],
+        add_generation_prompt=True,
+        return_dict=True,
+        enable_thinking=False,
+    )  # type: ignore
+    option_token_ids = [tokenizer.convert_tokens_to_ids(o) for o in sample.options]
+    assert all(
+        t is not None and t != tokenizer.unk_token_id for t in option_token_ids
+    ), f"Option letters not single tokens: {sample.options}"
+
+    target_idx = sample.options.index(sample.target)
+    target_id = option_token_ids[target_idx]
+
+    # Some chat templates emit extra tokens between the generation prompt and
+    # the assistant content (e.g. Qwen3 inserts <think>\n\n</think>\n\n when
+    # enable_thinking=False). Locate the answer letter by searching forward
+    # from the prompt boundary for the first occurrence of the target token id.
+    input_ids = enc["input_ids"]
+    search_start = len(prompt_enc["input_ids"])
+    answer_pos = next(
+        (i for i in range(search_start, len(input_ids)) if input_ids[i] == target_id),
+        None,
+    )
+    assert answer_pos is not None, (
+        f"Could not locate target token id {target_id} for target "
+        f"'{sample.target}' in assistant turn (search from index {search_start})"
+    )
+
+    return {
+        "input_ids": enc["input_ids"],
+        "attention_mask": enc["attention_mask"],
+        # Restricted CE replaces NTP on the answer position; EOS loss dropped.
+        "labels": [IGNORE_INDEX] * len(enc["input_ids"]),
+        "answer_pos": answer_pos,
+        "option_token_ids": option_token_ids,
+        "target_idx": target_idx,
+    }
+
+
+def tokenize_selection_and_log(
+    sample: SelectionSample,
+    tokenizer: PreTrainedTokenizerBase,
+    logger: Logger,
+) -> dict:
+    output = tokenize_selection(sample, tokenizer)
+    logger.debug(f"Selection sample:\n{tokenizer.decode(output['input_ids'])}")
+    logger.debug(f"Length: {len(output['input_ids']):,}")
+    logger.debug(
+        f"Answer pos: {output['answer_pos']}, target idx: {output['target_idx']}, "
+        f"target: '{sample.target}'"
+    )
+    return output
+
+
 class GRISPMaterializedSkeletonDataset(Dataset):
     def __init__(
         self,
@@ -700,16 +820,15 @@ class GRISPMaterializedSelectionDataset(Dataset):
         sample = self.samples[idx]
 
         count = self.counter[idx]
-        messages = sample.selections[count % len(sample.selections)]
+        selection = sample.selections[count % len(sample.selections)]
         self.counter[idx] += 1
         self.logger.debug(
             f"({type(self).__name__}) Accessing sample {idx} count {count}"
         )
 
-        return tokenize_and_log(
-            messages,
+        return tokenize_selection_and_log(
+            selection,
             self.tokenizer,
-            self.mask_inputs,
             self.logger,
         )
 
@@ -719,8 +838,10 @@ def prepare_selection(
     manager: KgManager,
     is_val: bool = False,
     skeleton_p: float = 0.2,
-    selection_p: float = 0.2,
-) -> Messages:
+    drop_infos_p: float = 0.05,
+    drop_target_p: float = 0.1,
+    shuffle_alts_p: float = 0.1,
+) -> tuple[Messages, list[str], str]:
     question, skeleton = materialize_sample(sample, is_val, skeleton_p)
     sparql = materialize_sparql(sample.sparql)
 
@@ -730,11 +851,7 @@ def prepare_selection(
     }
 
     _, items = extract_sparql_items(sparql, manager)
-    items = [
-        item
-        for item in items
-        if item.is_entity_or_property or (item.is_unindexed and item.has_label)
-    ]
+    items = [item for item in items if item.is_entity_or_property]
     assert len(items) > 0, "No valid item to replace found in sample"
 
     parser = load_sparql_parser()
@@ -766,9 +883,9 @@ def prepare_selection(
     else:
         alternative_groups = {}
 
-    drop_infos = not is_val and random.random() < selection_p
-    drop_target = not is_val and random.random() < selection_p
-    shuffle_alts = not is_val and random.random() < selection_p
+    drop_infos = not is_val and random.random() < drop_infos_p
+    drop_target = not is_val and random.random() < drop_target_p
+    shuffle_alts = not is_val and random.random() < shuffle_alts_p
 
     if shuffle_alts:
         # shuffle within each obj-type bucket while preserving grouped layout
@@ -807,7 +924,7 @@ def prepare_selection(
     # option, which is the "None of the above" option
     option = options[-1] if target_option is None else options[target_option]
     prompt.append({"role": "assistant", "content": option})
-    return prompt
+    return prompt, options, option
 
 
 class GRISPSelectionDataset(Dataset):
@@ -819,7 +936,9 @@ class GRISPSelectionDataset(Dataset):
         mask_inputs: bool = True,
         is_val: bool = False,
         skeleton_p: float = 0.2,
-        selection_p: float = 0.2,
+        drop_infos_p: float = 0.05,
+        drop_target_p: float = 0.1,
+        shuffle_alts_p: float = 0.1,
         log_level: str | None = None,
     ) -> None:
         self.parser = load_sparql_parser()
@@ -829,7 +948,9 @@ class GRISPSelectionDataset(Dataset):
         self.is_val = is_val
 
         self.skeleton_p = skeleton_p
-        self.selection_p = selection_p
+        self.drop_infos_p = drop_infos_p
+        self.drop_target_p = drop_target_p
+        self.shuffle_alts_p = shuffle_alts_p
 
         self.logger = get_logger(f"GRISP SELECTION DATASET ({is_val=})", log_level)
 
@@ -845,18 +966,19 @@ class GRISPSelectionDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         sample = self.samples[idx]
 
-        messages = prepare_selection(
+        messages, options, target = prepare_selection(
             sample,
             self.manager,
             self.is_val,
             self.skeleton_p,
-            self.selection_p,
+            self.drop_infos_p,
+            self.drop_target_p,
+            self.shuffle_alts_p,
         )
 
-        return tokenize_and_log(
-            messages,
+        return tokenize_selection_and_log(
+            SelectionSample(messages=messages, options=options, target=target),
             self.tokenizer,
-            self.mask_inputs,
             self.logger,
         )
 
@@ -901,24 +1023,61 @@ class GRISPCollator:
 
     def __call__(self, batch: list[dict]) -> dict[str, torch.Tensor]:
         assert len(batch) > 0, "Batch must not be empty"
+        keys = ["input_ids", "attention_mask", "labels"]
         output = {
             key: pad(
                 [sample[key] for sample in batch],
                 pad_value=self.pad_values[key],
                 max_length=self.max_length,
             )
-            for key in batch[0]
+            for key in keys
         }
-        # ensure at least one label is not IGNORE_INDEX
-        # to avoid nan issues during training
-        labels = output["labels"]
-        if torch.all(labels == IGNORE_INDEX):
+
+        # selection metadata; skeleton rows get sentinel values
+        B = len(batch)
+        max_opts = max((len(s.get("option_token_ids", [])) for s in batch), default=0)
+        max_opts = max(max_opts, 1)
+        opt_ids = torch.zeros((B, max_opts), dtype=torch.long)
+        opt_mask = torch.zeros((B, max_opts), dtype=torch.bool)
+        target_idx = torch.full((B,), -1, dtype=torch.long)
+        answer_pos = torch.full((B,), -1, dtype=torch.long)
+        is_select = torch.zeros(B, dtype=torch.bool)
+
+        for i, s in enumerate(batch):
+            if "option_token_ids" not in s:
+                continue
+            n = len(s["option_token_ids"])
+            opt_ids[i, :n] = torch.tensor(s["option_token_ids"], dtype=torch.long)
+            opt_mask[i, :n] = True
+            target_idx[i] = s["target_idx"]
+            answer_pos[i] = s["answer_pos"]
+            is_select[i] = True
+
+        output["option_token_ids"] = opt_ids
+        output["option_mask"] = opt_mask
+        output["target_idx"] = target_idx
+        output["answer_pos"] = answer_pos
+        output["is_selection"] = is_select
+
+        if (
+            torch.all(output["labels"] == IGNORE_INDEX).item()
+            and not is_select.any().item()
+        ):
+            seq_lens = output["attention_mask"].sum(dim=1).tolist()
+            input_lens = [len(s["input_ids"]) for s in batch]
+            label_lens = [len(s["labels"]) for s in batch]
+            n_nonign_per_row = [
+                sum(1 for x in s["labels"] if x != IGNORE_INDEX) for s in batch
+            ]
             self.logger.warning(
-                "No labels for this batch, setting one to "
-                "avoid nan issues during training"
+                f"Batch has no skeleton labels and no selection rows; "
+                f"loss will be zero (no gradient signal).\n"
+                f"  max_length={self.max_length}, padded_shape={tuple(output['input_ids'].shape)}\n"
+                f"  per-row attention sums: {seq_lens}\n"
+                f"  per-row pre-pad input_ids lens: {input_lens}\n"
+                f"  per-row pre-pad labels lens:    {label_lens}\n"
+                f"  per-row non-IGNORE label counts (pre-pad): {n_nonign_per_row}"
             )
-            last_dim = labels.shape[1] - 1
-            labels[0, last_dim] = output["input_ids"][0, last_dim]
 
         return output
 

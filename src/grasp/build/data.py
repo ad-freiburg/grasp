@@ -2,7 +2,6 @@ import json
 import os
 from logging import Logger
 from typing import Iterator
-from urllib.parse import unquote_plus
 
 import ijson
 import requests
@@ -21,12 +20,17 @@ from grasp.manager.utils import (
 )
 from grasp.sparql.types import Binding
 from grasp.sparql.utils import (
-    find_longest_prefix,
     get_qlever_endpoint,
     has_scheme,
     load_iri_and_literal_parser,
 )
-from grasp.utils import get_index_dir, ordered_unique
+from grasp.utils import (
+    camel_case_split,
+    get_index_dir,
+    get_local_name_from_iri,
+    ordered_unique,
+    split_at_punctuation,
+)
 
 
 def download_data(
@@ -196,73 +200,13 @@ def stream_json_file(path: str) -> Iterator[dict]:
         yield from ijson.items(f, "results.bindings.item")
 
 
-def split_iri(iri: str) -> tuple[str, str]:
-    if "://" not in iri:
-        return "", iri
-
-    # split iri into prefix and last part after final / or #
-    last_hashtag = iri.rfind("#")
-    last_slash = iri.rfind("/")
-    last = max(last_hashtag, last_slash)
-    if last == -1:
-        return "", iri
-    else:
-        return iri[:last], iri[last + 1 :]
-
-
-def camel_case_split(s: str) -> str:
-    # split camelCase into words
-    # find uppercase letters
-    words = []
-    last = 0
-    for i, c in enumerate(s):
-        if c.isupper() and i > 0 and s[i - 1].islower():
-            words.append(s[last:i])
-            last = i
-
-    if last < len(s):
-        words.append(s[last:])
-
-    return " ".join(words)
-
-
-def get_object_name_from_id(obj_id: str, prefixes: dict[str, str]) -> str:
-    pfx = find_longest_prefix(obj_id, prefixes)
-    if pfx is None:
-        # no known prefix, split after final / or # to get objet name
-        _, obj_name = split_iri(obj_id)
-    else:
-        _, long = pfx
-        obj_name = obj_id[len(long) :]
-
-    # url decode the object name
-    return unquote_plus(obj_name)
-
-
 def get_value_from_id_binding(obj_id: Binding, prefixes: dict[str, str]) -> str:
     if obj_id.typ != "uri":
         return obj_id.value
 
-    obj_name = get_object_name_from_id(obj_id.identifier(), prefixes)
+    obj_name = get_local_name_from_iri(obj_id.identifier(), prefixes)
     label = " ".join(camel_case_split(part) for part in split_at_punctuation(obj_name))
     return label.strip()
-
-
-# we consider _, -, and . as url punctuation
-PUNCTUATION = {"_", "-", "."}
-
-
-def split_at_punctuation(s: str) -> Iterator[str]:
-    start = 0
-    for i, c in enumerate(s):
-        if c not in PUNCTUATION:
-            continue
-
-        yield s[start:i]
-        start = i + 1
-
-    if start < len(s):
-        yield s[start:]
 
 
 def parse_binding(

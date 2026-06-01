@@ -59,6 +59,7 @@
   const INACTIVITY_MESSAGE_PREFIX = 'connection closed due to inactivity';
 
   $: isCeaTask = task === 'cea';
+  $: inputPlaceholder = task === 'sparql-to-question' ? 'Enter a SPARQL query...' : 'Ask a question...';
   $: trimmed = value.trim();
   $: canReload = typeof onReload === 'function';
   $: disableCeaInputs =
@@ -995,7 +996,7 @@
         <textarea
           id="composer-input"
           class="composer__input"
-          placeholder="Ask a question..."
+          placeholder={inputPlaceholder}
           bind:value
           bind:this={textareaEl}
           rows="1"

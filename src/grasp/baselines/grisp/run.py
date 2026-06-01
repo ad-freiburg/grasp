@@ -4,6 +4,7 @@ import os
 import random
 import sys
 import time
+from contextlib import contextmanager
 from logging import Logger
 from typing import Generator
 
@@ -26,12 +27,14 @@ from universal_ml_utils.ops import consume_generator, extract_field, map_generat
 
 from grasp.baselines.grisp.data import (
     ALT_LABELS,
+    OracleSkeletonUnavailable,
     OrderedAlternatives,
     Skeleton,
     count_alternatives,
     find_alternative_groups,
     get_selection_prompt_and_options,
     get_skeleton_prompt,
+    gold_sparql_to_nl_skeleton,
     ordered_alternatives_with_interleave,
 )
 from grasp.baselines.grisp.train import GRISPTrainConfig
@@ -161,6 +164,18 @@ def parse_args() -> argparse.Namespace:
         help="Field to extract input from",
     )
     file_parser.add_argument(
+        "--oracle-skeleton",
+        action="store_true",
+        help="Skip skeleton generation; derive the skeleton from each sample's "
+        "gold 'sparql' field. Used to isolate IRI-selection errors.",
+    )
+    file_parser.add_argument(
+        "--trace",
+        action="store_true",
+        help="Persist every intermediate event (selections, backtracks, fails, "
+        "validations) as a 'trace' list on each sample's output.",
+    )
+    file_parser.add_argument(
         "-o",
         "--output-file",
         type=str,
@@ -204,15 +219,32 @@ class GRISPRunConfig(BaseModel):
     skeleton_top_k: int = 3
 
     selection_max_time: float = 60.0
-    selection_top_k: int = 3
+    selection_top_k: int = 10
     constrain: bool = True
     backtrack: bool = True
     rerank: bool = True
     check_empty: bool = True
 
+    skeleton_disable_adapter: bool = False
+    selection_disable_adapter: bool = False
+
+
+class GRISPModel:
+    def __init__(self, model: PreTrainedModel | PeftModel, disable: bool):
+        self.model = model
+        self.disable = disable and isinstance(model, PeftModel)
+
+    @contextmanager
+    def get(self):
+        if self.disable:
+            with self.model.disable_adapter():  # type: ignore
+                yield self.model
+        else:
+            yield self.model
+
 
 def generate_skeletons(
-    model: PreTrainedModel | PeftModel,
+    model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
     cfg: GRISPRunConfig,
     question: str,
@@ -222,36 +254,37 @@ def generate_skeletons(
 ) -> list[Skeleton]:
     input = get_skeleton_prompt(manager.kg, question)
 
-    device = next(model.parameters()).device
-    enc = tokenizer.apply_chat_template(
-        input,
-        add_generation_prompt=True,
-        return_tensors="pt",
-        return_dict=True,
-        enable_thinking=False,
-    ).to(device)  # type: ignore
-    prompt_length = enc["input_ids"].shape[1]  # type: ignore
+    with model.get() as m:
+        device = next(m.parameters()).device
+        enc = tokenizer.apply_chat_template(
+            input,
+            add_generation_prompt=True,
+            return_tensors="pt",
+            return_dict=True,
+            enable_thinking=False,
+        ).to(device)  # type: ignore
+        prompt_length = enc["input_ids"].shape[1]  # type: ignore
 
-    fmt = tokenizer.decode(enc["input_ids"][0])  # type: ignore
-    logger.debug(f"Generating skeletons:\n{fmt}")
+        fmt = tokenizer.decode(enc["input_ids"][0])  # type: ignore
+        logger.debug(f"Generating skeletons:\n{fmt}")
 
-    outputs = model.generate(  # type: ignore
-        **enc,
-        generation_config=GenerationConfig(
-            num_beams=cfg.skeleton_n,
-            temperature=cfg.temperature,
-            top_p=cfg.top_p,
-            top_k=cfg.top_k,
-            min_p=cfg.min_p,
-            repetition_penalty=cfg.repeat_penalty,
-            do_sample=cfg.do_sample,
-            max_new_tokens=512,
-            renormalize_logits=True,
-            num_return_sequences=cfg.skeleton_n,
-            return_dict_in_generate=True,
-            output_scores=True,
-        ),
-    )
+        outputs = m.generate(  # type: ignore
+            **enc,
+            generation_config=GenerationConfig(
+                num_beams=cfg.skeleton_n,
+                temperature=cfg.temperature,
+                top_p=cfg.top_p,
+                top_k=cfg.top_k,
+                min_p=cfg.min_p,
+                repetition_penalty=cfg.repeat_penalty,
+                do_sample=cfg.do_sample,
+                max_new_tokens=512,
+                renormalize_logits=True,
+                num_return_sequences=cfg.skeleton_n,
+                return_dict_in_generate=True,
+                output_scores=True,
+            ),
+        )
 
     skeletons = []
     seen = set()
@@ -288,7 +321,7 @@ def generate_skeletons(
 
 
 def rerank_alternatives(
-    model: PreTrainedModel | PeftModel,
+    model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
     manager: KgManager,
     question: str,
@@ -318,24 +351,25 @@ def rerank_alternatives(
     logger.debug(f"Reranking alternatives:\n{fmt}")
     logger.debug(f"Last 10 input ids for reranking: {input_ids[-10:]}")  # type: ignore
 
-    device = next(model.parameters()).device
-    input_ids = torch.tensor(input_ids, dtype=torch.long, device=device)
-    option_ids = []
-    for option in options:
-        option_token_ids = tokenizer.encode(
-            option,
-            add_special_tokens=False,
-        )  # type: ignore
-        assert len(option_token_ids) == 1, "Option must be a single token"
-        logger.debug(f"Option '{option}' token id: {option_token_ids[0]}")
-        option_ids.append(option_token_ids[0])
+    with model.get() as m:
+        device = next(m.parameters()).device
+        input_ids = torch.tensor(input_ids, dtype=torch.long, device=device)
+        option_ids = []
+        for option in options:
+            option_token_ids = tokenizer.encode(
+                option,
+                add_special_tokens=False,
+            )  # type: ignore
+            assert len(option_token_ids) == 1, "Option must be a single token"
+            logger.debug(f"Option '{option}' token id: {option_token_ids[0]}")
+            option_ids.append(option_token_ids[0])
 
-    option_ids = torch.tensor(option_ids, dtype=torch.long, device=device)
+        option_ids = torch.tensor(option_ids, dtype=torch.long, device=device)
 
-    # shape [1, S, V]
-    with torch.inference_mode():
-        logits = model(input_ids.unsqueeze(0)).logits
-        logger.debug(f"Score logits shape: {logits.shape}")
+        # shape [1, S, V]
+        with torch.inference_mode():
+            logits = m(input_ids.unsqueeze(0)).logits
+            logger.debug(f"Score logits shape: {logits.shape}")
 
     # get last logits [V]
     logits = logits[0, -1]
@@ -373,7 +407,7 @@ def is_api_failure(exception: Exception) -> bool:
 
 def select_iris_left_to_right(
     skeleton: Skeleton,
-    model: PreTrainedModel | PeftModel,
+    model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
     cfg: GRISPRunConfig,
     question: str,
@@ -583,31 +617,37 @@ def select_iris_left_to_right(
 
 
 def generate(
-    model: PreTrainedModel | PeftModel,
+    model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
     cfg: GRISPRunConfig,
     question: str,
     manager: KgManager,
     parser: LR1Parser,
     logger: Logger,
-    select_model: PreTrainedModel | PeftModel | None = None,
+    select_model: GRISPModel | None = None,
     select_tokenizer: PreTrainedTokenizerBase | None = None,
     yield_output: bool = False,
+    gold_sparql: str | None = None,
 ) -> Generator[dict, None, dict]:
     sparql = None
     error = None
     start = time.monotonic()
 
     try:
-        skeletons = generate_skeletons(
-            model,
-            tokenizer,
-            cfg,
-            question,
-            manager,
-            parser,
-            logger,
-        )
+        if gold_sparql is not None:
+            logger.debug("Using oracle skeleton from gold SPARQL")
+            nl = gold_sparql_to_nl_skeleton(gold_sparql, manager)
+            skeletons = [Skeleton.parse(nl, parser)]
+        else:
+            skeletons = generate_skeletons(
+                model,
+                tokenizer,
+                cfg,
+                question,
+                manager,
+                parser,
+                logger,
+            )
 
         yield {
             "type": "skeletons",
@@ -638,6 +678,12 @@ def generate(
             if sparql is not None:
                 break
 
+    except OracleSkeletonUnavailable as e:
+        logger.warning(f"Skipping sample, oracle skeleton unavailable: {e}")
+        error = {
+            "reason": "oracle_skeleton_unavailable",
+            "content": str(e),
+        }
     except Exception as e:
         logger.error(f"Error generating SPARQL query: {e}")
         error = {
@@ -751,30 +797,38 @@ def main(args: argparse.Namespace) -> None:
         logger,
     )
 
-    skeleton_model, skeleton_tokenizer = model, tokenizer
-    selection_model, selection_tokenizer = None, None
+    skeleton_tokenizer = tokenizer
+    skeleton_model = GRISPModel(model, run_cfg.skeleton_disable_adapter)
 
     if train_cfg.type == "skeleton" and args.selection_run is None:
         logger.warning(
             "Main model is skeleton only, selection quality may be suboptimal"
         )
+        selection_model = GRISPModel(model, run_cfg.selection_disable_adapter)
+        selection_tokenizer = tokenizer
     elif train_cfg.type == "skeleton":
         logger.info(f"Loading selection model from {args.selection_run}")
-        selection_model, selection_tokenizer = load_model_and_tokenizer(
+        sel_model, selection_tokenizer = load_model_and_tokenizer(
             args.selection_run,
             args.device,
             args.dtype,
             logger,
         )
+        selection_model = GRISPModel(sel_model, run_cfg.selection_disable_adapter)
+    else:
+        # train_cfg.type == "both": main model handles both stages,
+        # but wrap independently so the selection adapter flag is respected
+        selection_model = GRISPModel(model, run_cfg.selection_disable_adapter)
+        selection_tokenizer = tokenizer
 
     logger.info(
-        f"Using model {skeleton_model.config.name_or_path} for skeleton generation"  # type: ignore
-        + (" and selection" if selection_model is None else "")
+        f"Using model {skeleton_model.model.config.name_or_path} for skeleton generation"  # type: ignore
+        f" (adapter disabled={skeleton_model.disable})"
     )
-    if selection_model is not None:
-        logger.info(
-            f"Using separate model {selection_model.config.name_or_path} for selection"  # type: ignore
-        )
+    logger.info(
+        f"Using model {selection_model.model.config.name_or_path} for selection"  # type: ignore
+        f" (adapter disabled={selection_model.disable})"
+    )
 
     manager = load_kg_manager(run_cfg.knowledge_graph)
     manager.load_models()
@@ -834,8 +888,19 @@ def main(args: argparse.Namespace) -> None:
             inputs = [{"question": ipt}]
             args.input_field = "question"  # overwrite
 
+    oracle_skeleton = run_on_file and args.oracle_skeleton
+    trace = run_on_file and args.trace
+
     for i, ipt in enumerate(inputs):
         id = extract_field(ipt, "id") or "unknown"
+
+        gold_sparql = None
+        if oracle_skeleton:
+            gold_sparql = extract_field(ipt, "sparql")
+            assert gold_sparql is not None, (
+                f"--oracle-skeleton requires a 'sparql' field on every sample, "
+                f"missing on input {i:,} (id={id})"
+            )
 
         ipt = extract_field(ipt, args.input_field)
         assert ipt is not None, f"Question not found for input {i:,}"
@@ -850,19 +915,28 @@ def main(args: argparse.Namespace) -> None:
             ):
                 continue
 
-        output = consume_generator(
-            generate(
-                skeleton_model,
-                skeleton_tokenizer,
-                run_cfg,
-                ipt,
-                manager,
-                parser,
-                logger,
-                selection_model,
-                selection_tokenizer,
-            )
+        gen = generate(
+            skeleton_model,
+            skeleton_tokenizer,
+            run_cfg,
+            ipt,
+            manager,
+            parser,
+            logger,
+            selection_model,
+            selection_tokenizer,
+            gold_sparql=gold_sparql,
         )
+        if trace:
+            events: list[dict] = []
+            try:
+                while True:
+                    events.append(next(gen))
+            except StopIteration as e:
+                output = e.value
+            output["output"]["trace"] = events
+        else:
+            output = consume_generator(gen)
 
         output["config"] = run_cfg.model_dump()
         output["id"] = id

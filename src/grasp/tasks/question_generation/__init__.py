@@ -72,7 +72,7 @@ def output(state: QuestionGenerationState) -> dict:
 
 
 class QuestionGenerationTask(GraspTask):
-    name = "question_generation"
+    name = "question-generation"
 
     def system_information(self) -> str:
         assert isinstance(self.config, NotesGenerateQuestionsConfig)
@@ -100,7 +100,7 @@ class QuestionGenerationTask(GraspTask):
         )
 
         if fn_name == "stop":
-            return "Stopping question generation."
+            return "Stopping"
 
         elif fn_name == "submit_question":
             return submit_question(

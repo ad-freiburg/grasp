@@ -2,7 +2,7 @@ import random
 from typing import Any
 
 from grasp.configs import GraspConfig
-from grasp.functions import validate_page, find_manager
+from grasp.functions import validate_page, validate_query, find_manager
 from grasp.manager import KgManager
 from grasp.examples import ExampleIndex, Sample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
@@ -27,7 +27,7 @@ class SparqlQaExampleIndex(ExampleIndex):
 
 
 def functions(config: GraspConfig) -> list[dict]:
-    example_kgs = [kg.kg for kg in config.knowledge_graphs if kg.example_index is not None]
+    example_kgs = [kg.kg for kg in config.knowledge_graphs if kg.examples is not None]
 
     if not example_kgs:
         return []
@@ -241,6 +241,7 @@ def search_example(
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
+    validate_query(query)
     validate_page(page, max_pages)
 
     if kg not in example_indices:

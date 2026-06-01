@@ -1,16 +1,14 @@
-import json
 import os
 import time
 from typing import Any, Type
 
+from pydantic import BaseModel
 from safetensors.numpy import save_file
 from search_rdf import Data, EmbeddingIndex
 from search_rdf.model import SentenceTransformerModel
-from universal_ml_utils.io import dump_jsonl, load_json, load_jsonl
+from universal_ml_utils.io import dump_json, dump_jsonl, load_json, load_jsonl
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import flatten
-
-from pydantic import BaseModel
 
 from grasp.configs import GraspConfig
 
@@ -133,8 +131,7 @@ class ExampleIndex:
 
         EmbeddingIndex.build(data, embedding_path, index_dir)
 
-        with open(os.path.join(output_dir, "info.json"), "w") as f:
-            json.dump({"description": description}, f)
+        dump_json({"description": description}, os.path.join(output_dir, "info.json"))
 
         end = time.monotonic()
         logger.info(f"Example index built in {end - start:.2f} seconds")
@@ -166,11 +163,11 @@ def load_example_indices(
 
     indices = {}
     for kg in config.knowledge_graphs:
-        if kg.example_index is None:
+        if kg.examples is None:
             continue
 
         assert model is not None, "Model must be provided to load example indices"
 
-        indices[kg.kg] = index_cls.load(kg.example_index, model)
+        indices[kg.kg] = index_cls.load(kg.examples, model)
 
     return indices

@@ -57,6 +57,11 @@ export const TASKS = Object.freeze([
     name: 'Cell Entity Annotation',
     tooltip:
       'Upload a CSV table to annotate each cell with corresponding knowledge graph entities.'
+  },
+  {
+    id: 'sparql-to-question',
+    name: 'SPARQL to Question',
+    tooltip: 'Convert a SPARQL query into a natural language question.'
   }
 ]);
 

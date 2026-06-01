@@ -541,7 +541,7 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         return "question"
 
     @classmethod
-    def sample_cls(cls) -> type[SparqlQaSample]:
+    def sample_cls(cls) -> type[SparqlQaSample] | None:
         return SparqlQaSample
 
     def feedback_system_message(

@@ -2,6 +2,19 @@
 
 ## News
 
+- April 22nd 2026:
+  - arXiv preprint of GRISP (Guided Recurrent IRI Selection over SPARQL Skeletons),
+    an alternative QA baseline included in this repository, available at
+    [arxiv.org/abs/2604.21133](https://arxiv.org/abs/2604.21133)
+
+- February 16th 2026:
+  - GRASP has been used to generate WDQL, a dataset of Wikidata query logs
+  - arXiv preprint of "The Wikidata Query Logs Dataset" available at
+    [arxiv.org/abs/2602.14594](https://arxiv.org/abs/2602.14594)
+  - WDQL has been accepted to [SIGIR 2026](https://sigir2026.org/)
+  - Dataset available at
+    [github.com/ad-freiburg/wikidata-query-logs](https://github.com/ad-freiburg/wikidata-query-logs)
+
 - October 20th 2025:
   - GRASP can now be used for entity linking, in particular for
 cell entity annotation
@@ -329,19 +342,20 @@ Using GRASP with your own knowledge graph requires two steps:
 - Getting the index data from a SPARQL endpoint for the knowledge graph
 - Building the indices
 
-You can do this manually (see below) or use `grasp auto-setup`, which automatically
+You can do this manually (see below) or use `grasp setup`, which automatically
 generates the necessary SPARQL queries and configuration by exploring the endpoint:
 
 ```bash
-# Auto-configure a KG by exploring its SPARQL endpoint (all phases):
-grasp auto-setup configs/run.yaml
+# Auto-configure a KG by exploring its SPARQL endpoint.
+# 'standard' runs info + all three index phases (entities, properties, literals).
+grasp setup wikidata standard configs/run.yaml
 
 # Run only specific phases:
-grasp auto-setup configs/run.yaml info
-grasp auto-setup configs/run.yaml indices
+grasp setup wikidata info configs/run.yaml
+grasp setup wikidata indices configs/run.yaml  # entities + properties + literals
 
 # Show all available options:
-grasp auto-setup -h
+grasp setup -h
 ```
 
 #### Get index data
@@ -425,18 +439,22 @@ You probably do not need to change any parameters here.
 With the CLI, you can use the `grasp index` command as follows:
 
 ```bash
-# The index type (entities, properties, or literals) is a required argument.
+# The index type (entities, properties, literals, or shapes) is a required argument.
 # The built index will be saved to $GRASP_INDEX_DIR/<kg_name>/<index>/<index_type>.
 # For example, to build the indices for IMDB:
 grasp index imdb entities
 grasp index imdb properties
 grasp index imdb literals
 
-# You can also change the type of index that is built via --index-type.
+# You can also change the type of index that is built via --index-type
+# (not applicable for shapes).
 # By default (auto), we build a fuzzy index for entities and an embedding
 # index for properties and literals.
 grasp index imdb entities --index-type <keyword|fuzzy|embedding>
 grasp index imdb properties --index-type <keyword|fuzzy|embedding>
+
+# For the shape index, a config file is required (see "Build a shape index" below):
+grasp index imdb shapes configs/run.yaml
 
 # Show all available options:
 grasp index -h
@@ -444,6 +462,28 @@ grasp index -h
 
 After this step is done, you can use the knowledge graph with GRASP by
 including it in your config file (see above).
+
+#### Build a shape index
+
+A **shape index** gives GRASP schema context about the knowledge graph's class
+structure — which properties a given class of entities tends to have, their
+datatypes, and cardinalities. GRASP uses this as LLM context for more accurate
+SPARQL generation via the `search_shape` and `get_shape` functions.
+
+```bash
+# Step 1: run the shapes-setup agent to configure the class-typing pattern
+# (e.g. wdt:P31 for Wikidata, rdf:type for RDF-style graphs):
+grasp setup my-kg shapes configs/run.yaml
+
+# Step 2: build the shape index (config required):
+grasp index my-kg shapes configs/run.yaml
+
+# Limit the number of classes to profile (default 500):
+grasp index my-kg shapes configs/run.yaml --max-classes 200
+```
+
+Shape profiling is enabled by default. Set `shapes: null` in a `knowledge_graphs`
+entry of your config to disable it.
 
 #### Customizing prefixes and info SPARQL queries
 
@@ -537,6 +577,10 @@ GRISP (Guided Recurrent IRI Selection over SPARQL Skeletons) is an alternative
 question-answering baseline included in this repository. It works by fine-tuning
 a small language model to generate SPARQL skeletons, then iteratively retrieving
 and re-ranking entities using the GRASP search indices.
+
+See the arXiv preprint at [arxiv.org/abs/2604.21133](https://arxiv.org/abs/2604.21133)
+for details. The exact version of the code used in the paper is tagged
+[`GRISP`](https://github.com/ad-freiburg/grasp/tree/GRISP) in this repository.
 
 Follow [these instructions](src/grasp/baselines/grisp/README.md) to train,
 run, and evaluate GRISP. To run the GRISP web app, follow

@@ -1,10 +1,17 @@
-/* global __API_BASE__ __COPYRIGHT__ */
+/* global __API_BASE__ __COPYRIGHT__ __MATERIAL_URL__ */
 
 /**
  * Copyright text, set at build time via the COPYRIGHT env var.
  * Defaults to 'University of Freiburg'.
  */
 export const COPYRIGHT = __COPYRIGHT__;
+
+/**
+ * URL for the "Material" footer link, set at build time via the
+ * MATERIAL_URL env var. Defaults to 'grisp' (resolved relative to the
+ * current page URL, so it works at any mount point).
+ */
+export const MATERIAL_URL = __MATERIAL_URL__;
 
 /**
  * API base URL, set at build time via the API_BASE env var.

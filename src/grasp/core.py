@@ -101,7 +101,7 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
-        models = manager.load_models(models)
+        models = manager.load_models(models, embedding_model=config.embedding_model)
         managers.append(manager)
 
     return managers, models

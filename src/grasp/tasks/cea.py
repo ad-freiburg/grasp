@@ -5,13 +5,12 @@ from pydantic import BaseModel
 from universal_ml_utils.table import generate_table
 
 from grasp.configs import GraspConfig
+from grasp.examples import Sample
 from grasp.functions import find_manager, parse_iri_or_literal
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
 from grasp.sparql.types import Alternative, ObjType
-from grasp.sparql.utils import parse_into_binding
 from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.examples import Sample
 from grasp.utils import FunctionCallException, format_list, format_notes
 
 
@@ -537,7 +536,7 @@ class CeaTask(GraspTask, FeedbackTask):
         return "table"
 
     @classmethod
-    def sample_cls(cls) -> type[CeaSample]:
+    def sample_cls(cls) -> type[CeaSample] | None:
         return CeaSample
 
     def feedback_system_message(

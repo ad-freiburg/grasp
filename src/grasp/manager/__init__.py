@@ -10,10 +10,11 @@ from search_rdf.model import (
     OpenClipModel,
     SentenceTransformerModel,
 )
+from universal_ml_utils.io import load_text
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
-from grasp.configs import KgConfig
+from grasp.configs import KgConfig, ShapeConfig
 from grasp.manager.normalizer import Normalizer, WikidataPropertyNormalizer
 from grasp.manager.utils import (
     EmbeddingModel,
@@ -31,6 +32,7 @@ from grasp.manager.utils import (
     merge_prefixes,
     try_load_search_index,
 )
+from grasp.shapes import Shapes, load_setup_description, load_shapes
 from grasp.sparql.types import (
     Alternative,
     AskResult,
@@ -101,16 +103,31 @@ class KgManager:
         self.params = params or {}
 
         self.embedding_models: dict[str, EmbeddingModel] = {}
+        self.shapes: Shapes | None = None
+        self.shape_config: ShapeConfig | None = None
 
     def load_models(
         self,
         models: dict[str, EmbeddingModel] | None = None,
+        embedding_model: str | None = None,
     ) -> dict[str, EmbeddingModel]:
         if models is None:
             models = {}
 
         for idx in self.indices.values():
             models = load_embedding_model(idx.index, models)
+
+        shapes_dir = os.path.join(get_index_dir(self.kg), "shapes")
+        if (
+            os.path.exists(shapes_dir)
+            and embedding_model is not None
+            and self.shape_config is not None
+        ):
+            key = f"sentence-transformer/{embedding_model}"
+            if key not in models:
+                models[key] = SentenceTransformerModel(embedding_model)
+
+            self.shapes = load_shapes(shapes_dir, models[key])  # type: ignore
 
         self.embedding_models = models
         return models
@@ -855,32 +872,20 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
         logger.info("Skipping loading of indices")
         return KgManager(cfg.kg, indices, **info.model_dump())
 
-    ent_index = try_load_index(
-        cfg.kg,
-        "entities",
-        cfg.entities_type,
-        logger,
-    )
-    if ent_index is not None:
-        indices["entities"] = ent_index
+    if cfg.entities is not None:
+        ent_index = try_load_index(cfg.kg, "entities", cfg.entities, logger)
+        if ent_index is not None:
+            indices["entities"] = ent_index
 
-    prop_index = try_load_index(
-        cfg.kg,
-        "properties",
-        cfg.properties_type,
-        logger,
-    )
-    if prop_index is not None:
-        indices["properties"] = prop_index
+    if cfg.properties is not None:
+        prop_index = try_load_index(cfg.kg, "properties", cfg.properties, logger)
+        if prop_index is not None:
+            indices["properties"] = prop_index
 
-    lit_index = try_load_index(
-        cfg.kg,
-        "literals",
-        cfg.literals_type,
-        logger,
-    )
-    if lit_index is not None:
-        indices["literals"] = lit_index
+    if cfg.literals is not None:
+        lit_index = try_load_index(cfg.kg, "literals", cfg.literals, logger)
+        if lit_index is not None:
+            indices["literals"] = lit_index
 
     others = load_other_indices(cfg.kg, cfg.indices)
     for name, index in others.items():
@@ -893,7 +898,33 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
 
         indices[name] = index
 
-    return KgManager(cfg.kg, indices, **info.model_dump())
+    manager = KgManager(cfg.kg, indices, **info.model_dump())
+    manager.shape_config = cfg.shapes
+    if cfg.shapes is not None:
+        shapes_dir = os.path.join(get_index_dir(cfg.kg), "shapes")
+        pattern_file = os.path.join(shapes_dir, "pattern.sparql")
+        if os.path.exists(pattern_file):
+            pattern = load_text(pattern_file)
+            manager.shapes = Shapes(
+                pattern=pattern,
+                description=load_setup_description(shapes_dir),
+            )
+    return manager
+
+
+def format_shapes_index(shapes: Shapes) -> str:
+    desc = shapes.description or "Class shape index."
+    coverage = ""
+    if shapes.index is not None:
+        indexed = shapes.index.indexed_classes
+        total = shapes.total_classes
+        if total is None:
+            coverage = f" ({indexed:,} class shapes indexed)"
+        elif indexed >= total:
+            coverage = f" (all {total:,} class shapes indexed)"
+        else:
+            coverage = f" (top {indexed:,} out of {total:,} class shapes indexed)"
+    return f'"shapes" index (type="embedding", modalities="text"): {desc}{coverage}'
 
 
 def format_kgs(
@@ -932,6 +963,8 @@ def format_kg(
         indices.append(
             f'"examples" index ({format_index_meta(example_index.index)}): {example_index.description}'
         )
+    if manager.shapes is not None:
+        indices.append(format_shapes_index(manager.shapes))
 
     if indices:
         msg += "\n  Search indices:\n" + format_list(indices, indent=4)

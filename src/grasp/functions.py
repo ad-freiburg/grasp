@@ -8,10 +8,11 @@ from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
 from universal_ml_utils.ops import partition_by
 
-from grasp.configs import GraspConfig
+from grasp.configs import GraspConfig, ShapeConfig
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
+from grasp.shapes import ShapeSample
 from grasp.sparql.item import parse_into_binding
 from grasp.sparql.types import (
     Alternative,
@@ -31,7 +32,7 @@ from grasp.sparql.utils import (
     parse_string,
     wrap_iri,
 )
-from grasp.utils import FunctionCallException, format_list
+from grasp.utils import FunctionCallException, format_enumerate, format_list
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -165,6 +166,85 @@ list(kg="wikidata", property="wdt:P19")""",
 
     if fn_set == "base":
         return fns
+
+    search_shape_kgs = [
+        m.kg for m in managers if m.shapes is not None and m.shapes.index is not None
+    ]
+    get_shape_kgs = [m.kg for m in managers if m.shapes is not None]
+
+    if search_shape_kgs:
+        fns.append(
+            {
+                "name": "search_shape",
+                "description": f"""\
+Search for pseudo-ShEx schema patterns for classes in the specified knowledge \
+graph that match a semantic query. Returns a compact view per class; \
+use get_shape for a more detailed view of a specific class.
+
+Use this to discover which classes exist in the KG and what their structure looks \
+like before writing SPARQL queries.
+
+Currently shapes are available for the following knowledge graphs:
+{format_list(f'"{kg}"' for kg in search_shape_kgs)}""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kg": {
+                            "type": "string",
+                            "enum": search_shape_kgs,
+                            "description": "The knowledge graph to search",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "The search query",
+                        },
+                        "page": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": search_max_pages,
+                            "description": "Page number for pagination",
+                        },
+                    },
+                    "required": ["kg", "query", "page"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+        )
+
+    if get_shape_kgs:
+        fns.append(
+            {
+                "name": "get_shape",
+                "description": f"""\
+Retrieve the pseudo-ShEx shape for a specific class IRI. Shapes are computed \
+approximately via sampling and may not be considered fully accurate.
+
+If the shape is not in the pre-built index, it will be computed on the fly \
+by running profiling queries against the endpoint. If on-the-fly computation \
+fails, use SPARQL queries to explore the class directly.
+
+Currently shapes are available for the following knowledge graphs:
+{format_list(f'"{kg}"' for kg in get_shape_kgs)}""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kg": {
+                            "type": "string",
+                            "enum": get_shape_kgs,
+                            "description": "The knowledge graph to look up the shape in",
+                        },
+                        "iri": {
+                            "type": "string",
+                            "description": "The class IRI",
+                        },
+                    },
+                    "required": ["kg", "iri"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+        )
 
     has_entity_index = "entities" in known_indices
     has_property_index = "properties" in known_indices
@@ -715,6 +795,14 @@ def call_function(
             max_pages=config.search_max_pages,
         )
 
+    elif fn_name in {"search_shape", "get_shape"}:
+        manager, _ = find_manager(managers, fn_args["kg"])
+        if manager.shapes is None:
+            return f"No shapes available for knowledge graph '{fn_args['kg']}'"
+        return call_shape_function(
+            fn_name, fn_args, manager.shapes, manager, config, known
+        )
+
     elif task is not None:
         return task.call_function(fn_name, fn_args, known, example_indices)
 
@@ -722,11 +810,148 @@ def call_function(
         raise ValueError(f"Unknown function {fn_name}")
 
 
+SHAPE_NOTE = (
+    "Note: Shapes are computed via sampling "
+    "and in doubt should not be considered fully accurate or complete, "
+    "especially on large knowledge graphs."
+)
+
+
+def format_shapes(shapes: list[ShapeSample], manager: KgManager) -> str:
+    from grasp.build.shapes import emit_pseudo_shex
+
+    shape_config = manager.shape_config or ShapeConfig()
+    result = format_enumerate(
+        emit_pseudo_shex(shape.profile, manager, shape_config, dense=True)
+        for shape in shapes
+    )
+    result += f"\n\n{SHAPE_NOTE}"
+    return result
+
+
+def update_known_from_shape_iris(
+    known: set[str],
+    iris: list[str],
+    manager: KgManager,
+) -> None:
+    update_known_from_iris(known, iris, manager.get_normalizer("entities"))
+    update_known_from_iris(known, iris, manager.get_normalizer("properties"))
+
+
+def call_shape_function(
+    fn_name: str,
+    fn_args: dict,
+    shapes: "Any",
+    manager: KgManager,
+    config: GraspConfig,
+    known: set[str] | None = None,
+) -> str:
+    if fn_name == "search_shape":
+        if shapes.index is None:
+            return "Shape search is unavailable: the existing index was cleared after the pattern was changed. Rebuild the index to re-enable shape search."
+        query = fn_args["query"]
+        validate_query(query)
+        page = fn_args.get("page") or 1
+        validate_page(page, config.search_max_pages)
+        k = config.num_shapes
+        start = (page - 1) * k
+        end = page * k
+        results = shapes.index.search(query, end)[start:end]
+        if not results:
+            return f"No shapes (page {page})"
+
+        from grasp.build.shapes import collect_iris
+        from grasp.configs import ShapeConfig
+
+        shape_config = manager.shape_config or ShapeConfig()
+        if known is not None:
+            for sample in results:
+                update_known_from_shape_iris(
+                    known,
+                    collect_iris(sample.profile, manager, shape_config, dense=True),
+                    manager,
+                )
+        return f"Shapes (page {page}):\n" + format_shapes(results, manager)
+
+    elif fn_name == "get_shape":
+        iri_arg = fn_args["iri"]
+        binding = parse_iri_or_literal(
+            iri_arg,
+            manager.iri_literal_parser,
+            manager.prefixes,
+        )
+        expanded_iri = (
+            binding.identifier()
+            if binding is not None and binding.typ == "uri"
+            else iri_arg
+        )
+        sample = (
+            shapes.index.get_by_iri(expanded_iri) or shapes.index.get_by_iri(iri_arg)
+            if shapes.index is not None
+            else None
+        )
+        if sample is not None:
+            from grasp.build.shapes import collect_iris, emit_pseudo_shex
+            from grasp.configs import ShapeConfig
+
+            shape_config = manager.shape_config or ShapeConfig()
+            if known is not None:
+                update_known_from_shape_iris(
+                    known,
+                    collect_iris(sample.profile, manager, shape_config),
+                    manager,
+                )
+            return (
+                emit_pseudo_shex(sample.profile, manager, shape_config)
+                + "\n\n"
+                + SHAPE_NOTE
+            )
+
+        if shapes.pattern is None:
+            return (
+                f"No shape found for '{iri_arg}'. "
+                "It is not in the index and no pattern is available "
+                "for on-the-fly computation."
+            )
+
+        from grasp.build.shapes import collect_iris, compute_shape, emit_pseudo_shex
+        from grasp.configs import ShapeConfig
+
+        shape_config = manager.shape_config or ShapeConfig()
+        try:
+            profile = compute_shape(
+                expanded_iri,
+                shapes.pattern,
+                manager,
+                shape_config,
+            )
+            if known is not None:
+                update_known_from_shape_iris(
+                    known,
+                    collect_iris(profile, manager, shape_config),
+                    manager,
+                )
+            result = emit_pseudo_shex(profile, manager, shape_config)
+            return result + "\n\n" + SHAPE_NOTE
+        except Exception as e:
+            return (
+                f"Shape for '{iri_arg}' is not in the index and failed "
+                f"to compute on the fly:\n{e}"
+            )
+
+    raise FunctionCallException(f"Unknown shape function '{fn_name}'")
+
+
 def validate_page(page: int, max_pages: int | None = None) -> None:
     if page < 1:
         raise FunctionCallException("Page number must be at least 1")
     elif max_pages is not None and page > max_pages:
         raise FunctionCallException(f"Page number must be at most {max_pages}")
+
+
+def validate_query(query: str) -> None:
+    if not query.strip():
+        raise FunctionCallException("Query must not be empty")
 
 
 def search_entity(
@@ -740,6 +965,7 @@ def search_entity(
     max_pages: int = 10,
     **search_kwargs: Any,
 ) -> str:
+    validate_query(query)
     validate_page(page, max_pages)
     manager, _ = find_manager(managers, kg)
 
@@ -770,6 +996,7 @@ def search_property(
     max_pages: int = 10,
     **search_kwargs: Any,
 ) -> str:
+    validate_query(query)
     validate_page(page, max_pages)
     manager, _ = find_manager(managers, kg)
 
@@ -800,6 +1027,7 @@ def search_literal(
     max_pages: int = 10,
     **search_kwargs: Any,
 ) -> str:
+    validate_query(query)
     validate_page(page, max_pages)
     manager, _ = find_manager(managers, kg)
 
@@ -1254,6 +1482,7 @@ def search_with_constraints(
     max_pages: int = 10,
     **search_kwargs: Any,
 ) -> str:
+    validate_query(query)
     validate_page(page, max_pages)
     manager, _ = find_manager(managers, kg)
 
@@ -1374,6 +1603,7 @@ def search_with_filter(
     max_pages: int = 10,
     **search_kwargs: Any,
 ) -> str:
+    validate_query(query)
     validate_page(page, max_pages)
     manager, others = find_manager(managers, kg)
 

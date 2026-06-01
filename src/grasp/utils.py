@@ -1,12 +1,67 @@
 import json
 import os
 from importlib import resources
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, Iterator, TypeVar
+from urllib.parse import unquote_plus
 
 from pydantic import BaseModel
 from termcolor import colored
 
 from grasp.model import Message, Response, ToolCall
+
+
+# IRI label derivation (also used by grasp.build.data and grasp.build.shapes)
+
+_IRI_PUNCTUATION = {"_", "-", "."}
+
+
+def split_iri(iri: str) -> tuple[str, str]:
+    if "://" not in iri:
+        return "", iri
+    last = max(iri.rfind("#"), iri.rfind("/"))
+    return ("", iri) if last == -1 else (iri[:last], iri[last + 1 :])
+
+
+def split_at_punctuation(s: str) -> Iterator[str]:
+    start = 0
+    for i, c in enumerate(s):
+        if c not in _IRI_PUNCTUATION:
+            continue
+        yield s[start:i]
+        start = i + 1
+    if start < len(s):
+        yield s[start:]
+
+
+def camel_case_split(s: str) -> str:
+    words, last = [], 0
+    for i, c in enumerate(s):
+        if c.isupper() and i > 0 and s[i - 1].islower():
+            words.append(s[last:i])
+            last = i
+    if last < len(s):
+        words.append(s[last:])
+    return " ".join(words)
+
+
+def get_local_name_from_iri(iri: str, prefixes: dict[str, str]) -> str:
+    from grasp.sparql.utils import find_longest_prefix
+
+    pfx = find_longest_prefix(iri, prefixes)
+    if pfx is None:
+        _, obj_name = split_iri(iri)
+    else:
+        _, long = pfx
+        obj_name = iri[len(long) :]
+
+    return unquote_plus(obj_name)
+
+
+def derive_label_from_iri(iri: str, prefixes: dict[str, str]) -> str:
+    obj_name = get_local_name_from_iri(iri, prefixes)
+    return " ".join(
+        camel_case_split(part) for part in split_at_punctuation(obj_name)
+    ).strip()
 
 
 def get_index_dir(kg: str | None = None) -> str:

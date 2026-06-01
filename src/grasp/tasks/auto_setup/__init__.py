@@ -35,11 +35,20 @@ from grasp.tasks.base import GraspTask
 from grasp.tasks.functions import find_frequent, find_frequent_function_definition
 from grasp.utils import FunctionCallException, format_prefixes, get_index_dir
 
-# maps index name to (index_sparql, info_sparql) reference defaults
-REFERENCE_SPARQLS = {
-    "entities": (load_entity_index_sparql(), load_entity_info_sparql()),
-    "properties": (load_property_index_sparql(), load_property_info_sparql()),
-    "literals": (load_literal_index_sparql(), load_literal_info_sparql()),
+# maps index name to index sparql and info sparql reference defaults
+REFERENCE_SETUP = {
+    "entities": {
+        "index": load_entity_index_sparql(),
+        "info": load_entity_info_sparql(),
+    },
+    "properties": {
+        "index": load_property_index_sparql(),
+        "info": load_property_info_sparql(),
+    },
+    "literals": {
+        "index": load_literal_index_sparql(),
+        "info": load_literal_info_sparql(),
+    },
 }
 
 
@@ -140,7 +149,7 @@ class AutoSetupTask(GraspTask):
 
     def _index_system_information(self, manager: KgManager) -> str:
         name = self.input["name"]
-        index_sparql, info_sparql = REFERENCE_SPARQLS[name]
+        reference = REFERENCE_SETUP[name]
 
         return f"""\
 You are a knowledge graph setup assistant. Your task is to explore \
@@ -197,10 +206,10 @@ no {name} index setup is available yet. It is generic and thus \
 may not be optimal for the knowledge graph at hand.
 
 Reference {name} index SPARQL:
-{format_query(manager, index_sparql)}
+{format_query(manager, reference["index"])}
 
 Reference {name} info SPARQL:
-{format_query(manager, info_sparql)}
+{format_query(manager, reference["info"])}
 
 Reference {name} index description:
 {DEFAULT_DESCRIPTIONS[name]}"""

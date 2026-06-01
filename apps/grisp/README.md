@@ -58,6 +58,7 @@ npm run preview
 |---|---|---|
 | `API_BASE` | `/api` | API base URL. Relative paths are resolved against the current page URL at runtime. Set to an absolute URL (e.g. `http://localhost:6790`) to talk directly to a GRISP server. |
 | `COPYRIGHT` | `University of Freiburg` | Copyright holder text displayed in the footer. |
+| `MATERIAL_URL` | `grisp` | URL of the "Material" footer link. Relative paths are resolved against the current page URL. |
 
 ## Docker
 
