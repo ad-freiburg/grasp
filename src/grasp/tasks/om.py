@@ -52,8 +52,8 @@ class Correspondence(BaseModel):
     A singe correspondence between two entities
     from different ontologies.
     """
-    entity1: Entity
-    entity2: Entity
+    entity_source: Entity
+    entity_target: Entity
 
     # OAEI standard
     measure: float = 1.0
@@ -80,8 +80,8 @@ class AlignmentState:
         # self.proccessed: set[str] = set()
 
     def add_1_to_1_correspondence(self, correspondence: Correspondence):
-        self.correspondences[correspondence.entity1.identifier] = correspondence
-        self.correspondences[correspondence.entity2.identifier] = correspondence
+        self.correspondences[correspondence.entity_source.identifier] = correspondence
+        self.correspondences[correspondence.entity_target.identifier] = correspondence
 
     def get_correspondence(self, entity: str) -> Correspondence | None:
         """
@@ -91,9 +91,9 @@ class AlignmentState:
         """
         return self.correspondences.get(entity)
 
-    def remove_correspondence(self, entity1: str, entity2: str):
-        self.correspondences.pop(entity1)
-        self.correspondences.pop(entity2)
+    def remove_correspondence(self, entity_source: str, entity_target: str):
+        self.correspondences.pop(entity_source)
+        self.correspondences.pop(entity_target)
 
     def to_dict(self) -> dict:
         unique_correspondences = {id(c): c for c in self.correspondences.values()}
@@ -112,7 +112,7 @@ class AlignmentState:
             unique_correspondences = random.sample(unique_correspondences, num)
 
         data = [
-            [c.entity1.identifier, c.entity2.identifier, str(c.relation.value)]
+            [c.entity_source.identifier, c.entity_target.identifier, str(c.relation.value)]
             for c in unique_correspondences
         ]
         headers = [["Source Entity (Ontology 1)", "Target Entity (Ontology 2)", "Relation"]]
@@ -164,11 +164,11 @@ Use this to lock in your alignment decisions.""",
                 "properties": {
                     "source_entity": {
                         "type": "string",
-                        "description": "The IRI of the source entity whose correspondence should be removed",
+                        "description": "The full IRI of the source entity whose correspondence should be removed",
                     },
                     "target_entity": {
                         "type": "string",
-                        "description": "The IRI of the target entity whose correspondence should be removed",
+                        "description": "The full IRI of the target entity whose correspondence should be removed",
                     },
                 },
                 "required": ["source_entity", "target_entity"],
@@ -211,7 +211,7 @@ within the target ontology. Follow this step-by-step approach:
 1. Analyze the source ontology to understand its core domain \
 and conceptual scope. Consider how these concepts might be represented or labeled \
 differently in the target ontology.
-2. Identify equivalent classes in the target ontology. Start \
+2. Identify equivalent classes and properties in the target ontology. Start \
 with high-level, foundational concepts or obvious matches to anchor the alignment. \
 Leverage the provided search and exploration functions to validate semantic and \
 structural similarities. Refine your mappings as you gain deeper insights into \
@@ -227,7 +227,7 @@ def rules() -> list[str]:
         "Each entity from the source graph must map to exactly one entity in the target graph."
         "Every new correspondence will be automatically validated by the system. If a collision"
         "occurs (an entity is already mapped), the system will present the conflicting mappings to"
-        "yout. You must then review both the previous and the new match to determine which is "
+        "you. You must then review both the previous and the new match to determine which is "
         "conceptually superior and resolve the conflict.",
         "If you cannot find a suitable reference entity in the target graph, "
         "leave the source entity unmatched.",
@@ -238,7 +238,8 @@ def rules() -> list[str]:
         "multiple entities",
         "Before writing custom SPARQL queries, prioritize using the built-in search_entity and list functions to explore the target ontology quickly."
         "Perform a final comprehensive review of all established correspondences before concluding the task.",
-        "You must explicitly evaluate EVERY SINGLE entity provided in the source list. Do not stop until you" "have attempted to match all of them. If an entity truly has no match, explain briefly why,"
+        "You must explicitly evaluate EVERY SINGLE entity provided in the source list. Do not stop until you "
+        "have attempted to match all of them. If an entity truly has no match, explain briefly why,"
         "but do not simply skip it."
     ]
 
@@ -271,17 +272,17 @@ def add_1_to_1_correspondence(
             if existing_source_corr is not None:
                 return (
                     f"Collision Error: The source entity {entity_source} is already mapped to"
-                    f"{existing_source_corr.entity2.entity}. If you want to change this mapping, "
+                    f"{existing_source_corr.entity_target.entity}. If you want to change this mapping, "
                     "you must set 'overwrite' to True."
                     )
             if existing_target_corr is not None:
                 return (
                     f"Collision Error: The target entity {entity_target} is already mapped to"
-                    f"{existing_target_corr.entity1.entity}. If you want to change this mapping, "
+                    f"{existing_target_corr.entity_source.entity}. If you want to change this mapping, "
                     "you must set 'overwrite' to True."
                     )
 
-        correspondence = Correspondence(entity1=entity_object_source, entity2=entity_object_target)
+        correspondence = Correspondence(entity_source=entity_object_source, entity_target=entity_object_target)
         state.add_1_to_1_correspondence(correspondence)
         return f"Aligned {entity_source} from {kg_source} with {entity_target} from {kg_target}"
 
