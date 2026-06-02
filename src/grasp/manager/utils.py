@@ -18,6 +18,7 @@ from universal_ml_utils.io import load_json, load_text
 
 from grasp.configs import KgInfo
 from grasp.manager.normalizer import Normalizer
+from grasp.search_params import SearchParams, load_search_params
 from grasp.sparql.types import ObjType
 from grasp.sparql.utils import find_longest_prefix
 from grasp.utils import get_index_dir
@@ -33,6 +34,7 @@ class KgIndex:
     data: Data
     info_sparql: str | None = None
     normalizer: Normalizer | None = None
+    search_params: SearchParams | None = None
 
 
 def load_data(index_dir: str) -> Data:
@@ -210,7 +212,14 @@ def load_other_indices(
             continue
 
         info_sparql = load_info_sparql(sub_index_dir, logger)
-        others[name] = KgIndex(desc, index, index.data(), info_sparql)
+        search_params = None
+        if isinstance(index, EmbeddingIndex):
+            search_params = load_search_params(
+                os.path.join(sub_index_dir, "embedding")
+            )
+        others[name] = KgIndex(
+            desc, index, index.data(), info_sparql, search_params=search_params
+        )
 
     return others
 

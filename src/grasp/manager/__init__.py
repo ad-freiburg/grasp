@@ -32,6 +32,7 @@ from grasp.manager.utils import (
     merge_prefixes,
     try_load_search_index,
 )
+from grasp.search_params import EmbeddingSearchParams, load_search_params
 from grasp.shapes import Shapes, load_setup_description, load_shapes
 from grasp.sparql.types import (
     Alternative,
@@ -505,7 +506,7 @@ class KgManager:
             matched_label=matched_via,
         )
 
-    def _embed_query(
+    def embed_query(
         self,
         index: EmbeddingIndex,
         query: str,
@@ -549,10 +550,10 @@ class KgManager:
         k: int = 10,
         identifier_map: dict[str, list[str]] | None = None,
         query_type: str = "text",
-        **search_kwargs: Any,
     ) -> list[Alternative]:
-        index = self.get_index(index_name)
-        data = self.get_data(index_name)
+        kg_index = self.get(index_name)
+        index = kg_index.index
+        data = kg_index.data
         normalizer = self.get_normalizer(index_name)
 
         field_map = {}
@@ -568,15 +569,14 @@ class KgManager:
         else:
             kwargs = {}
             if index.index_type == "embedding":
-                kwargs["min_score"] = search_kwargs.get("min_score")
                 assert isinstance(index, EmbeddingIndex)
-                embedding = self._embed_query(index, query, query_type)
+                embedding = self.embed_query(index, query, query_type)
                 kwargs["embedding"] = embedding
-                # always perform exact search and a bit of re-ranking
-                # to improve quality
-                kwargs["exact"] = True
-                # factor of oversampling for re-ranking
-                kwargs["rerank"] = 2.0
+                params = kg_index.search_params or EmbeddingSearchParams()
+                assert isinstance(params, EmbeddingSearchParams)
+                kwargs["min_score"] = params.min_score
+                kwargs["exact"] = params.exact
+                kwargs["rerank"] = params.rerank
             else:
                 kwargs["query"] = query
 
@@ -849,6 +849,10 @@ def try_load_index(
     else:
         normalizer = None
 
+    search_params = None
+    if isinstance(index, EmbeddingIndex):
+        search_params = load_search_params(os.path.join(index_dir, "embedding"))
+
     return KgIndex(
         description=description
         or DEFAULT_DESCRIPTIONS.get(index_name, "No description available"),
@@ -856,6 +860,7 @@ def try_load_index(
         data=index.data(),
         info_sparql=info_sparql,
         normalizer=normalizer,
+        search_params=search_params,
     )
 
 

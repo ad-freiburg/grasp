@@ -9,7 +9,7 @@ model_kwargs:
     summary: env(REASONING_SUMMARY:null)
 
 max_completion_tokens: env(MAX_TOKENS:16384)
-tool_choice: env(TOOL_CHOICE:auto)
+tool_choice: env(TOOL_CHOICE:required)
 
 task_kwargs:
   cea:

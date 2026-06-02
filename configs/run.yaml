@@ -7,7 +7,7 @@ model_kwargs:
     effort: env(REASONING_EFFORT:null)
     summary: env(REASONING_SUMMARY:null)
 
-tool_choice: env(TOOL_CHOICE:auto)
+tool_choice: env(TOOL_CHOICE:required)
 
 seed: env(SEED:22)
 

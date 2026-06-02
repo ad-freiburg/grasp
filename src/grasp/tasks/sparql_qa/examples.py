@@ -1,8 +1,15 @@
+import math
 import random
 from typing import Any
 
 from grasp.configs import GraspConfig
-from grasp.functions import validate_page, validate_query, find_manager
+from grasp.functions import (
+    find_manager,
+    format_page_suffix,
+    paginate_results,
+    validate_page,
+    validate_query,
+)
 from grasp.manager import KgManager
 from grasp.examples import ExampleIndex, Sample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
@@ -164,7 +171,9 @@ def format_examples(
     known: set[str],
     max_rows: int,
     max_cols: int,
-    page: int = 1,
+    page: int,
+    total_pages: int,
+    more: bool,
     start_index: int = 0,
 ) -> str:
     manager, _ = find_manager(managers, kg)
@@ -185,10 +194,11 @@ def format_examples(
             + format_sparql_result(manager, result, selections)
         )
 
+    suffix = format_page_suffix(page, total_pages, more)
     if not exs:
-        return f"No examples found (page {page})"
+        return f"No examples found ({suffix})"
 
-    return f"Examples (page {page}):\n" + "\n\n".join(exs)
+    return f"Examples ({suffix}):\n" + "\n\n".join(exs)
 
 
 def get_random_examples(
@@ -209,6 +219,9 @@ def get_random_examples(
         return f"No example index for knowledge graph {kg}"
 
     example_index = example_indices[kg]
+    visible_count = min(len(example_index), num_examples * max_pages)
+    more = len(example_index) > visible_count
+    total_pages = max(1, math.ceil(visible_count / num_examples))
     start = (page - 1) * num_examples
     end = page * num_examples
 
@@ -225,6 +238,8 @@ def get_random_examples(
         max_rows,
         max_cols,
         page,
+        total_pages,
+        more,
         start,
     )
 
@@ -248,9 +263,11 @@ def search_example(
         return f"No example index for knowledge graph {kg}"
 
     example_index = example_indices[kg]
+    all_examples = list(example_index.search(query, num_examples * max_pages + 1))
+    examples, total_pages, more = paginate_results(
+        all_examples, num_examples, page, max_pages
+    )
     start = (page - 1) * num_examples
-    end = page * num_examples
-    examples = example_index.search(query, end)[start:end]
 
     return format_examples(
         kg,
@@ -260,6 +277,8 @@ def search_example(
         max_rows,
         max_cols,
         page,
+        total_pages,
+        more,
         start,
     )
 

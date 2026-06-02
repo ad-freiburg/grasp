@@ -45,14 +45,14 @@ generation process."""
 def rules() -> list[str]:
     return [
         "Always execute your final SPARQL query before giving an answer to \
-make sure it returns the expected results.",
+make sure it returns the expected results. Check whether the SPARQL \
+query and its result are plausible using your world knowledge, if you are \
+familiar with the domain. If the results look incorrect or incomplete, \
+go back and refine your SPARQL query.",
         "The SPARQL query should always return the actual \
 identifiers / IRIs of the items in its result. It additionally may return \
 labels or other human-readable information, but they are optional and should be \
 put within optional clauses unless explicitly requested by the user.",
-        "Do not stop early if there are still obvious improvements to be made \
-to the SPARQL query. For example, keep refining your SPARQL query if its result \
-contains irrelevant items or is missing items you expected.",
         "Do not perform additional computation (e.g. filtering, sorting, calculations) \
 on the result of the SPARQL query to determine the answer. All computation should \
 be done solely within SPARQL.",

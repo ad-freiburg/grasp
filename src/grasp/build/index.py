@@ -8,6 +8,7 @@ from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import flatten
 
 from grasp.manager.utils import get_auto_index_type, load_data
+from grasp.search_params import build_embedding_search_params, write_search_params
 from grasp.utils import get_index_dir
 
 
@@ -55,7 +56,7 @@ def build_index(
         )
         embedding_path = os.path.join(index_dir, "embedding.safetensors")
 
-        generate_embeddings(
+        embeddings = generate_embeddings(
             data,
             embedding_path,
             model_name=embedding_model,
@@ -65,6 +66,16 @@ def build_index(
         )
 
         EmbeddingIndex.build(data, embedding_path, index_dir)
+
+        params = build_embedding_search_params(embeddings)
+        write_search_params(params, index_dir)
+        if params.calibration is None:
+            logger.info(
+                f"Index too small to calibrate min_score; "
+                f"using default {params.min_score:.3f}"
+            )
+        else:
+            logger.info(f"Calibrated min_score={params.min_score:.3f}")
 
     else:
         raise ValueError(f"Unknown index type: {index_type}")
@@ -80,7 +91,7 @@ def generate_embeddings(
     device: str | None = None,
     batch_size: int = 256,
     dim: int | None = None,
-) -> None:
+):
     model = SentenceTransformerModel(model_name, device)
 
     texts = list(flatten(fields for _, fields in data))
@@ -91,3 +102,4 @@ def generate_embeddings(
         filename=embedding_path,
         metadata={"model": model_name},
     )
+    return embedding

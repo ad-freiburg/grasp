@@ -11,6 +11,12 @@ from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import flatten
 
 from grasp.configs import GraspConfig
+from grasp.search_params import (
+    EmbeddingSearchParams,
+    build_embedding_search_params,
+    load_search_params,
+    write_search_params,
+)
 
 
 class Sample(BaseModel):
@@ -33,12 +39,14 @@ class ExampleIndex:
         model: SentenceTransformerModel,
         samples: list[Sample],
         description: str | None = None,
+        search_params: EmbeddingSearchParams | None = None,
     ) -> None:
         self.model = model
         self.data = data
         self.index = index
         self.samples = samples
         self.description = description
+        self.search_params = search_params or EmbeddingSearchParams()
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -53,8 +61,15 @@ class ExampleIndex:
         **kwargs: Any,
     ) -> list:
         embedding = self.model.embed([question])[0]
-        matches = self.index.search(embedding, k, **kwargs)
-        return [self.samples[id] for id, *_ in matches]
+        p = self.search_params
+        merged = {
+            "min_score": p.min_score,
+            "exact": p.exact,
+            "rerank": p.rerank,
+            **kwargs,
+        }
+        matches = self.index.search(embedding, k, **merged)
+        return [self.samples[id] for id, _, _ in matches]
 
     @classmethod
     def load(cls, dir: str, model: SentenceTransformerModel) -> "ExampleIndex":
@@ -78,7 +93,10 @@ class ExampleIndex:
         if os.path.exists(info_path):
             description = load_json(info_path).get("description")
 
-        return ExampleIndex(data, index, model, samples, description)
+        search_params = load_search_params(index_dir)
+        assert search_params is None or isinstance(search_params, EmbeddingSearchParams)
+
+        return ExampleIndex(data, index, model, samples, description, search_params)
 
     @classmethod
     def build(
@@ -132,6 +150,16 @@ class ExampleIndex:
         EmbeddingIndex.build(data, embedding_path, index_dir)
 
         dump_json({"description": description}, os.path.join(output_dir, "info.json"))
+
+        params = build_embedding_search_params(embedding)
+        write_search_params(params, index_dir)
+        if params.calibration is None:
+            logger.info(
+                f"Index too small to calibrate min_score; "
+                f"using default {params.min_score:.3f}"
+            )
+        else:
+            logger.info(f"Calibrated min_score={params.min_score:.3f}")
 
         end = time.monotonic()
         logger.info(f"Example index built in {end - start:.2f} seconds")

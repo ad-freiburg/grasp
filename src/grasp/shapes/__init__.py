@@ -17,6 +17,13 @@ from universal_ml_utils.io import (
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import flatten
 
+from grasp.search_params import (
+    EmbeddingSearchParams,
+    build_embedding_search_params,
+    load_search_params,
+    write_search_params,
+)
+
 
 class TargetClass(BaseModel):
     type: Literal["class"] = "class"
@@ -82,6 +89,7 @@ class ShapeIndex:
         model: SentenceTransformerModel,
         samples: list[ShapeSample],
         total_classes: int | None = None,
+        search_params: EmbeddingSearchParams | None = None,
     ) -> None:
         self.data = data
         self.index = index
@@ -89,15 +97,19 @@ class ShapeIndex:
         self.samples = samples
         self.total_classes = total_classes
         self.indexed_classes = len(samples)
-        self._iri_map: dict[str, ShapeSample] = {s.iri: s for s in samples}
+        self.search_params = search_params or EmbeddingSearchParams()
+        self.iri_map: dict[str, ShapeSample] = {s.iri: s for s in samples}
 
     def search(self, query: str, k: int = 10) -> list[ShapeSample]:
         embedding = self.model.embed([query])[0]
-        matches = self.index.search(embedding, k)
-        return [self.samples[id] for id, *_ in matches]
+        p = self.search_params
+        matches = self.index.search(
+            embedding, k, min_score=p.min_score, exact=p.exact, rerank=p.rerank
+        )
+        return [self.samples[id] for id, _, _ in matches]
 
     def get_by_iri(self, iri: str) -> ShapeSample | None:
-        return self._iri_map.get(iri)
+        return self.iri_map.get(iri)
 
     @classmethod
     def load(cls, dir: str, model: SentenceTransformerModel) -> "ShapeIndex":
@@ -121,7 +133,17 @@ class ShapeIndex:
         if os.path.exists(info_path):
             total_classes = load_json(info_path).get("total_classes")
 
-        return cls(data, index, model, samples, total_classes=total_classes)
+        search_params = load_search_params(index_dir)
+        assert search_params is None or isinstance(search_params, EmbeddingSearchParams)
+
+        return cls(
+            data,
+            index,
+            model,
+            samples,
+            total_classes=total_classes,
+            search_params=search_params,
+        )
 
     @classmethod
     def build(
@@ -176,6 +198,16 @@ class ShapeIndex:
         if total_classes is not None:
             info["total_classes"] = total_classes
         dump_json(info, os.path.join(output_dir, "info.json"))
+
+        params = build_embedding_search_params(embedding)
+        write_search_params(params, index_dir)
+        if params.calibration is None:
+            logger.info(
+                f"Index too small to calibrate min_score; "
+                f"using default {params.min_score:.3f}"
+            )
+        else:
+            logger.info(f"Calibrated min_score={params.min_score:.3f}")
 
         end = time.monotonic()
         logger.info(f"Shape index built in {end - start:.2f} seconds")

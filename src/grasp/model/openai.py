@@ -18,6 +18,48 @@ from grasp.model.base import (
 )
 
 
+def coerce_nullable_strings(value: Any, spec: dict) -> Any:
+    # vLLM models without strict mode sometimes emit the string "None"/"null"
+    # instead of JSON null for nullable string parameters; coerce them back
+    # based on the declared schema, recursing into nested objects and arrays
+    typ = spec.get("type")
+
+    if (
+        isinstance(typ, list)
+        and "string" in typ
+        and "null" in typ
+        and isinstance(value, str)
+        and value.lower() in ("none", "null")
+    ):
+        return None
+
+    if isinstance(value, dict) and (
+        typ == "object" or (isinstance(typ, list) and "object" in typ)
+    ):
+        props = spec.get("properties", {})
+        return {
+            k: coerce_nullable_strings(v, props[k]) if k in props else v
+            for k, v in value.items()
+        }
+
+    if isinstance(value, list) and (
+        typ == "array" or (isinstance(typ, list) and "array" in typ)
+    ):
+        items_spec = spec.get("items")
+        if isinstance(items_spec, dict):
+            return [coerce_nullable_strings(v, items_spec) for v in value]
+
+    return value
+
+
+def coerce_tool_call_args(args: dict, fn_schema: dict) -> dict:
+    props = fn_schema.get("parameters", {}).get("properties", {})
+    return {
+        k: coerce_nullable_strings(v, props[k]) if k in props else v
+        for k, v in args.items()
+    }
+
+
 class OpenAICompletionsModel(Model):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__(config)
@@ -106,12 +148,16 @@ class OpenAICompletionsModel(Model):
 
         message = strip_none(choice.message.content)
         reasoning = None
-        if hasattr(choice.message, "reasoning_content"):
+        reasoning_content = getattr(
+            choice.message, "reasoning_content", None
+        ) or getattr(choice.message, "reasoning", None)
+        if reasoning_content is not None:
             reasoning = Reasoning(
                 id=uuid4().hex,
-                content=strip_none(choice.message.reasoning_content),  # type: ignore
+                content=strip_none(reasoning_content),
             )
 
+        fn_schemas = {fn["name"]: fn for fn in fns}
         tool_calls = []
         for tool_call in choice.message.tool_calls or []:
             if tool_call.type != "function":
@@ -119,11 +165,16 @@ class OpenAICompletionsModel(Model):
 
             assert tool_call.function.name is not None
 
+            args = json.loads(tool_call.function.arguments)
+            schema = fn_schemas.get(tool_call.function.name)
+            if schema is not None:
+                args = coerce_tool_call_args(args, schema)
+
             tool_calls.append(
                 ToolCall(
                     id=tool_call.id,
                     name=tool_call.function.name,
-                    args=json.loads(tool_call.function.arguments),
+                    args=args,
                 )
             )
 
@@ -308,11 +359,16 @@ class OpenAIResponsesModel(Model):
 
             elif output.type == "function_call":
                 # tool call
+                args = json.loads(output.arguments)
+                schema = next((fn for fn in fns if fn["name"] == output.name), None)
+                if schema is not None:
+                    args = coerce_tool_call_args(args, schema)
+
                 tool_calls.append(
                     ToolCall(
                         id=output.call_id,
                         name=output.name,
-                        args=json.loads(output.arguments),
+                        args=args,
                     )
                 )
 

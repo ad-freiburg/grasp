@@ -852,13 +852,16 @@ def call_shape_function(
         query = fn_args["query"]
         validate_query(query)
         page = fn_args.get("page") or 1
-        validate_page(page, config.search_max_pages)
+        max_pages = config.search_max_pages
+        validate_page(page, max_pages)
         k = config.num_shapes
-        start = (page - 1) * k
-        end = page * k
-        results = shapes.index.search(query, end)[start:end]
+        all_results = shapes.index.search(query, k * max_pages + 1)
+        results, total_pages, more = paginate_results(
+            list(all_results), k, page, max_pages
+        )
+        suffix = format_page_suffix(page, total_pages, more)
         if not results:
-            return f"No shapes (page {page})"
+            return f"No shapes ({suffix})"
 
         from grasp.build.shapes import collect_iris
         from grasp.configs import ShapeConfig
@@ -871,7 +874,7 @@ def call_shape_function(
                     collect_iris(sample.profile, manager, shape_config, dense=True),
                     manager,
                 )
-        return f"Shapes (page {page}):\n" + format_shapes(results, manager)
+        return f"Shapes ({suffix}):\n" + format_shapes(results, manager)
 
     elif fn_name == "get_shape":
         iri_arg = fn_args["iri"]
@@ -963,7 +966,6 @@ def search_entity(
     query_type: str = "text",
     page: int = 1,
     max_pages: int = 10,
-    **search_kwargs: Any,
 ) -> str:
     validate_query(query)
     validate_page(page, max_pages)
@@ -972,17 +974,16 @@ def search_entity(
     alts = manager.search_index(
         "entities",
         query=query,
-        k=k * page,
+        k=k * max_pages + 1,
         query_type=query_type,
-        **search_kwargs,
     )
-    alts = alts[(page - 1) * k : page * k]
+    alts, total_pages, more = paginate_results(alts, k, page, max_pages)
 
     # update known items
     normalizer = manager.get_normalizer("entities")
     update_known_from_alts(known, alts, normalizer)
 
-    return format_index_alternatives(alts, k, page)
+    return format_index_alternatives(alts, k, page, total_pages, more)
 
 
 def search_property(
@@ -994,7 +995,6 @@ def search_property(
     query_type: str = "text",
     page: int = 1,
     max_pages: int = 10,
-    **search_kwargs: Any,
 ) -> str:
     validate_query(query)
     validate_page(page, max_pages)
@@ -1003,17 +1003,16 @@ def search_property(
     alts = manager.search_index(
         "properties",
         query=query,
-        k=k * page,
+        k=k * max_pages + 1,
         query_type=query_type,
-        **search_kwargs,
     )
-    alts = alts[(page - 1) * k : page * k]
+    alts, total_pages, more = paginate_results(alts, k, page, max_pages)
 
     # update known items
     normalizer = manager.get_normalizer("properties")
     update_known_from_alts(known, alts, normalizer)
 
-    return format_index_alternatives(alts, k, page)
+    return format_index_alternatives(alts, k, page, total_pages, more)
 
 
 def search_literal(
@@ -1025,7 +1024,6 @@ def search_literal(
     query_type: str = "text",
     page: int = 1,
     max_pages: int = 10,
-    **search_kwargs: Any,
 ) -> str:
     validate_query(query)
     validate_page(page, max_pages)
@@ -1034,18 +1032,17 @@ def search_literal(
     alts = manager.search_index(
         "literals",
         query=query,
-        k=k * page,
+        k=k * max_pages + 1,
         query_type=query_type,
-        **search_kwargs,
     )
-    alts = alts[(page - 1) * k : page * k]
+    alts, total_pages, more = paginate_results(alts, k, page, max_pages)
 
     # update known items so the LLM can paste these quoted literals
     # straight into a SPARQL filter
     normalizer = manager.get_normalizer("literals")
     update_known_from_alts(known, alts, normalizer)
 
-    return format_index_alternatives(alts, k, page)
+    return format_index_alternatives(alts, k, page, total_pages, more)
 
 
 COMMON_PREFIXES = get_common_sparql_prefixes()
@@ -1353,6 +1350,7 @@ SELECT ?s ?p ?o WHERE {{
 
     assert isinstance(result, SelectResult)
     result.truncate(MAX_RESULTS)
+    more = not result.complete
 
     # functions to get scores for properties and entities
     prop_index = manager.try_get("properties")
@@ -1441,6 +1439,7 @@ SELECT ?s ?p ?o WHERE {{
     result.data = [result.data[i] for _, i in permutation]
 
     # apply pagination
+    total_pages = max(1, math.ceil(len(result.data) / k))
     start = (page - 1) * k
     end = page * k
     result.data = result.data[start:end]
@@ -1460,10 +1459,11 @@ SELECT ?s ?p ?o WHERE {{
         clip_literals=not unclipped,
         table_only=True,
     )
+    suffix = format_page_suffix(page, total_pages, more)
     if not table:
-        return f"No triples (page {page})"
+        return f"No triples ({suffix})"
 
-    return f"Triples (page {page}):\n{table}"
+    return f"Triples ({suffix}):\n{table}"
 
 
 def search_with_constraints(
@@ -1480,7 +1480,6 @@ def search_with_constraints(
     read_timeout: float | None = None,
     page: int = 1,
     max_pages: int = 10,
-    **search_kwargs: Any,
 ) -> str:
     validate_query(query)
     validate_page(page, max_pages)
@@ -1557,34 +1556,54 @@ search index due to:
     alternatives = manager.search_index(
         index,
         query,
-        k * page,
+        k * max_pages + 1,
         identifier_map,
         query_type=query_type,
-        **search_kwargs,
     )
-    alternatives = alternatives[(page - 1) * k : page * k]
+    alternatives, total_pages, more = paginate_results(alternatives, k, page, max_pages)
 
     # update known items
     normalizer = manager.get_normalizer(index)
     update_known_from_alts(known, alternatives, normalizer)
 
-    return info + format_index_alternatives(alternatives, k, page)
+    return info + format_index_alternatives(alternatives, k, page, total_pages, more)
+
+
+def format_page_suffix(page: int, total_pages: int, more: bool) -> str:
+    return f"page {page} of {total_pages}{'+' if more else ''}"
+
+
+def paginate_results(
+    items: list,
+    k: int,
+    page: int,
+    max_pages: int,
+) -> tuple[list, int, bool]:
+    more = len(items) > k * max_pages
+    if more:
+        items = items[: k * max_pages]
+    total_pages = max(1, math.ceil(len(items) / k))
+    page_items = items[(page - 1) * k : page * k]
+    return page_items, total_pages, more
 
 
 def format_index_alternatives(
     alternatives: list[Alternative],
     k: int,
-    page: int = 1,
+    page: int,
+    total_pages: int,
+    more: bool = False,
 ) -> str:
+    suffix = format_page_suffix(page, total_pages, more)
     if not alternatives:
-        return f"No results (page {page})"
+        return f"No results ({suffix})"
 
     start_index = (page - 1) * k
     lines = "\n".join(
         f"{start_index + i + 1}. {alt.get_selection_string()}"
         for i, alt in enumerate(alternatives)
     )
-    return f"Results (page {page}):\n{lines}"
+    return f"Results ({suffix}):\n{lines}"
 
 
 def search_with_filter(
@@ -1601,7 +1620,6 @@ def search_with_filter(
     read_timeout: float | None = None,
     page: int = 1,
     max_pages: int = 10,
-    **search_kwargs: Any,
 ) -> str:
     validate_query(query)
     validate_page(page, max_pages)
@@ -1637,15 +1655,14 @@ search index due to:
     alternatives = manager.search_index(
         index,
         query,
-        k=k * page,
+        k=k * max_pages + 1,
         identifier_map=identifier_map,
         query_type=query_type,
-        **search_kwargs,
     )
-    alternatives = alternatives[(page - 1) * k : page * k]
+    alternatives, total_pages, more = paginate_results(alternatives, k, page, max_pages)
 
     # update known items
     normalizer = manager.get_normalizer(index)
     update_known_from_alts(known, alternatives, normalizer)
 
-    return info + format_index_alternatives(alternatives, k, page)
+    return info + format_index_alternatives(alternatives, k, page, total_pages, more)

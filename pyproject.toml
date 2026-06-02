@@ -27,6 +27,7 @@ dependencies = [
   "grammar-utils>=0.1.6",
   "search-rdf>=0.5.2",
   "pillow>=11.0.0",
+  "ijson>=3.0.0",
   # server
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",

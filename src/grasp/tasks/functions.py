@@ -1,6 +1,10 @@
+import math
+
 from grasp.functions import (
+    MAX_RESULTS,
     find_manager,
     format_iri_or_literal_error,
+    format_page_suffix,
     parse_iri_or_literal,
     update_known_from_rows,
 )
@@ -109,8 +113,8 @@ def find_frequent(
 SELECT {target_var} ?freq WHERE {{
     {{ SELECT {target_var} (COUNT({target_var}) AS ?freq) {{ {triple_pattern} . }} GROUP BY {target_var} }}
 }}
-ORDER BY DESC(?freq) {target_var} 
-LIMIT {page * k}"""
+ORDER BY DESC(?freq) {target_var}
+LIMIT {MAX_RESULTS + 1}"""
 
     try:
         result = manager.execute_sparql(sparql, request_timeout, read_timeout)
@@ -118,15 +122,19 @@ LIMIT {page * k}"""
         raise FunctionCallException(f"Failed to list common {position} values:\n{e}")
 
     assert isinstance(result, SelectResult)
+    result.truncate(MAX_RESULTS)
+    more = not result.complete
 
     # apply pagination
+    total_pages = max(1, math.ceil(len(result.data) / k))
     start = (page - 1) * k
     end = page * k
     result.data = result.data[start:end]
 
     plural = "properties" if position == "property" else f"{position}s"
+    suffix = format_page_suffix(page, total_pages, more)
     if len(result) == 0:
-        return f"No {plural} (page {page})"
+        return f"No {plural} ({suffix})"
 
     # update known
     update_known_from_rows(
@@ -159,6 +167,6 @@ LIMIT {page * k}"""
 
         items.append(f"{formatted} - {int(freq):,} occurrences")
 
-    return f"Most frequent {plural} (page {page}):\n" + format_enumerate(
+    return f"Most frequent {plural} ({suffix}):\n" + format_enumerate(
         items, start=(page - 1) * k
     )
