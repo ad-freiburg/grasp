@@ -1794,7 +1794,7 @@ def paginate_results(
     if more:
         items = items[: k * max_pages]
     total_pages = max(1, math.ceil(len(items) / k))
-    page_items = items[(page - 1) * k : page * k]
+    page_items = items[(page - 1) * k: page * k]
     return page_items, total_pages, more
 
 
@@ -1983,17 +1983,17 @@ def verify(
 
 
 def analyze_image(image_url: str, prompt: str, config: GraspConfig) -> str:
+    vision_config = config.get_vision_model
     print(f"[DEBUG] vision query: {prompt}")
-    print(f"[DEBUG] model: {config.vision_model}")
-    vision_config = config.get_vision_config
+    print(f"[DEBUG] vision model: {vision_config.model}")
     model = OpenAICompletionsModel(vision_config)
 
-    system_prompt = """You analyze images for a knowledge-graph based question answering system. \
-                    1. Only describe what is DIRECTLY and UNAMBIGUOUSLY visible in the image (e.g., clothing, facial features, setting, objects, text in frame). \
-                    2. DO NOT use your training knowledge to add context, background information, dates, roles, or facts about recognized entities. \
-                    3. If you recognize a person, name or label, report ONLY the name — do not add any biographical, historical, or factual information that is not visible in the image. \
-                    4. If a visual question cannot be answered from the image alone, explicitly state: 'I cannot determine the answer from the image. \
-                    5. Never infer, extrapolate, or supplement visual observations with world knowledge. """
+    system_prompt = (
+        "Answer with only the final answer. "
+        "No reasoning. No explanation. No extra words. "
+        "Use only what is directly visible in the image. "
+        "If uncertain, reply exactly: I cannot determine the answer from the image."
+    )
 
     messages = [
         Message.system(content=system_prompt),

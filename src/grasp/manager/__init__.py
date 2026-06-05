@@ -12,8 +12,8 @@ from search_rdf.model import (
     HuggingFaceImageModel,
     OpenClipModel,
     SentenceTransformerModel,
+    ClapCapModel,
 )
-from search_rdf.model.embedding import ClapCapModel
 from universal_ml_utils.io import load_text
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table

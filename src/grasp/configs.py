@@ -1,6 +1,13 @@
 from typing import Any, Literal
+from enum import Enum
 
 from pydantic import BaseModel, Field, conlist, model_validator
+
+
+class Modality(str, Enum):
+    TEXT = "text"
+    VISION = "vision"
+    AUDIO = "audio"
 
 
 class KgInfo(BaseModel):
@@ -92,7 +99,7 @@ class ModelConfig(BaseModel):
     seed: int | None = None
 
     # model parameters
-    model: str = "gemma-4-31b-llmlb"
+    model: str
     model_provider: Literal[
         "openai/completions",
         "openai/responses",
@@ -120,7 +127,12 @@ class JudgeConfig(ModelConfig):
     knowledge_graph: KgConfig | None = None
 
 
-class GraspConfig(ModelConfig):
+class LLMConfig(ModelConfig):
+    name: str
+    modality: list[Modality]
+
+
+class GraspConfig(BaseModel):
     # function set, notes, and knowledge graphs
     fn_set: Literal[
         "base",
@@ -132,15 +144,17 @@ class GraspConfig(ModelConfig):
     ] = "search_filter"
     notes_file: str | None = None
 
+    seed: int | None = None
+
     knowledge_graphs: list[KgConfig] = [KgConfig(kg="wikidata")]
+
+    models: list[LLMConfig] = []
+    default_model: str = "grasp"
 
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
     clap_model: str = "clapcap"
-    vision_model: str = "qwen3.5-9b-llmlb"
-
-    vision_model_config: ModelConfig | None = None
 
     # optional task specific parameters
     # map[task_name, map[param_name, param_value]]
@@ -190,23 +204,12 @@ class GraspConfig(ModelConfig):
         return self.sparql_connection_timeout, self.sparql_query_timeout
 
     @property
-    def get_vision_config(self) -> ModelConfig:
-        """Returns a ModelConfig for a Vision Model used for `analyze_image()`"""
-        if self.vision_model_config is not None:
-            return self.vision_model_config
-        else:
-            return ModelConfig(
-                model=self.vision_model,
-                model_provider=self.model_provider,
-                model_endpoint=self.model_endpoint,
-                model_api_key=self.model_api_key,
-                model_timeout=self.model_timeout,
-                model_kwargs={},
-                parallel_tool_calls=False,
-                tool_choice="auto",
-                max_completion_tokens=512,
-                num_retries=self.num_retries,
-            )
+    def get_default_model(self) -> LLMConfig:
+        return [m for m in self.models if m.name == "grasp"][0]
+
+    @property
+    def get_vision_model(self) -> LLMConfig:
+        return [m for m in self.models if "vision" in m.modality][0]
 
 
 class SpeechToTextConfig(BaseModel):

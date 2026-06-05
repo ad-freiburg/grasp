@@ -10,7 +10,7 @@ from openai import APIConnectionError
 from universal_ml_utils.io import load_json
 from universal_ml_utils.logging import get_logger
 
-from grasp.configs import GraspConfig
+from grasp.configs import GraspConfig, LLMConfig
 from grasp.examples import ExampleIndex
 from grasp.functions import call_function, kg_functions
 from grasp.manager import KgManager, format_kgs, load_kg_manager
@@ -103,8 +103,9 @@ def system_instructions(
     return "\n\n".join(blocks)
 
 
-def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel]]:
+def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel], dict[str, LLMConfig]]:
     models: dict[str, EmbeddingModel] = {}
+    llms: dict = {model.name: get_model(model) for model in config.models}
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
@@ -115,7 +116,7 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
             )
         managers.append(manager)
 
-    return managers, models
+    return managers, models, llms
 
 
 def load_notes(config: GraspConfig) -> tuple[list[str], dict[str, list[str]]]:
@@ -156,7 +157,6 @@ def generate(
         logger.debug(f"Disabling examples for {task_name} task")
     if task_name == "general-qa":
         config = deepcopy(config)
-        config.tool_choice = "auto"
         logger.debug("Setting tool choice to auto for general-qa task")
 
     task = get_task(task_name, managers, config, past_known)
@@ -188,7 +188,7 @@ def generate(
 
     yield {"type": "input", "input": text_input}
 
-    model = custom_model or get_model(config)
+    model = custom_model or get_model(config.get_default_model)
 
     feedback_notes = notes
     feedback_kg_notes = kg_notes
@@ -232,8 +232,8 @@ def generate(
 
     start = time.monotonic()
 
-    # add user input
-    if image_url:
+    # add user input if main model supports vision
+    if image_url and "vision" in config.get_default_model.modality:
         messages.append(
             Message(
                 role="user",

@@ -148,7 +148,7 @@ class OpenAICompletionsModel(Model):
     ) -> Response:
         if config is None:
             config = self.config
-        
+
         kwargs = config.model_kwargs
         kwargs.pop("reasoning", None)
 
