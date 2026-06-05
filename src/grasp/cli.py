@@ -791,7 +791,7 @@ def run_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, models = setup(config)
+    managers, models, llms = setup(config)
 
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
     if examples_model is not None:
@@ -883,11 +883,11 @@ def run_grasp(args: argparse.Namespace) -> None:
             else:
                 image_url = image_file_to_base64(args.image_input)
         if getattr(args, "audio_input", None):
-            if not os.path.exists(args.audio_path):
+            if not os.path.exists(args.audio_input):
                 raise FileNotFoundError(f"Audio input not found: {args.audio_input}")
             if not hasattr(managers[0], "clap_model") or managers[0].clap_model is None:
                 raise ValueError("No Clap Model found")
-            audio_caption = "Audio caption: " + ",".join(managers[0].clap_model.generate_captions([args.audio_input]))
+            audio_caption = " AUDIO_CAPTION: " + ",".join(managers[0].clap_model.generate_captions([args.audio_input]))
 
         if args.input_format == "json":
             obj = json.loads(ipt)
@@ -895,10 +895,11 @@ def run_grasp(args: argparse.Namespace) -> None:
                 obj["image_url"] = image_url
             inputs = [obj]
         else:
+            if isinstance(ipt, str) and isinstance(audio_caption, str):
+                ipt += audio_caption
             inputs = [{
                 "input": ipt,
                 "image_url": image_url,
-                # "audio_caption": audio_caption,
             }]
             input_field = None  # overwrite
 
@@ -1100,7 +1101,7 @@ def setup_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _ = setup(config)
+    managers, _, _ = setup(config)
     if not managers:
         logger.error("No KG managers available for setup")
         return
@@ -1215,7 +1216,7 @@ def shapes_setup_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SHAPES SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _ = setup(config)
+    managers, _, _ = setup(config)
     if not managers:
         logger.error("No KG managers available")
         return
@@ -1287,7 +1288,7 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SHAPES BUILD", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _ = setup(config)
+    managers, _, _ = setup(config)
     if not managers:
         logger.error("No KG managers available")
         return
