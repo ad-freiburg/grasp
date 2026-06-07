@@ -979,15 +979,6 @@ def call_function(
             fn_args["entity_image_url"]
         ))
 
-    elif fn_name == "load_entity_image":
-        return load_entity_image(
-            managers,
-            fn_args["kg"],
-            fn_args["entity"],
-            config.sparql_request_timeout,
-            config.sparql_read_timeout,
-        )
-
     elif fn_name == "analyze_image":
         assert image_url is not None, ("No input Image found")
         return analyze_image(
@@ -1877,58 +1868,6 @@ search index due to:
     update_known_from_alts(known, alternatives, normalizer)
 
     return info + format_index_alternatives(alternatives, k, page, total_pages, more)
-
-
-def load_entity_image(
-    managers: list[KgManager],
-    kg: str,
-    entity: str,
-    request_timeout: float | tuple[float, float] | None = None,
-    read_timeout: float | None = None,
-) -> str:
-    manager, _ = find_manager(managers, kg)
-
-    verified_entity = parse_iri_or_literal(
-        entity,
-        manager.iri_literal_parser,
-        manager.prefixes,
-    )
-    if verified_entity is None or verified_entity.typ != "uri":
-        raise FunctionCallException(
-            format_iri_or_literal_error(entity, Position.SUBJECT)
-        )
-
-    query = f"""\
-SELECT ?image WHERE {{
-    {verified_entity.sparql()} <http://www.wikidata.org/prop/direct/P18> ?image .
-}}
-LIMIT 1"""
-
-    try:
-        result = manager.execute_sparql(query, request_timeout, read_timeout)
-    except Exception as e:
-        raise FunctionCallException(
-            f"Failed to query image for {entity}:\n{e}"
-        ) from e
-
-    assert isinstance(result, SelectResult)
-
-    rows = list(result.rows())
-    if not rows:
-        return f"No image found for entity {entity} in {kg}."
-
-    image_binding = rows[0].get("image")
-    if image_binding is None:
-        return f"No image found for entity {entity} in {kg}."
-
-    image_url = image_binding.identifier()
-
-    try:
-        return image_url_to_base64(image_url)
-    except Exception as e:
-        raise FunctionCallException(
-            f"Unexpected error loading image for entity {entity}:\n{e}"
-        ) from e
 
 
 class Modality(str, Enum):

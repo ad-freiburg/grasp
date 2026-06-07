@@ -12,8 +12,8 @@ from search_rdf.model import (
     HuggingFaceImageModel,
     OpenClipModel,
     SentenceTransformerModel,
+    ClapCapModel
 )
-from search_rdf.model.embedding import ClapCapModel
 from universal_ml_utils.configuration import load_config
 from universal_ml_utils.io import load_json, load_text
 
@@ -383,7 +383,7 @@ def find_obj_type_from_prefixes(
 def load_image_from_url(url: str) -> np.ndarray:
     try:
         if url.startswith("file://"):
-            path = url[len("file://") :]
+            path = url[len("file://"):]
             image = Image.open(path).convert("RGB")
         else:
             response = requests.get(url, headers={"User-Agent": "grasp-rdf"})
