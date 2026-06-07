@@ -371,7 +371,7 @@ class OpenAIResponsesModel(Model):
     ) -> Response:
         if config is None:
             config = self.config
-        
+
         # remove reasoning
         kwargs = config.model_kwargs
         kwargs.pop("reasoning", None)
