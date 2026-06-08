@@ -1,5 +1,6 @@
 import math
 import time
+import os
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Iterable
@@ -41,8 +42,10 @@ from grasp.sparql.utils import (
 from grasp.utils import (
     FunctionCallException,
     format_enumerate, format_list,
+    image_file_to_base64,
     image_url_to_base64,
     audio_url_to_base64,
+    audio_base64_to_file,
     convert_base64_to_np_array
 )
 from search_rdf.model.embedding import (
@@ -179,151 +182,145 @@ list(kg="wikidata", property="wdt:P19")""",
             "strict": True,
         }, {
             "name": "load",
-            "description": """\
-Load external content and return it in a format suitable for visual or \
-auditory analysis. Supported modalities are:
-
-- "image_url": Download an image from a public URL and return it as a \
-base64-encoded data URL. Use this for any visual question that cannot be \
-answered from structured KG data alone, e.g. appearances, styles, \
-color schemes, or visual comparisons.
-- "base64": Normalize an already-encoded base64 string or data URL into \
-a standardized image data URL.
-- "audio_url": Download audio from a public URL and return it for \
-auditory analysis.
-
-Only use this function when visual or auditory information is strictly \
-necessary to answer the question — loading images fills context quickly.
-
-Examples:
-
-To load the image of Angela Merkel from a Wikidata image URL, first \
-retrieve the image URL via a SPARQL query or list call, then do:
-load(input="https://upload.wikimedia.org/...", modality="image_url")
-
-To load an audio file:
-load(input="https://example.com/audio.mp3", modality="audio_url")""",
+            "description": (
+                "Load and normalize multimodal input for downstream analysis. "
+                "Supported modalities are image and audio. "
+                "Supported datatypes are url, base64, and file. "
+                "Use this tool when visual or acoustic inspection of the original media "
+                "is required. The function returns a normalized payload suitable for analyze()."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "input": {
                         "type": "string",
                         "description": (
-                            "The URL or encoded data to load. "
-                            "For modality 'image_url', provide a public HTTP(S) image URL. "
-                            "For modality 'base64', provide a raw base64 string or data URL. "
-                            "For modality 'audio_url', provide a public HTTP(S) audio URL."
+                            "The raw media input. "
+                            "For datatype 'url', provide a public HTTP(S) URL. "
+                            "For datatype 'base64', provide a base64 string or data URL. "
+                            "For datatype 'file', provide a local file path."
                         ),
                     },
                     "modality": {
                         "type": "string",
-                        "enum": [m.value for m in Modality],
+                        "enum": ["image", "audio"],
                         "description": (
-                            "The type of content to load. "
-                            "Use 'image_url' for images from the web (most common). "
-                            "Use 'base64' for already-encoded image data. "
-                            "Use 'audio_url' for audio files from the web."
+                            "The modality of the input. "
+                            "Use 'image' for visual media and 'audio' for acoustic media."
+                        ),
+                    },
+                    "datatype": {
+                        "type": "string",
+                        "enum": ["url", "base64", "file"],
+                        "description": (
+                            "The storage or transport format of the provided input. "
+                            "Use 'url' for remote resources, 'base64' for encoded media, "
+                            "and 'file' for local file paths."
                         ),
                     },
                 },
-                "required": ["input", "modality"],
+                "required": ["input", "modality", "datatype"],
                 "additionalProperties": False,
             },
             "strict": True,
         }, {
-            "name": "verify_entity_image",
-            "description": """\
-Verify whether an input image matches a given entity image by computing \
-their CLIP embedding cosine similarity.
-
-Use this function after identifying a candidate entity via searchEntity() \
-if the Query contained an Image and you guessed the entity from the Image.
-
-Returns the cosine similarity score (float between 0 and 1) if the images \
-are sufficiently similar, or 0.0 if the similarity is below the threshold \
-(i.e. the images likely depict different subjects).
-
-The Parameter entity_image_url can be either a base64 Image URL starting \
-with "data:..." or a weblink to an image like "https://...".
-
-A score of 0.0 means the entity candidate should be discarded — try the \
-next candidate from searchEntity() or fall back to textual reasoning.
-A score > 0 means the input image is consistent with the entity.
-
-Examples:
-
-To verify that the uploaded image matches the Wikidata image of the Mona Lisa:
-verify_entity_image(
-    entity_image_url="https://upload.wikimedia.org/wikipedia/commons/..."
-)
-
-
-To retrieve the entity image URL, use a SPARQL query for P18 (image) \
-on the candidate entity before calling this function.""",
+            "name": "analyze",
+            "description": (
+                "Analyze multimodal input. Supported modalities are image and audio. "
+                "For images, provide a prompt describing what visual information should be extracted. "
+                "For audio, the function can generate an acoustic description or answer an audio-related prompt. "
+                "This function routes internally to the correct helper function depending on modality."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "input": {
+                        "type": "string",
+                        "description": (
+                            "The media input to analyze. "
+                            "This can be a normalized data URL from load(), a public URL, "
+                            "a raw base64 string, or a local file path depending on input_type."
+                        ),
+                    },
+                    "modality": {
+                        "type": "string",
+                        "enum": ["image", "audio"],
+                        "description": (
+                            "The modality to analyze. "
+                            "Use 'image' for visual analysis and 'audio' for acoustic analysis."
+                        ),
+                    },
+                    "input_type": {
+                        "type": "string",
+                        "enum": ["url", "base64", "file"],
+                        "description": (
+                            "Describes the format of 'input'. "
+                            "Use 'url' for public remote files, 'base64' for raw encoded content, "
+                            "and 'file' for local file paths."
+                        ),
+                    },
                     "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph the candidate entity belongs to",
-                    },
-                    "entity_image_url": {
-                        "type": "string",
+                        "type": ["string", "null"],
+                        "enum": [*kgs, None],
                         "description": (
-                            "The reference image of the candidate entity. "
-                            "Typically retrieved via a SPARQL query"
-                            "Can be a public HTTP(S) URL or a base64-encoded data URL. "
+                            "Optional knowledge graph identifier. "
+                            "Required for audio analysis if a manager must be resolved via KG. "
+                            "Use null when no KG lookup is needed."
+                        ),
+                    },
+                    "prompt": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "Task instruction for the analysis. "
+                            "For images, this should usually be a concrete visual question. "
+                            "For audio, this may be a question or null if a generic caption/description is enough."
                         ),
                     },
                 },
-                "required": ["kg", "entity_image_url"],
+                "required": ["input", "modality", "input_type", "kg", "prompt"],
                 "additionalProperties": False,
             },
             "strict": True,
         }, {
-            "name": "analyze_image",
-            "description": """Funtion used for visually analyzing images, should be used with the image_url from \
-the input, if one is provided for better visual interpretation and qa.""",
+            "name": "analyze_user_input",
+            "description": (
+                "Analyze multimodal user input that the model cannot access directly. "
+                "Use this function when the user has provided non-text media and the answer depends on that media. "
+                "The model must infer whether the input is more likely an image or audio source based on the request context. "
+                "If the first modality guess fails, retry with the other modality: if audio fails, use image; if image fails, use audio. "
+                "Do not use this function when text or structured data is sufficient."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {
+                    "modality": {
                         "type": "string",
+                        "enum": ["image", "audio"],
                         "description": (
-                            "Question about visual details of the image"
-                        )
+                            "The modality to analyze. "
+                            "Use 'image' for visual analysis and 'audio' for acoustic analysis."
+                        ),
                     },
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-
-            },
-            "strict": True,
-        }, {
-            "name": "analyze_audio",
-            "description": """Funtion used for accoustically analyzing audio files, should be used with the audio url from \
-the KG, which must be found via SPAQL Queries prior to use.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
+                    "prompt": {
+                        "type": ["string", "null"],
+                        "description": (
+                            "Task instruction for the analysis. "
+                            "For images, this should usually be a concrete visual question. "
+                            "For audio, this may be a question or null if a generic caption/description is enough."
+                        ),
+                    },
                     "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph the candidate entity belongs to",
-                    },
-                    "audio_url": {
-                        "type": "string",
+                        "type": ["string", "null"],
+                        "enum": [*kgs, None],
                         "description": (
-                            "The reference audio of the candidate entity. "
-                            "Typically retrieved via a SPARQL query"
-                            "Can be a public HTTP(S) URL or a base64-encoded data URL. "
+                            "Optional knowledge graph identifier. "
+                            "Required for audio analysis if a manager must be resolved via KG. "
+                            "Use null when no KG lookup is needed."
                         ),
-                    }
+                    },
                 },
-                "required": ["audio_url", "kg"],
+                "required": ["modality", "prompt", "kg"],
                 "additionalProperties": False,
-
             },
             "strict": True,
         }
@@ -964,38 +961,48 @@ def call_function(
         return json.dumps(load(
             fn_args["input"],
             fn_args["modality"],
+            fn_args["datatype"],
         ))
 
-    elif fn_name == "verify_entity_image":
-        manager, _ = find_manager(managers, fn_args["kg"])
-        print("[DEBUG]", image_url[:100] if image_url else "no image")
-        print(type(image_url))
-        assert manager.clip_model is not None, ("No Clip Model for verifying loaded")
-        assert image_url is not None, ("No input Image found")
+    elif fn_name == "analyze":
+        kg = fn_args["kg"]
+        manager = None
 
-        return str(verify(
-            manager.clip_model,
-            image_url,
-            fn_args["entity_image_url"]
-        ))
+        if kg is not None:
+            manager, _ = find_manager(managers, kg)
 
-    elif fn_name == "analyze_image":
-        assert image_url is not None, ("No input Image found")
-        return analyze_image(
-            image_url,
-            fn_args["query"],
-            config,
+        return analyze(
+            input=fn_args["input"],
+            modality=fn_args["modality"],
+            input_type=fn_args["input_type"],
+            config=config,
+            manager=manager,
+            prompt=fn_args["prompt"],
         )
 
-    elif fn_name == "analyze_audio":
-        audio_url = fn_args["audio_url"]
-        assert audio_url is not None, ("No input Audio found")
-        manager, _ = find_manager(managers, fn_args["kg"])
-        model = manager.clap_model
-        assert model is not None, ("No Clap Model initialized")
-        return analyze_audio(
-            audio_url,
-            model
+    elif fn_name == "analyze_user_input":
+        kg = fn_args["kg"]
+        manager = None
+
+        if kg is not None:
+            manager, _ = find_manager(managers, kg)
+
+        # Guess data_type
+        input_type: ModalityTypes
+        if image_url.startswith("http"):
+            input_type = ModalityTypes.URL
+        elif image_url.startswith("data:"):
+            input_type = ModalityTypes.BASE64
+        else:
+            input_type = ModalityTypes.FILE
+
+        return analyze(
+            input=image_url,
+            modality=fn_args["modality"],
+            input_type=input_type,
+            config=config,
+            manager=manager,
+            prompt=fn_args["prompt"],
         )
 
     elif fn_name in {"search_shape", "get_shape"}:
@@ -1871,22 +1878,34 @@ search index due to:
 
 
 class Modality(str, Enum):
-    IMAGE_URL = "image_url",
-    AUDIO_URL = "audio_url",
+    IMAGE = "image",
+    AUDIO = "audio",
+
+
+class ModalityTypes(str, Enum):
     BASE64 = "base64"
-    TEXT = "text"
+    URL = "url"
+    FILE = "file"
 
 
-def load(input: str, modality: str | None = None) -> dict:
-    if (modality == "base64" or modality is None):
-        return {"type": "image_url", "image_url": {"url": input}}
-    elif (modality == "image_url"):
-        output = image_url_to_base64(input)
-        return {"type": "image_url", "image_url": {"url": output}}
-    elif (modality == "audio_url"):
-        return audio_url_to_base64(input)
+def load(input: str, modality: str, datatype: str) -> dict:
+    if modality == Modality.IMAGE:
+        if datatype == ModalityTypes.BASE64:
+            return {"type": "image_url", "image_url": {"url": input}}
+        elif datatype == ModalityTypes.URL:
+            data = image_url_to_base64(input)
+            return {"type": "image_url", "image_url": {"url": data}}
+        elif datatype == ModalityTypes.FILE:
+            data = image_file_to_base64(input)
+            return {"type": "image_url", "image_url": {"url": data}}
+    elif modality == Modality.AUDIO:
+        if datatype == ModalityTypes.BASE64:
+            return {"type": "input_audio", "input_audio": {"data": input, "format": "wav"}}
+        elif datatype == ModalityTypes.URL:
+            return audio_url_to_base64(input)
     else:
         raise ValueError(f"Could not load input of type: {modality}")
+    return {}
 
 
 def verify(
@@ -1922,38 +1941,109 @@ def verify(
 
 
 def analyze_image(image_url: str, prompt: str, config: GraspConfig) -> str:
-    vision_config = config.get_vision_model
-    print(f"[DEBUG] vision query: {prompt}")
-    print(f"[DEBUG] vision model: {vision_config.model}")
-    model = OpenAICompletionsModel(vision_config)
+    vision_configs = config.get_vision_models
 
-    system_prompt = (
-        "Answer with only the final answer. "
-        "No reasoning. No explanation. No extra words. "
-        "Use only what is directly visible in the image. "
-        "If uncertain, reply exactly: I cannot determine the answer from the image."
-    )
+    print(f"[DEBUG] vision models = {[m.model for m in vision_configs]}")
 
-    messages = [
-        Message.system(content=system_prompt),
-        Message(
-            role="user",
-            content=[
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        ),
-    ]
+    output_messages = {}
 
-    response: Response = model.call(messages, fns=[])
-    if isinstance(response.message, ResponseMessage):
-        message = response.message.content
-    else:
-        message = response.message
-    return message or "Error: no answer from vision model"
+    for vision_config in vision_configs:
+        model = OpenAICompletionsModel(vision_config)
+
+        system_prompt = (
+            "Answer with only valid JSON. "
+            "No reasoning. No explanation. No extra words. "
+            "Use only what is directly visible in the image. "
+            "Do not infer identity unless it is strongly visually supported. "
+            "If uncertain, omit the item. "
+            "Return exactly this schema:\n"
+            "{"
+            '"entities": [string], '
+            '"attributes": [string], '
+            '"text_visible": [string]'
+            "}\n"
+            "Rules:\n"
+            "- entities: salient people, objects, logos, places, or clearly recognizable identities.\n"
+            "- attributes: atomic, visually verifiable phrases only; one fact per phrase; keep short.\n"
+            "- text_visible: exact text seen in the image, or [] if none.\n"
+            "- No full sentences.\n"
+            "- No duplicates.\n"
+            "- Prefer 1 to 5 items per list.\n"
+            "- If nothing is visible for a field, use [].\n"
+            "If you cannot comply, reply exactly: I cannot determine the answer from the image."
+        )
+
+        messages = [
+            Message.system(content=system_prompt),
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            ),
+        ]
+
+        response: Response = model.call(messages, fns=[])
+        if isinstance(response.message, ResponseMessage):
+            message = response.message.content
+        else:
+            message = response.message
+        output_messages[vision_config.model] = message
+    return str(output_messages)
 
 
 def analyze_audio(audio_url: str, model: ClapCapModel) -> str:
-    output = model.generate_captions([audio_url])
-    print(f"audio {audio_url} = {output}")
-    return "Audio Description: [" + ",".join(output) + "]"
+    caption = model.generate_captions([audio_url])
+    return "AUDIO DESCRIPTION: [" + ",".join(caption) + "]"
+
+
+def analyze(
+    input: str,
+    modality: str,
+    input_type: str,
+    config: GraspConfig,
+    manager: KgManager,
+    prompt: str | None = None,
+) -> str:
+
+    modality = modality.lower()
+
+    if "image" in modality:
+        if prompt is None or not prompt.strip():
+            raise ValueError("prompt is required for image analysis")
+
+        image_payload = load(input, datatype=ModalityTypes.BASE64 if "base64" in modality else ModalityTypes.URL, modality=Modality.IMAGE)
+        image_url = image_payload["image_url"]["url"]
+
+        return analyze_image(image_url, prompt, config)
+
+    if "audio" in modality:
+        if manager.clap_model is None:
+            raise ValueError("clap_model is required for audio analysis")
+
+        temp_file = None
+
+        try:
+            if input_type == "filepath":
+                file_path = input
+            elif input_type == "audio_url":
+                audio = audio_url_to_base64(input)
+                format = audio["input_audio"]["format"]
+                data = audio["input_audio"]["data"]
+                file_path = audio_base64_to_file(data, format)
+                temp_file = file_path
+            elif input_type == "base64":
+                file_path = audio_base64_to_file(input)
+                temp_file = file_path
+            else:
+                raise ValueError(f"Unsupported input_type for audio: {input_type}")
+
+            output = manager.clap_model.generate_captions([file_path])
+            return "AUDIO DESCRIPTION: [" + ",".join(output) + "]"
+
+        finally:
+            if temp_file is not None and os.path.exists(temp_file):
+                os.remove(temp_file)
+
+    raise ValueError(f"Unsupported modality for analyze(): {modality}")

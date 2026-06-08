@@ -20,7 +20,7 @@ from grasp.manager.utils import (
     get_common_sparql_prefixes,
 )
 from grasp.model import Message, Model, Response, ToolCall, get_model
-from grasp.tasks import get_task
+from grasp.tasks import get_task, multimodal_rules
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
 from grasp.tasks.feedback import format_feedback, generate_feedback
@@ -100,6 +100,17 @@ def system_instructions(
     if rules:
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
+# TODO
+# Additional rules to follow:
+# {format_list(rules)}"""
+# 
+#     if task.config.get_vision_models:
+#         instructions += f"""
+# 
+# Rules regarding Multimodal Inputs:
+# {format_list(multimodal_rules())}"""
+# 
+#     return instructions
     return "\n\n".join(blocks)
 
 
@@ -244,7 +255,7 @@ def generate(
             )
         )
     else:
-        messages.append(Message.user(content=text_input))
+        messages.append(Message.user(content=text_input + " [info] user has appended an image, use 'analyste_user_input' to retrieve its informations"))
 
     if (
         config.force_examples

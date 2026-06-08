@@ -2,6 +2,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
+from matplotlib.ticker import NullFormatter
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response as OpenAIResponse
@@ -17,6 +18,7 @@ from grasp.model.base import (
     check_api_response,
     strip_none,
 )
+from sympy import false
 
 
 def coerce_nullable_strings(value: Any, spec: dict) -> Any:
@@ -149,18 +151,20 @@ class OpenAICompletionsModel(Model):
         if config is None:
             config = self.config
 
-        kwargs = config.model_kwargs
-        kwargs.pop("reasoning", None)
+        # remove reasoning and tools if model doesn't support it
+        kwargs = dict(config.model_kwargs or {})
+        # OpenAICompletions does not support reasoning
+        reasoning = kwargs.pop("reasoning", None)
 
-        response: ChatCompletion = self.client.chat.completions.create(
-            model=config.model,
-            messages=self.prepare_messages(messages),  # type: ignore
-            tools=[{"type": "function", "function": fn} for fn in fns],  # type: ignore
-            tool_choice=config.tool_choice,  # type: ignore
-            parallel_tool_calls=config.parallel_tool_calls,
-            max_completion_tokens=config.max_completion_tokens,
-            **kwargs,
-        )
+        kwargs["model"] = config.model
+        kwargs["messages"] = self.prepare_messages(messages)
+        kwargs["max_completion_tokens"] = config.max_completion_tokens
+        if fns:
+            kwargs["tools"] = [{"type": "function", "function": fn} for fn in fns]
+            kwargs["tool_choice"] = config.tool_choice
+            kwargs["parallel_tool_calls"] = config.parallel_tool_calls
+
+        response: ChatCompletion = self.client.chat.completions.create(**kwargs)
 
         check_api_response(response, ChatCompletion, config.model_endpoint)
 
@@ -372,22 +376,23 @@ class OpenAIResponsesModel(Model):
         if config is None:
             config = self.config
 
-        # remove reasoning
-        kwargs = config.model_kwargs
-        kwargs.pop("reasoning", None)
+        # remove reasoning and tools if model doesn't support it
+        kwargs = dict(config.model_kwargs or {})
+        if not kwargs.get("reasoning"):
+            kwargs.pop("reasoning", None)
+
+        kwargs["model"] = config.model
+        kwargs["input"] = self.prepare_input(messages)
+        kwargs["max_output_tokens"] = config.max_completion_tokens
+        kwargs["store"] = True
+        kwargs["include"] = ["message.input_image.image_url"]
+        if fns:
+            kwargs["tools"] = [{"type": "function", **fn} for fn in fns]
+            kwargs["tool_choice"] = config.tool_choice
+            kwargs["parallel_tool_calls"] = config.parallel_tool_calls
 
         # use responses API
-        response = self.client.responses.create(
-            model=config.model,
-            input=self.prepare_input(messages),  # type: ignore
-            tools=[{"type": "function", **fn} for fn in fns],  # type: ignore
-            tool_choice=config.tool_choice,  # type: ignore
-            parallel_tool_calls=config.parallel_tool_calls,
-            max_output_tokens=config.max_completion_tokens,
-            **kwargs,
-            store=False,
-            include=["reasoning.encrypted_content", "message.input_image.image_url"],
-        )
+        response = self.client.responses.create(**kwargs)
 
         check_api_response(response, OpenAIResponse, config.model_endpoint)
 
