@@ -2,6 +2,7 @@ import json
 import os
 import io
 import base64
+import tempfile
 from urllib.request import Request, urlopen
 from importlib import resources
 from typing import Any, Callable, Iterable, Iterator, TypeVar
@@ -494,16 +495,6 @@ def image_file_to_base64(path: str) -> str:
         return resize_image(image_bytes, content_type)
 
 
-# def audio_file_to_base64(path: str) -> str:
-#     """
-#     Converts a local audio path into a base64 encoded audio_url
-#     """
-#     if not os.path.exists(path):
-#         raise FileNotFoundError(f"Audio not found: {path}")
-#     mime_type = "audio/wav"
-#     format =
-
-
 def image_url_to_base64(url: str) -> str:
     """
     Downloads and converts an external image into a base64 encoded image_url
@@ -524,6 +515,17 @@ def image_url_to_base64(url: str) -> str:
         return f"data:{content_type};base64,{data}"
     else:
         return resize_image(image_bytes, content_type)
+
+
+def audio_base64_to_file(string: str, suffix: str = ".wav") -> str:
+    if string.startswith("data:"):
+        string = string.split(",", 1)[1]
+
+    raw = base64.b64decode(string)
+
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        f.write(raw)
+        return f.name
 
 
 def audio_url_to_base64(url: str) -> dict:

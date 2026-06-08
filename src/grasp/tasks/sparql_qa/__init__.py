@@ -37,31 +37,13 @@ You should follow a step-by-step approach to generate the SPARQL query:
 1. Determine possible entities and properties implied by the user question.
 2. Search for the entities and properties in the knowledge graphs. Where \
 applicable, constrain the searches with already identified entities and properties.
-2b. If the user question contains an image of a visually identifiable \
-subject (person, artwork, landmark, animal, flag, logo, or other \
-recognizable object), verify each candidate entity against the image \
-before proceeding: \
-First retrieve the entity's reference image URL via SPARQL \
-then call verify_entity_image. \
-Only if the resulting similarity score is NOT 0 should you assume, that \
-the entity was correctly identified from the input image.
-2c. For better clarity always use the 'analyze_image' function to double check \
-# what you think you see in an image. use the function with a prompt to the vision AI \
-# to find out visual detailes about the input_image which you require for the question anwering.
 3. Gradually build up the SPARQL query using the identified entities \
 and properties. Start with simple queries and add more complexity as needed. \
 Execute intermediate queries to get feedback and to verify your assumptions. \
 You may need to refine or rethink your current plan based on the query \
 results and go back to step 2 if needed, possibly multiple times.
 4. Use the answer or cancel function to finalize your answer and stop the \
-generation process.\
-5. If the question asks about a visually observable attribute (e.g. \
-physical appearance, hair color, clothing style, likeness) and the \
-structured knowledge graph data does not contain the answer, check \
-if the entity has an image available. If so, load the image using \
-"load" and answer the question based on visual analysis. \
-Note that the function "load" should only be used as a last resort \
-when structured data is insufficient, as it consumes significant context. """
+generation process."""
 
 
 def rules() -> list[str]:

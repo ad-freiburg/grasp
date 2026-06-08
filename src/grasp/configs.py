@@ -8,6 +8,7 @@ class Modality(str, Enum):
     TEXT = "text"
     VISION = "vision"
     AUDIO = "audio"
+    OCR = "ocr"
 
 
 class KgInfo(BaseModel):
@@ -218,8 +219,8 @@ class GraspConfig(BaseModel):
         return [m for m in self.models if m.name == "grasp"][0]
 
     @property
-    def get_vision_model(self) -> LLMConfig:
-        return [m for m in self.models if "vision" in m.modality][0]
+    def get_vision_models(self) -> list[LLMConfig]:
+        return [m for m in self.models if "vision" in m.modality]
 
 
 class SpeechToTextConfig(BaseModel):

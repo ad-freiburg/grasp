@@ -8,6 +8,16 @@ model_kwargs:
         effort: env(REASONING_EFFORT:null)
         summary: env(REASONING_SUMMARY:null)
     modality: [text, vision]
+    name: vision
+  - model: env(MODEL:nuextract3-llmlb)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+    model_api_key: env(OPENWEBUI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, ocr]
     name: documents
   text:
     verbosity: env(VERBOSITY:low)
