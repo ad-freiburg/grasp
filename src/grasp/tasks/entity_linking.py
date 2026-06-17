@@ -9,7 +9,8 @@ from typing import Any, Iterator, Optional
 from pydantic import BaseModel
 
 from grasp.configs import GraspConfig
-from grasp.functions import TaskFunctions, find_manager
+#from grasp.functions import TaskFunctions, find_manager
+from grasp.functions import find_manager
 from grasp.manager import KgManager, format_kgs
 from grasp.sparql.types import Alternative
 from grasp.sparql.utils import parse_into_binding
@@ -422,7 +423,7 @@ def functions(managers: list[KgManager], config: GraspConfig) -> TaskFunctions:
             "strict": True,
         },
     ])
-    return fns, call_function
+    return fns
 
 
 def prepare_annotation(
