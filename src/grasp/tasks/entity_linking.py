@@ -432,9 +432,43 @@ def rules(only_named: bool = False) -> list[str]:
         "fits best in the context of the text, or the one that is more popular/general.",
         "If the same entity occurs multiple times in the text, annotate all occurrences.",
         "Before stopping, always check your current annotations.",
-        "Annotate named entities " + "only." if only_named else "and unnamed entities.",
-        "If you think you are done with annotating, stop, don't try to do more.",
-        "If you think you are stuck in a reasoning loop, you need to move on.",
+       #"If you think you are done with annotating, stop, don't try to do more.",
+       #"If you think you are stuck in a reasoning loop, you need to move on.",
+        "**WHICH ENTITIES TO ANNOTATE** You must annotate only named Entities (some say proper nouns), so only concrete instances of entities that have been given a name, "
+        "it is very important, use your common sense.",
+        "Always think about entities in the full context of the text.",
+ #      ("**WHICH ENTITIES TO ANNOTATE** You must annotate Entities "
+ #      "that belong to the following categories:"
+ #      "Person (Q215627), Fictional Character (Q95074), Geographic Entity (Q27096213), "
+ #      "Fictional Location (Q3895768), Organization (Q43229), Creative Work (Q17537576), "
+ #      "Product (Q2424752), Event (Q1656682), Brand (Q431289), Genre (Q483394), "
+ #      "Languoid (Q17376908), Chemical Entity (Q43460564), Taxon (Q16521), "
+ #      "Religion (Q9174), Ideology (Q7257), Position (Q4164871), "
+ #      "Occupation (Q12737077), Academic Discipline (Q11862829), Narrative Entity (Q21070598), "
+ #      "Award (Q618779), Disease (Q12136), Religious Identity (Q4392985), "
+ #      "Record Chart (Q373899), Government Program (Q22222786), Human Population (Q33829), "
+ #      "Color (Q1075), Treatment (Q179661), Symptom (Q169872), "
+ #      "Anatomical Structure (Q4936952), Sport (Q349), Animal (Q729)."
+ #      "Make sure you annotate **all** of these categories, before stopping check if you considered all of them, it is very important."),
+ #      "Demonyms: In general, annotate demonym men"
+ #      "tions with the country. Additionally, annotate the "
+ #      "mention with the ethnicity or country-citizens if "
+ #      "the culture or ethnicity is being referred to (e.g., "
+ #      "'[American] dish'). The mention should not be "
+ #      "annotated with the ethnicity in cases like '[Soviet]- "
+ #      "backed United Arab Republic' (Soviet refers to (a "
+ #      "part of) the government which is better represented "
+ #      "by the country) or '[American] movie' (it’s still an "
+ #      "American movie if the director decides to migrate "
+ #      "to another country). Only annotate the mention "
+ #      "with the language if it is obvious that the language "
+ #      "is being referred to (e.g., 'sectores' means 'sec"
+ #      "tors' in [Spanish]’).",
+        "If a name occurs in the text annotate it even if it is not the full name.",
+       #"If a name occurs again in the text, annotate it again even if it is not the full name.",
+       # "You need to ouput a justification before every tool call! This is very important.",
+       # "Always reason about things before and after calling tools.",
+        "Again: You need to reason and explain everything you're doing. Never ever just call a function without it.",
     ]
 
 
@@ -457,8 +491,8 @@ to finalize your annotations and stop the annotation process."""
 def functions(managers: list[KgManager], config: GraspConfig) -> list[dict]:
     kgs = [manager.kg for manager in managers]
     method = config.task_kwargs.get("entity-linking", {}).get("method", "prefix")
-    if method not in {"prefix", "indices", "markdown"}:
-        raise ValueError(f"annotation method {method} needs to be one of: indices, prefix, markdown")
+    if method not in {"prefix", "matching", "indices", "markdown"}:
+        raise ValueError(f"annotation method {method} needs to be one of: indices, prefix, matching, markdown")
     use_annotation_window = config.task_kwargs.get(
         "entity-linking", {}).get("use_annotation_window", False
     )
@@ -504,6 +538,43 @@ def functions(managers: list[KgManager], config: GraspConfig) -> list[dict]:
                 },
                 "strict": True,
             },]
+    elif method == "matching":
+        fns = [
+            {
+                "name": "annotate",
+                "description": """\
+    Annotate a word or a sequence of words with an entity from the specified knowledge \
+    graph by writing the exact words to be annotated as 'words_to_be_annotated'.
+    Specify the words further by the index of the occurrence, if the words only occur once, set it to 0.
+    If you only want to annotate the second occurence, just set it to 1.
+    You can set 'entity' to 'None' to delete an existing annotation.
+    This function overwrites any previous annotation of the words.""",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "kg": {
+                            "type": "string",
+                            "enum": kgs,
+                            "description": "The knowledge graph to use for the annotation",
+                        },
+                        "exact_words_to_be_annotated": {
+                            "type": "string",
+                            "description": "The exact words to be annotated written exactly like in the original text",
+                        },
+                        "occurrence_index": {
+                            "type": "int",
+                            "description": "Index of the occurrence of the words in the text",
+                        },
+                        "entity": {
+                            "type": "string",
+                            "description": "The IRI of the entity to annotate the words with",
+                        },
+                    },
+                    "required": ["kg", "exact_words_to_be_annotated", "occurrence_index", "entity"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },]
     elif method == "markdown":
         fns = [
             {
@@ -512,6 +583,10 @@ def functions(managers: list[KgManager], config: GraspConfig) -> list[dict]:
     Annotate a word or a sequence of words with an entity from the specified knowledge \
     graph by annotating the words in the following format: [words to be annotated](entity id). \
     You need to annotate the full window in one go. Every call overwrites the old annotations. \
+    The parsing just looks for the combination of brackets and the annotation and then annotates \
+    according to the positions those are in, so the actual characters dont matter but the absolute \
+    position does. Keep that in mind if you're having trouble annotating, \
+    the first character could be a space that you don't see. \
     This function overwrites any previous annotation of the words.""",
                 "parameters": {
                     "type": "object",
@@ -935,28 +1010,123 @@ def annotate_prefix(
             )
 
 
+def annotate_matching(
+    managers: list[KgManager],
+    kg: str,
+    words_to_be_annotated: str,
+    occurrence_index: int,
+    entity: str,
+    state: AnnotationState,
+    known: set[str],
+    know_before_use: bool = False,
+) -> str:
+    """
+    A function for the llm to call to annotate the text with the exact string to be 
+    annotated and optionally prefix and/or suffix to distinguish between different
+    occurrences of the words in the original text.
+    """
+    manager, _ = find_manager(managers, kg)
+    sequence = state.text.data[state.annotation_window]
+    # normalizing, because some llms are heavily biased towards specific characters like
+    # the ascii apostrophe although they are technically able to output the correct one.
+    def normalize(string: str) -> str:
+        return unicodedata.normalize("NFC", string).replace("‘", "'").replace("’", "'")
+
+    words_to_be_annotated = normalize(words_to_be_annotated)
+    sequence = normalize(sequence)
+
+    word_matches = [m.span() for m in re.finditer(re.escape(words_to_be_annotated), sequence)]
+
+    if not word_matches:
+        raise ValueError(
+            f"No match found for the given words to be annotated "
+            f"'{words_to_be_annotated}' in the current annotation window."
+        )
+    
+    if occurrence_index < 0:
+        raise ValueError(
+            f"occurrence_index '{occurrence_index}' must be non negative"
+        )
+
+    if occurrence_index >= len(word_matches):
+        raise ValueError(
+            f"occurrence_index '{occurrence_index}' must be less than number of matches: {len(word_matches)}"
+        )
+
+
+    start_idx, end_idx = word_matches[occurrence_index]
+
+    # deleting an annotation
+    if entity == "None":
+        try:
+            current = state.annotate(start_idx, end_idx, None)
+        except ValueError as e:
+            raise FunctionCallException(str(e)) from e
+
+        if current is None:
+            raise FunctionCallException(
+                f"Text sequence [{start_idx}, {end_idx}] "
+                f"'{sequence[start_idx: end_idx]}' is not annotated"
+            )
+
+        return (
+            f"Deleted annotation {current.entity} from Text sequence "
+            f"[{start_idx}, {end_idx}] '{sequence[start_idx: end_idx]}'"
+        )
+
+    # annotating
+    else:
+        try:
+            annotation = prepare_annotation(manager, entity)
+            if know_before_use and annotation.identifier not in known:
+                raise FunctionCallException(
+                    f"The entity {entity} cannot be used for annotation "
+                    "without being known from previous function call results. "
+                    "This does not mean it is invalid, but you should verify "
+                    "that it indeed exists in the knowledge graphs first."
+                )
+
+            current = state.annotate(start_idx, end_idx, annotation)
+
+        except ValueError as e:
+            raise FunctionCallException(str(e)) from e
+
+        if current is None:
+            return (
+                f"Annotated text sequence [{start_idx}: {end_idx}] "
+                f"'{sequence[start_idx: end_idx]}' with entity {entity}"
+            )
+        else:
+            return (
+                f"Updated annotation of text sequence [{start_idx}, {end_idx}] "
+                f"'{sequence[start_idx: end_idx]}' from {current.entity} to {entity}"
+            )
+
+
 def input_instructions(state: AnnotationState) -> str:
     instructions = (
         "Annotate the following text with entities from the available knowledge graphs. "
         "Annotate every occurance of an entity, if it occurs again annotate it again! \n" 
-        "You will be given the full text in the beginning only for context. \n"
+        "You will be given the full text in the beginning only for context. \n\n"
         "[Start of full Text]\n\n"
     ) 
 
     instructions += state.format()
-
-    instructions += (
-        "\n\n[End of full Text]\n\n"
-        "To start annotating and when you're done with a sequence first call the function "
-        "'change_annotation_window' to set the next window of the text to annotate "
-        " and then 'show_current_text_and_annotations' with 'only_current_window' True"
-        " to show the text in the current window.\n"
-    ) if state.use_annotation_window else (
-        "\n\n[End of full Text]\n\n"
-        "To see which specific excerpt of the text you should annotate call "
-        "'show_current_text_and_annotations' before starting, the result is the only "
-        "excerpt of the text you need to annotate, the full text can be longer.\n"
-    )
+    if state.use_annotation_window:
+        instructions += (
+            "\n\n[End of full Text]\n\n"
+            "To start annotating and when you're done with a sequence first call the function "
+            "'change_annotation_window' to set the next window of the text to annotate "
+            " and then 'show_current_text_and_annotations' with 'only_current_window' True"
+            " to show the text in the current window.\n"
+        )
+    else:
+        instructions += (
+            "\n\n[End of full Text]\n\n"
+            "The following is the **only** excerpt of the text you need to annotate:"
+            "\n\n[Start of Excerpt]\n\n"
+        ) + state.format(True) + "\n\n[End of Excerpt]\n\n"
+    
 
     return instructions
 
@@ -1034,6 +1204,20 @@ def call_function(
                 known,
                 config.know_before_use,
             )
+
+        elif method == "matching":
+            return annotate_matching(
+                managers,
+                fn_args["kg"],
+                fn_args["exact_words_to_be_annotated"],
+                fn_args["occurrence_index"],
+                fn_args["entity"],
+                state,
+                known,
+                config.know_before_use,
+            )
+        
+
 
     elif fn_name == "show_current_text_and_annotations":
         return state.format(
