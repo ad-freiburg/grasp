@@ -26,6 +26,7 @@ class Task(StrEnum):
     CEA = "cea"
     WDQL = "wikidata-query-logs"
     S2Q = "sparql-to-question"
+    ENTITY_LINKING = "entity-linking"
 
 
 _REGISTRY: dict[str, type[GraspTask]] = {
