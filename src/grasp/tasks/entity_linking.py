@@ -650,7 +650,7 @@ def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
     if norm is not None:
         identifier, _ = norm
     
-    infos = manager.get_infos_for_identifiers_of_type([identifier], ObjType.ENTITY)
+    infos = manager.get_infos_for_identifiers_from_index([identifier], ObjType.ENTITY)
     info = infos.get(identifier, {})
     
     label = info.get("label")
