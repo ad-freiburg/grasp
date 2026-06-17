@@ -17,6 +17,10 @@ model_kwargs:
 
 tool_choice: env(TOOL_CHOICE:auto)
 
+task_kwargs:
+  entity-linking:
+    method: env(ENTITY_ANNOTATION_METHOD:prefix)
+
 seed: env(SEED:22)
 
 feedback: env(FEEDBACK:false)
@@ -26,6 +30,12 @@ notes_file: env(NOTES_FILE:null)
 sparql_connection_timeout: env(SPARQL_CONNECTION_TIMEOUT:6.0)
 sparql_query_timeout: env(SPARQL_QUERY_TIMEOUT:30.0)
 sparql_read_timeout: env(SPARQL_READ_TIMEOUT:10.0)
+max_generation_time: env(TIMEOUT:600)
+temperature: env(TEMPERATURE:1.0)
+top_p: env(TOP_P:1.0)
+reasoning_effort: env(REASONING_EFFORT:null)
+reasoning_summary: env(REASONING_SUMMARY:null)
+api: env(API:null)
 
 fn_set: env(FN_SET:all)
 list_k: env(LIST_K:10)
