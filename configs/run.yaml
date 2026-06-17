@@ -17,10 +17,6 @@ model_kwargs:
 
 tool_choice: env(TOOL_CHOICE:auto)
 
-task_kwargs:
-  entity-linking:
-    method: env(ENTITY_ANNOTATION_METHOD:prefix)
-
 seed: env(SEED:22)
 
 feedback: env(FEEDBACK:false)
