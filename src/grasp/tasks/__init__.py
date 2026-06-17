@@ -9,6 +9,7 @@ from grasp.tasks.exploration import (
     FunctionalExplorationTask,
     StructuralExplorationTask,
 )
+from grasp.tasks.entity_linking import EntityLinkingTask
 from grasp.tasks.general_qa import GeneralQaTask
 from grasp.tasks.notes_from_traces import NotesFromTracesTask
 from grasp.tasks.question_generation import QuestionGenerationTask
@@ -37,6 +38,7 @@ _REGISTRY: dict[str, type[GraspTask]] = {
         CeaTask,
         WdqlTask,
         SparqlToQuestionTask,
+        EntityLinkingTask,
         FunctionalExplorationTask,
         StructuralExplorationTask,
         QuestionGenerationTask,
