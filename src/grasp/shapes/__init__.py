@@ -215,7 +215,8 @@ class ShapeIndex:
 
 @dataclass
 class Shapes:
-    pattern: str | None = None
+    instance_pattern: str | None = None
+    schema_pattern: str | None = None
     index: ShapeIndex | None = None
     description: str | None = None
     total_classes: int | None = None
@@ -228,22 +229,28 @@ def load_setup_description(shapes_dir: str) -> str | None:
     return load_json(setup_path).get("description")
 
 
+def load_setup_patterns(shapes_dir: str) -> tuple[str | None, str | None]:
+    def read(name: str) -> str | None:
+        path = os.path.join(shapes_dir, name)
+        return load_text(path) if os.path.exists(path) else None
+
+    return read("instance_pattern.sparql"), read("schema_pattern.sparql")
+
+
 def load_shapes(shapes_dir: str, model: SentenceTransformerModel) -> Shapes | None:
-    pattern = None
-    pattern_file = os.path.join(shapes_dir, "pattern.sparql")
-    if os.path.exists(pattern_file):
-        pattern = load_text(pattern_file)
+    instance_pattern, schema_pattern = load_setup_patterns(shapes_dir)
 
     index = None
     index_dir = os.path.join(shapes_dir, "index")
     if os.path.exists(index_dir):
         index = ShapeIndex.load(index_dir, model)
 
-    if pattern is None and index is None:
+    if instance_pattern is None and schema_pattern is None and index is None:
         return None
 
     return Shapes(
-        pattern=pattern,
+        instance_pattern=instance_pattern,
+        schema_pattern=schema_pattern,
         index=index,
         description=load_setup_description(shapes_dir),
         total_classes=index.total_classes if index is not None else None,

@@ -1,10 +1,9 @@
 import os
 import random
-import time
 import uuid
-from logging import Logger
 
 import yaml
+from pydantic import BaseModel
 from search_rdf.model import SentenceTransformerModel
 from tqdm import tqdm, trange
 from universal_ml_utils.io import dump_json, dump_jsonl, load_jsonl
@@ -18,32 +17,29 @@ from grasp.configs import (
     NotesFromOutputsConfig,
     NotesFromSamplesConfig,
     NotesGenerateQuestionsConfig,
-    NoteTakingConfig,
 )
 from grasp.core import generate, load_notes, setup
 from grasp.examples import Sample, load_example_indices
 from grasp.functions import find_manager
 from grasp.manager import KgManager
-from grasp.model import Message, get_model
-from grasp.notes.utils import format_output
+from grasp.model import get_model
 from grasp.tasks import get_task
 from grasp.tasks.cea import AnnotationState, CeaSample, prepare_annotation
 from grasp.tasks.exploration import (
     FunctionalExplorationState,
     StructuralExplorationState,
 )
-from grasp.tasks.exploration.functions import call_function, note_function_definitions
+from grasp.tasks.notes_from_traces import NotesFromTracesState
 from grasp.tasks.question_generation import QuestionGenerationState
 from grasp.tasks.sparql_qa.examples import SparqlQaSample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
-from grasp.utils import (
-    format_kg_notes,
-    format_list,
-    format_message,
-    format_notes,
-    format_response,
-    link,
-)
+from grasp.utils import link
+
+
+def dump_config(config: BaseModel, out_dir: str) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
+        yaml.dump(config.model_dump(), f)
 
 
 def take_notes_from_samples(
@@ -56,7 +52,6 @@ def take_notes_from_samples(
     if os.path.exists(out_dir) and not overwrite:
         raise FileExistsError(f"Output directory {out_dir} already exists")
 
-    logger = get_logger("GRASP NOTE TAKING", log_level)
     agent_logger = get_logger("GRASP AGENT", log_level)
 
     managers, models = setup(config)
@@ -74,10 +69,17 @@ def take_notes_from_samples(
     )
     notes, kg_notes = load_notes(config)
 
+    # optional dedicated note-taking model fully replaces the parent config's
+    # model for the note-taking step; the agent runs on the parent config above
+    note_taking_model = (
+        get_model(config.note_taking_model) if config.note_taking_model else None
+    )
+
     sample_cls = get_task(task, managers, config).sample_cls()
     assert sample_cls is not None, f"Task {task} does not support samples"
 
     assert config.seed is not None, "Seed must be set for adaptation"
+    dump_config(config, out_dir)
 
     all_samples: list[tuple[str, Sample]] = []
     for sample_cfg in config.samples:
@@ -91,10 +93,6 @@ def take_notes_from_samples(
             samples = samples[: config.samples_per_file]
 
         all_samples.extend(samples)  # type: ignore
-
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
-        yaml.dump(config.model_dump(), f)
 
     # Pre-generate sample sequence in epochs so every sample is seen once
     # per epoch before any is revisited across rounds.
@@ -132,17 +130,29 @@ def take_notes_from_samples(
         else:
             ground_truths = prepare_ground_truths(samples, managers, config)
 
-        output = take_notes(
-            outputs,
-            managers,
-            kg_notes,
-            notes,
-            config,
-            logger,
-            ground_truths,
+        state = NotesFromTracesState(
+            notes=notes,
+            kg_notes=kg_notes,
+            outputs=outputs,
+            ground_truths=ground_truths,
+        )
+        # rebind so the note-taking functions mutate the same objects we dump below
+        notes, kg_notes = state.notes, state.kg_notes
+
+        output = consume_generator(
+            generate(
+                "notes-from-traces",
+                state,
+                config,
+                managers,
+                kg_notes,
+                notes,
+                example_indices=example_indices,
+                logger=agent_logger,
+                custom_model=note_taking_model,
+            )
         )
 
-        output["task"] = task
         output["samples"] = [
             {"kg": kg, "sample": sample.model_dump()} for kg, sample in samples
         ]
@@ -169,16 +179,18 @@ def take_notes_from_outputs(
     if os.path.exists(out_dir) and not overwrite:
         raise FileExistsError(f"Output directory {out_dir} already exists")
 
-    logger = get_logger("GRASP NOTE TAKING", log_level)
+    agent_logger = get_logger("GRASP AGENT", log_level)
 
     managers, _ = setup(config)
     notes, kg_notes = load_notes(config)
 
+    note_taking_model = (
+        get_model(config.note_taking_model) if config.note_taking_model else None
+    )
+
     assert config.seed is not None, "Seed must be set for adaptation"
 
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
-        yaml.dump(config.model_dump(), f)
+    dump_config(config, out_dir)
 
     all_outputs = []
     for output_file in config.outputs:
@@ -193,24 +205,36 @@ def take_notes_from_outputs(
 
         all_outputs.extend(outputs)
 
+    # Pre-generate sample sequence in epochs so every sample is seen once
+    # per epoch before any is revisited across rounds.
+    n_per_round = min(config.outputs_per_round, len(all_outputs))
+    sequence: list[dict] = []
+    epoch = 0
+    while len(sequence) < config.num_rounds * n_per_round:
+        random.seed(config.seed + epoch)
+        sequence.extend(random.sample(all_outputs, len(all_outputs)))
+        epoch += 1
+
     for r in trange(config.num_rounds, desc="Taking notes from outputs"):
-        random.seed(config.seed + r)
+        outputs = sequence[r * n_per_round : (r + 1) * n_per_round]
 
-        outputs = random.sample(
-            all_outputs,
-            min(config.outputs_per_round, len(all_outputs)),
+        state = NotesFromTracesState(notes=notes, kg_notes=kg_notes, outputs=outputs)
+        # rebind so the note-taking functions mutate the same objects we dump below
+        notes, kg_notes = state.notes, state.kg_notes
+
+        output = consume_generator(
+            generate(
+                "notes-from-traces",
+                state,
+                config,
+                managers,
+                kg_notes,
+                notes,
+                logger=agent_logger,
+                custom_model=note_taking_model,
+            )
         )
 
-        output = take_notes(
-            outputs,
-            managers,
-            kg_notes,
-            notes,
-            config,
-            logger,
-        )
-
-        output["task"] = task
         output["traces"] = outputs
         dump_json(output, os.path.join(out_dir, f"output.{task}.round_{r}.json"))
 
@@ -250,9 +274,7 @@ def take_notes_from_exploration(
     )
     notes, kg_notes = load_notes(config)
 
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
-        yaml.dump(config.model_dump(), f)
+    dump_config(config, out_dir)
 
     assert isinstance(config, NotesFromExplorationConfig)
     if config.mode == "functional":
@@ -311,9 +333,7 @@ def generate_questions(
     managers, _ = setup(config)
     notes, kg_notes = load_notes(config)
 
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
-        yaml.dump(config.model_dump(), f)
+    dump_config(config, out_dir)
 
     state = QuestionGenerationState()
 
@@ -347,45 +367,6 @@ def generate_questions(
             out_file = os.path.join(out_dir, f"samples.{kg}.round_{r}.jsonl")
             dump_jsonl(samples, out_file)
             link(out_file, os.path.join(out_dir, f"samples.{kg}.jsonl"))
-
-
-def rules() -> list[str]:
-    return [
-        "Do not take notes on things that are already handled well by the agent.",
-        "As you hit the limits on the number of notes and their length, \
-gradually merge and generalize your notes, discard unnecessary details, and move \
-notes that can be useful across knowledge graphs to the general section.",
-    ]
-
-
-def system_instructions(max_notes: int, max_note_length: int) -> str:
-    return f"""\
-You are a note-taking assistant. Your task is to \
-inspect the traces of a knowledge graph agent performing a certain task, and to \
-take notes about the agent's outputs as well as the used knowledge \
-graphs and functions.
-
-Your notes should help the agent to better understand and navigate the task \
-and knowledge graphs in the future. You are limited to a maximum of {max_notes} notes \
-per knowledge graph, plus {max_notes} general notes for insights that apply \
-across knowledge graphs or to the task in general. Each note is limited to a maximum of \
-{max_note_length} characters to ensure it is concise and to the point.
-
-The notes should generalize to new unseen task inputs, rather than being specific to \
-the task traces and outputs at hand.
-
-Before calling a note-taking function, provide reasoning for what you are doing and why. \
-Before stopping, make sure to check all notes (not only the ones touched in this iteration) \
-for the above mentioned criteria and clean them if needed.
-
-Examples of potentially useful types of notes to include:
-- overall structure, domain coverage, and schema of the knowledge graphs
-- peculiarities of the knowledge graphs
-- strategies when encountering certain types of questions or errors
-- tips for when and how to use certain functions
-
-Additional rules to follow:
-{format_list(rules())}"""
 
 
 def prepare_ground_truth(
@@ -428,139 +409,9 @@ def prepare_ground_truths(
     samples: list[tuple[str, Sample]],
     managers: list[KgManager],
     config: GraspConfig,
-) -> list[str] | None:
+) -> list[str]:
     ground_truths = []
     for kg, sample in samples:
         gt = prepare_ground_truth(sample, kg, managers, config)
         ground_truths.append(gt)
     return ground_truths
-
-
-def note_taking_instructions(
-    outputs: list[dict],
-    ground_truths: list[str] | None = None,
-) -> str:
-    formatted = []
-    for i, output in enumerate(outputs):
-        messages = [Message(**msg) for msg in output["messages"]]
-
-        if i == 0:
-            assert messages[0].role == "system"
-            formatted.append(f"Task instructions for the agent:\n{messages[0].content}")
-
-        assert messages[1].role == "user"
-        input = messages[1].content
-
-        content = f"Input {i + 1}:\n{input}"
-
-        if ground_truths is not None:
-            gt = ground_truths[i]
-            content += f"\n\nReference Output:\n{gt}"
-
-        content += f"\n\nAgent trace:\n{format_output(output['output'], messages)}"
-
-        formatted.append(content)
-
-    fmt = "\n\n".join(formatted)
-
-    return f"""\
-Look at the current notes (which might be the same notes provided \
-to the agent). Then add to, delete from, or update them based on the \
-given agent traces below.
-
-{fmt}"""
-
-
-def take_notes(
-    outputs: list[dict],
-    managers: list[KgManager],
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
-    config: NoteTakingConfig,
-    logger: Logger,
-    ground_truths: list[str] | None = None,
-) -> dict:
-    messages = [
-        Message(
-            role="system",
-            content=system_instructions(config.max_notes, config.max_note_length),
-        ),
-        Message(
-            role="user",
-            content=note_taking_instructions(outputs, ground_truths),
-        ),
-    ]
-
-    for msg in messages:
-        logger.debug(format_message(msg))
-
-    functions = note_function_definitions(managers)
-
-    num_messages = len(messages)
-
-    # if a note taking model is configured, use it as a full
-    # replacement for the model config; otherwise fall back to
-    # the parent grasp config
-    nt_config = config.note_taking_model or config
-    model = get_model(nt_config)
-    start = time.monotonic()
-    error = None
-
-    while len(messages) - num_messages < config.max_steps:
-        try:
-            response = model(messages, functions)
-        except Exception as e:
-            msg = f"Error while calling LLM API during note taking: {e}"
-            logger.error(msg)
-            error = {"content": msg, "reason": "api_error"}
-            break
-
-        if response.is_empty:
-            msg = "LLM API returned empty response during note taking"
-            logger.error(msg)
-            error = {"content": msg, "reason": "empty_response"}
-            break
-
-        messages.append(Message(role="assistant", content=response))
-
-        for tool_call in response.tool_calls:
-            try:
-                result = call_function(
-                    kg_notes,
-                    notes,
-                    tool_call.name,
-                    tool_call.args,
-                    config.max_notes,
-                    config.max_note_length,
-                )
-            except Exception as e:
-                result = f"Call to function {tool_call.name} returned an error:\n{e}"
-
-            tool_call.result = result
-
-        # only log now once tool call results are set
-        logger.debug(format_response(response))
-
-        if not response.tool_calls or any(
-            tool_call.name == "stop" for tool_call in response.tool_calls
-        ):
-            break
-
-    end = time.monotonic()
-    # build and return output
-    return {
-        "type": "output",
-        "output": {
-            "formatted": f"""\
-Note taking completed.
-
-Notes for knowledge graphs:
-{format_kg_notes(kg_notes)}
-
-General notes:
-{format_notes(notes)}""",
-        },
-        "messages": [msg.model_dump() for msg in messages],
-        "elapsed": end - start,
-        "error": error,
-    }

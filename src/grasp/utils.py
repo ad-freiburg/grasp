@@ -9,7 +9,6 @@ from termcolor import colored
 
 from grasp.model import Message, Response, ToolCall
 
-
 # IRI label derivation (also used by grasp.build.data and grasp.build.shapes)
 
 _IRI_PUNCTUATION = {"_", "-", "."}
@@ -102,13 +101,22 @@ class FunctionCallException(Exception):
     pass
 
 
-def format_prefixes(prefixes: dict[str, str] | None = None, indent: int = 0) -> str:
+def format_section(title: str, body: str, level: int = 2) -> str:
+    return f"{'#' * level} {title}\n\n{body}"
+
+
+def format_prefixes(
+    prefixes: dict[str, str] | None = None,
+    indent: int = 0,
+    bullet: str = "- ",
+) -> str:
     if not prefixes:
         return "None"
 
     return format_list(
         (f"{short}: {long}" for short, long in sorted(prefixes.items())),
         indent=indent,
+        bullet=bullet,
     )
 
 
@@ -125,9 +133,9 @@ def format_notes(
         return format_list(notes, indent)
 
 
-def format_list(items: Iterable[str], indent: int = 0) -> str:
+def format_list(items: Iterable[str], indent: int = 0, bullet: str = "- ") -> str:
     indent_str = " " * indent
-    return "\n".join(f"{indent_str}- {item}" for item in items)
+    return "\n".join(f"{indent_str}{bullet}{item}" for item in items)
 
 
 def format_enumerate(
@@ -144,11 +152,12 @@ def format_enumerate(
 def format_kg_notes(
     kg_notes: dict[str, list[str]] | None = None,
     enumerated: bool = False,
+    level: int = 3,
 ) -> str:
     if not kg_notes:
         return "None"
-    return format_list(
-        f'"{kg}":\n{format_notes(notes, indent=2, enumerated=enumerated)}'
+    return "\n\n".join(
+        format_section(kg, format_notes(notes, enumerated=enumerated), level)
         for kg, notes in kg_notes.items()
     )
 

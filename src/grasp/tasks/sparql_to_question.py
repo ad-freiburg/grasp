@@ -77,6 +77,7 @@ def system_information(config: GraspConfig) -> str:
         "phrasing",
         "mixed (e.g., keyword-like, interrogative, prosaic, bullet points, etc.)",
     )
+    language = task_kwargs.get("language", "English")
     return f"""\
 You are a SPARQL expert trying to find possible user questions for \
 a given SPARQL query. Your task is to fix and clean the given SPARQL query \
@@ -86,6 +87,7 @@ Make sure that generated questions respect the following requirements:
   Maximum number of questions: {max_questions}
   Level of detail: {level_of_detail}
   Phrasing: {phrasing}
+  Language: {language}
 
 You should take a step-by-step approach to achieve this:
 1. Analyze the given SPARQL query, its used entities and properties, and \

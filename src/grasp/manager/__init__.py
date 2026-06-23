@@ -1,16 +1,18 @@
 import logging
 import os
 import sys
+import time
 from dataclasses import replace
+from threading import RLock
 from typing import Any, Iterable
 
+from cachetools import LRUCache
 from search_rdf import Data, EmbeddingIndex
 from search_rdf.model import (
     HuggingFaceImageModel,
     OpenClipModel,
     SentenceTransformerModel,
 )
-from universal_ml_utils.io import load_text
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
@@ -33,7 +35,12 @@ from grasp.manager.utils import (
     try_load_search_index,
 )
 from grasp.search_params import EmbeddingSearchParams, load_search_params
-from grasp.shapes import Shapes, load_setup_description, load_shapes
+from grasp.shapes import (
+    Shapes,
+    load_setup_description,
+    load_setup_patterns,
+    load_shapes,
+)
 from grasp.sparql.types import (
     Alternative,
     AskResult,
@@ -65,11 +72,15 @@ from grasp.sparql.utils import (
 )
 from grasp.utils import (
     clip,
+    format_enumerate,
     format_list,
     format_prefixes,
     get_index_dir,
     ordered_unique,
 )
+
+SEARCH_CACHE_MAX_SIZE = int(os.getenv("GRASP_SEARCH_CACHE_MAX_SIZE", "1024"))
+SEARCH_CACHE_MIN_MS = float(os.getenv("GRASP_SEARCH_CACHE_MIN_MS", "100"))
 
 
 class KgManager:
@@ -106,6 +117,9 @@ class KgManager:
         self.embedding_models: dict[str, EmbeddingModel] = {}
         self.shapes: Shapes | None = None
         self.shape_config: ShapeConfig | None = None
+
+        self.search_cache = LRUCache(maxsize=SEARCH_CACHE_MAX_SIZE)
+        self.search_lock = RLock()
 
     def load_models(
         self,
@@ -551,6 +565,15 @@ class KgManager:
         identifier_map: dict[str, list[str]] | None = None,
         query_type: str = "text",
     ) -> list[Alternative]:
+        start = time.monotonic()
+        cache_key = None
+        if identifier_map is None:
+            cache_key = (index_name, query, k, query_type)
+            with self.search_lock:
+                if cache_key in self.search_cache:
+                    self.logger.debug(f"Cache hit for search with key {cache_key}")
+                    return self.search_cache[cache_key]
+
         kg_index = self.get(index_name)
         index = kg_index.index
         data = kg_index.data
@@ -615,6 +638,14 @@ class KgManager:
                 matched_via,
             )
             alternatives.append(alternative)
+
+        end = time.monotonic()
+        time_ms = (end - start) * 1000
+        # only cache queries that took longer than a certain
+        # threshold to only cache expensive ones
+        if cache_key is not None and time_ms >= SEARCH_CACHE_MIN_MS:
+            with self.search_lock:
+                self.search_cache[cache_key] = alternatives
 
         return alternatives
 
@@ -869,6 +900,10 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
 
     info = load_kg_info(cfg.kg, logger)
     if cfg.info is not None:
+        logger.info(
+            f"Existing knowledge graph info:\n{info.model_dump_json(indent=2)}\n\n"
+            f"Overwriting with info set in config:\n{cfg.info.model_dump_json(exclude_unset=True, indent=2)}"
+        )
         info = info.model_copy(update=cfg.info.model_dump(exclude_unset=True))
 
     indices: dict[str, KgIndex] = {}
@@ -907,11 +942,11 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
     manager.shape_config = cfg.shapes
     if cfg.shapes is not None:
         shapes_dir = os.path.join(get_index_dir(cfg.kg), "shapes")
-        pattern_file = os.path.join(shapes_dir, "pattern.sparql")
-        if os.path.exists(pattern_file):
-            pattern = load_text(pattern_file)
+        instance_pattern, schema_pattern = load_setup_patterns(shapes_dir)
+        if instance_pattern is not None or schema_pattern is not None:
             manager.shapes = Shapes(
-                pattern=pattern,
+                instance_pattern=instance_pattern,
+                schema_pattern=schema_pattern,
                 description=load_setup_description(shapes_dir),
             )
     return manager
@@ -937,7 +972,7 @@ def format_kgs(
     notes: dict[str, list[str]],
     example_indices: "dict[str, Any] | None" = None,
 ) -> str:
-    return format_list(
+    return "\n\n".join(
         format_kg(
             manager,
             notes.get(manager.kg),
@@ -954,9 +989,11 @@ def format_kg(
     notes: list[str] | None = None,
     example_index: "Any | None" = None,
 ) -> str:
-    msg = f'"{manager.kg}" at {manager.endpoint}'
+    head = f"### {manager.kg}\nEndpoint: {manager.endpoint}"
     if manager.description:
-        msg += f": {manager.description}"
+        head += f"\n{manager.description}"
+
+    parts = [head]
 
     indices = []
     for name in manager.index_names:
@@ -972,12 +1009,14 @@ def format_kg(
         indices.append(format_shapes_index(manager.shapes))
 
     if indices:
-        msg += "\n  Search indices:\n" + format_list(indices, indent=4)
+        parts.append("**Search indices**\n" + "\n".join(indices))
 
     if manager.kg_prefixes:
-        msg += f"\n  SPARQL prefixes:\n{format_prefixes(manager.kg_prefixes, indent=4)}"
+        parts.append(
+            "**SPARQL prefixes**\n" + format_prefixes(manager.kg_prefixes, bullet="")
+        )
 
     if notes:
-        msg += "\n  Notes:\n" + format_list(notes, indent=4)
+        parts.append("**Notes**\n" + format_enumerate(notes))
 
-    return msg
+    return "\n\n".join(parts)

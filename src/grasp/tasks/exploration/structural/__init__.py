@@ -17,7 +17,7 @@ from grasp.tasks.sparql_qa.examples import (
     call_function as call_example_function,
     functions as example_function_definitions,
 )
-from grasp.utils import format_kg_notes
+from grasp.utils import format_kg_notes, format_section
 
 
 class StructuralExplorationState(BaseModel):
@@ -69,11 +69,16 @@ Examples of potentially useful types of notes:
 
 
 def output(state: StructuralExplorationState) -> dict:
-    formatted = f"""\
-Exploration completed.
-
-Knowledge graph specific notes:
-{format_kg_notes(state.kg_notes)}"""
+    formatted = "\n\n".join(
+        [
+            "Exploration completed.",
+            format_section(
+                "Knowledge graph specific notes",
+                format_kg_notes(state.kg_notes),
+                level=2,
+            ),
+        ]
+    )
 
     return {
         "type": "output",

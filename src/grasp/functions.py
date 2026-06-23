@@ -182,7 +182,7 @@ graph that match a semantic query. Returns a compact view per class; \
 use get_shape for a more detailed view of a specific class.
 
 Use this to discover which classes exist in the KG and what their structure looks \
-like before writing SPARQL queries.
+like before writing SPARQL queries. {SHAPE_CAVEAT}
 
 Currently shapes are available for the following knowledge graphs:
 {format_list(f'"{kg}"' for kg in search_shape_kgs)}""",
@@ -217,8 +217,7 @@ Currently shapes are available for the following knowledge graphs:
             {
                 "name": "get_shape",
                 "description": f"""\
-Retrieve the pseudo-ShEx shape for a specific class IRI. Shapes are computed \
-approximately via sampling and may not be considered fully accurate.
+Retrieve the pseudo-ShEx shape for a specific class IRI. {SHAPE_CAVEAT}
 
 If the shape is not in the pre-built index, it will be computed on the fly \
 by running profiling queries against the endpoint. If on-the-fly computation \
@@ -810,10 +809,9 @@ def call_function(
         raise ValueError(f"Unknown function {fn_name}")
 
 
-SHAPE_NOTE = (
-    "Note: Shapes are computed via sampling "
-    "and in doubt should not be considered fully accurate or complete, "
-    "especially on large knowledge graphs."
+SHAPE_CAVEAT = (
+    "Shapes are approximate (derived from instance data and/or schema "
+    "declarations) and may be incomplete, so treat them as guidance."
 )
 
 
@@ -821,12 +819,10 @@ def format_shapes(shapes: list[ShapeSample], manager: KgManager) -> str:
     from grasp.build.shapes import emit_pseudo_shex
 
     shape_config = manager.shape_config or ShapeConfig()
-    result = format_enumerate(
+    return format_enumerate(
         emit_pseudo_shex(shape.profile, manager, shape_config, dense=True)
         for shape in shapes
     )
-    result += f"\n\n{SHAPE_NOTE}"
-    return result
 
 
 def update_known_from_shape_iris(
@@ -904,13 +900,9 @@ def call_shape_function(
                     collect_iris(sample.profile, manager, shape_config),
                     manager,
                 )
-            return (
-                emit_pseudo_shex(sample.profile, manager, shape_config)
-                + "\n\n"
-                + SHAPE_NOTE
-            )
+            return emit_pseudo_shex(sample.profile, manager, shape_config)
 
-        if shapes.pattern is None:
+        if shapes.instance_pattern is None and shapes.schema_pattern is None:
             return (
                 f"No shape found for '{iri_arg}'. "
                 "It is not in the index and no pattern is available "
@@ -924,9 +916,10 @@ def call_shape_function(
         try:
             profile = compute_shape(
                 expanded_iri,
-                shapes.pattern,
                 manager,
-                shape_config,
+                instance_pattern=shapes.instance_pattern,
+                schema_pattern=shapes.schema_pattern,
+                shape_config=shape_config,
             )
             if known is not None:
                 update_known_from_shape_iris(
@@ -934,8 +927,7 @@ def call_shape_function(
                     collect_iris(profile, manager, shape_config),
                     manager,
                 )
-            result = emit_pseudo_shex(profile, manager, shape_config)
-            return result + "\n\n" + SHAPE_NOTE
+            return emit_pseudo_shex(profile, manager, shape_config)
         except Exception as e:
             return (
                 f"Shape for '{iri_arg}' is not in the index and failed "

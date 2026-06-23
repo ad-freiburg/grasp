@@ -19,6 +19,7 @@ dependencies = [
   # core
   "pydantic>=2.9.0",
   "openai>=2.6.0",
+  "anthropic>=0.107.0",
   # utils
   "requests>=2.32.0",
   "tqdm>=4.65.0",
@@ -28,6 +29,7 @@ dependencies = [
   "search-rdf>=0.5.2",
   "pillow>=11.0.0",
   "ijson>=3.0.0",
+  "cachetools>=7.0.0",
   # server
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",
@@ -39,7 +41,7 @@ dependencies = [
 # scripts/extract_uniprot_examples.py, and scripts/fix_uniprot_examples.py
 data = ["datasets>=3.3.0", "beautifulsoup4>=4.12.0"]
 grisp = ["transformers>=5", "wandb>=0.24.0", "peft>=0.15.0"]
-expert = ["streamlit>=1.50.0"]
+evaluation = ["streamlit>=1.50.0"]
 
 [project.scripts]
 "grasp" = "grasp.cli:main"

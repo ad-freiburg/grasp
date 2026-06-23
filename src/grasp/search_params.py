@@ -23,11 +23,18 @@ class EmbeddingSearchParams(BaseModel):
 
 SearchParams = EmbeddingSearchParams
 
+# Percentile of the random query-query similarity distribution used as the
+# default min-score floor. The score at this percentile is the similarity that
+# only (100 - p)% of random (i.e. unrelated) pairs exceed, so it acts as a noise
+# floor: a genuine match must be more similar than ~90% of random pairs. The
+# median (50) is roughly the average random similarity and barely filters noise.
+DEFAULT_MIN_SCORE_PERCENTILE = 90.0
+
 
 def estimate_embedding_min_score(
     embeddings: np.ndarray,
     num_samples: int = 4096,
-    percentile: float = 50.0,
+    percentile: float = DEFAULT_MIN_SCORE_PERCENTILE,
     margin: float = 0.0,
     seed: int = 22,
 ) -> float | None:
@@ -55,7 +62,7 @@ def estimate_embedding_min_score(
 def build_embedding_search_params(
     embeddings: np.ndarray,
     num_samples: int = 4096,
-    percentile: float = 50.0,
+    percentile: float = DEFAULT_MIN_SCORE_PERCENTILE,
     margin: float = 0.0,
     seed: int = 22,
     rerank: float = 2.0,

@@ -85,30 +85,29 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
     )
 
     # load model(s)
-
-    train_cfg_path = __import__("os").path.join(config.run_directory, "config.yaml")
+    train_cfg_path = os.path.join(config.run_directory, "config.yaml")
     train_cfg = GRISPTrainConfig(**load_config(train_cfg_path))
 
     logger.info(f"Loading model from {config.run_directory}")
-    _model, skeleton_tokenizer = load_model_and_tokenizer(
+    model, skeleton_tokenizer = load_model_and_tokenizer(
         config.run_directory,
         config.device,
         config.dtype,
         logger,
     )
-    skeleton_model = GRISPModel(_model, config.skeleton_disable_adapter)
+    skeleton_model = GRISPModel(model, config.skeleton_disable_adapter)
 
     if train_cfg.type == "skeleton" and config.selection_run is not None:
         logger.info(f"Loading selection model from {config.selection_run}")
-        _sel, selection_tokenizer = load_model_and_tokenizer(
+        sel_model, selection_tokenizer = load_model_and_tokenizer(
             config.selection_run,
             config.device,
             config.dtype,
             logger,
         )
-        selection_model = GRISPModel(_sel, config.selection_disable_adapter)
+        selection_model = GRISPModel(sel_model, config.selection_disable_adapter)
     else:
-        selection_model = GRISPModel(_model, config.selection_disable_adapter)
+        selection_model = GRISPModel(model, config.selection_disable_adapter)
         selection_tokenizer = skeleton_tokenizer
 
     # load KG manager
@@ -118,6 +117,8 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
 
     # load parser
     parser = load_sparql_parser()
+
+    logger.info(f"GRISP config:\n{config.model_dump_json(indent=2)}")
 
     logger.info(
         f"GRISP server ready: kg={config.knowledge_graph.kg}, "

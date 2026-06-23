@@ -26,12 +26,13 @@ from grasp.tasks.base import GraspTask
 from grasp.tasks.feedback import format_feedback, generate_feedback
 from grasp.tasks.sparql_qa.examples import find_examples
 from grasp.utils import (
+    format_enumerate,
     format_error,
-    format_list,
     format_message,
     format_notes,
     format_prefixes,
     format_response,
+    format_section,
 )
 
 
@@ -53,47 +54,52 @@ def system_instructions(
         desc = describe_index_type(index_type)
         index_infos.append(f'"{index_type}": {desc}')
 
-    instructions = task.system_information()
+    blocks = [task.system_information()]
 
     if index_infos:
-        instructions += f"""
-
-Types of knowledge graph indices:
-{format_list(index_infos)}"""
+        blocks.append(
+            format_section(
+                "Knowledge graph index types",
+                "\n".join(index_infos),
+            )
+        )
 
     if managers:
-        instructions += f"""
-
-Available knowledge graphs:
-{format_kgs(managers, kg_notes, example_indices)}"""
+        blocks.append(
+            format_section(
+                "Available knowledge graphs",
+                format_kgs(managers, kg_notes, example_indices),
+            )
+        )
 
     if notes:
-        instructions += f"""
-
-General notes across knowledge graphs:
-{format_notes(notes)}"""
+        blocks.append(
+            format_section(
+                "General notes across knowledge graphs",
+                format_notes(notes, enumerated=True),
+            )
+        )
 
     common_prefixes = get_common_sparql_prefixes()
     if common_prefixes:
-        instructions += f"""
-
-Common SPARQL prefixes:
-{format_prefixes(common_prefixes)}"""
+        blocks.append(
+            format_section(
+                "Common SPARQL prefixes",
+                format_prefixes(common_prefixes, bullet=""),
+            )
+        )
 
     if common_prefixes or any(manager.kg_prefixes for manager in managers):
-        instructions += """
-
-All SPARQL prefixes above can be used implicitly in SPARQL queries \
-and function calls."""
+        blocks.append(
+            "All SPARQL prefixes above can be used implicitly in SPARQL queries "
+            "and function calls."
+        )
 
     rules = general_rules() + task.rules()
     if rules:
-        instructions += f"""
+        blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
-Additional rules to follow:
-{format_list(rules)}"""
-
-    return instructions
+    return "\n\n".join(blocks)
 
 
 def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel]]:

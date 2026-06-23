@@ -44,11 +44,12 @@ class ModelConfig(BaseModel):
     seed: int | None = None
 
     # model parameters
-    model: str = "gpt-5-mini"
+    model: str = "gpt-5.4-mini"
     model_provider: Literal[
         "openai/completions",
         "openai/responses",
-    ] = "openai/completions"
+        "anthropic",
+    ] = "openai/responses"
     model_endpoint: str | None = None
     model_api_key: str | None = Field(default=None, exclude=True)
     model_timeout: float = 120.0
@@ -164,7 +165,7 @@ class NotesConfig(GraspConfig):
     # additional parameters specific to taking notes with GRASP
     max_notes: int = 16
     max_note_length: int = 512
-    num_rounds: int = 5
+    num_rounds: int = 10
 
 
 class NoteTakingConfig(NotesConfig):
@@ -182,7 +183,7 @@ class NotesFromSamplesInput(BaseModel):
 class NotesFromSamplesConfig(NoteTakingConfig):
     # files with task examples
     samples: conlist(NotesFromSamplesInput, min_length=1)  # type: ignore
-    samples_per_round: int = 3
+    samples_per_round: int = 1
     samples_per_file: int | None = None
     ignore_ground_truth: bool = False
 
@@ -190,7 +191,7 @@ class NotesFromSamplesConfig(NoteTakingConfig):
 class NotesFromOutputsConfig(NoteTakingConfig):
     # files with outputs only
     outputs: conlist(str, min_length=1)  # type: ignore
-    outputs_per_round: int = 3
+    outputs_per_round: int = 1
     outputs_per_file: int | None = None
 
 

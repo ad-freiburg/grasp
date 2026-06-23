@@ -11,7 +11,13 @@ from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
 from grasp.sparql.types import Alternative, ObjType
 from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.utils import FunctionCallException, format_list, format_notes
+from grasp.utils import (
+    FunctionCallException,
+    format_enumerate,
+    format_list,
+    format_notes,
+    format_section,
+)
 
 
 class Annotation(BaseModel):
@@ -460,36 +466,42 @@ def feedback_system_message(
     kg_notes: dict[str, list[str]],
     notes: list[str],
 ) -> str:
-    return f"""\
-You are a table annotation assistant providing feedback on the \
-output of a table annotation system for a given input table.
-
-The system has access to the following knowledge graphs:
-{format_kgs(managers, kg_notes)}
-
-The system was provided the following notes across all knowledge graphs:
-{format_notes(notes)}
-
-The system was provided the following rules to follow:
-{format_list(rules()) if rules() else "None"}
-
-Provide your feedback with the give_feedback function."""
+    return "\n\n".join(
+        [
+            "You are a table annotation assistant providing feedback on the "
+            "output of a table annotation system for a given input table.",
+            format_section(
+                "Available knowledge graphs",
+                format_kgs(managers, kg_notes),
+            ),
+            format_section(
+                "General notes across knowledge graphs",
+                format_notes(notes, enumerated=True),
+            ),
+            format_section(
+                "Rules to follow",
+                format_enumerate(rules()) if rules() else "None",
+            ),
+            "Provide your feedback with the give_feedback function.",
+        ]
+    )
 
 
 def feedback_instructions(inputs: list[str], output: dict) -> str:
     assert inputs, "At least one input is required for feedback"
 
+    sections = []
     if len(inputs) > 1:
-        prompt = (
-            "Previous inputs:\n" + "\n\n".join(i.strip() for i in inputs[:-1]) + "\n\n"
+        sections.append(
+            format_section(
+                "Previous inputs",
+                "\n\n".join(i.strip() for i in inputs[:-1]),
+            )
         )
 
-    else:
-        prompt = ""
-
-    prompt += f"Input:\n{inputs[-1].strip()}"
-    prompt += f"\n\nAnnotations:\n{output['formatted']}"
-    return prompt
+    sections.append(format_section("Input", inputs[-1].strip()))
+    sections.append(format_section("Annotations", output["formatted"]))
+    return "\n\n".join(sections)
 
 
 class CeaTask(GraspTask, FeedbackTask):

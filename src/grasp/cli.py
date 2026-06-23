@@ -1111,16 +1111,22 @@ def _shapes_setup_grasp(args: argparse.Namespace) -> None:
     logger.info(f"Saved setup trace to {stamped} (latest: {trace_path})")
 
     output = result.get("output")
-    if output is None or output.get("pattern") is None:
-        logger.error("Setup did not produce a pattern")
+    if output is None or (
+        output.get("instance_pattern") is None and output.get("schema_pattern") is None
+    ):
+        logger.error("Setup did not produce an instance or schema pattern")
         return
 
     setup_path = os.path.join(shapes_dir, "setup.json")
     stamped = dump_latest(
         setup_path,
-        {"pattern": output["pattern"], "description": output.get("description")},
+        {
+            "instance_pattern": output.get("instance_pattern"),
+            "schema_pattern": output.get("schema_pattern"),
+            "description": output.get("description"),
+        },
     )
-    logger.info(f"Saved pattern to {stamped} (latest: {setup_path})")
+    logger.info(f"Saved patterns to {stamped} (latest: {setup_path})")
 
 
 def shapes_build_grasp(args: argparse.Namespace) -> None:
@@ -1148,14 +1154,28 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
         return
 
     setup_data = load_json(setup_path)
-    pattern = setup_data.get("pattern")
-    if not pattern:
-        logger.error("setup.json does not contain a pattern")
+    instance_pattern = setup_data.get("instance_pattern")
+    schema_pattern = setup_data.get("schema_pattern")
+    if not instance_pattern and not schema_pattern:
+        logger.error("setup.json does not contain an instance or schema pattern")
         return
 
     shapes_dir = os.path.join(kg_dir, "shapes")
     index_dir = os.path.join(shapes_dir, "index")
     samples_file = os.path.join(index_dir, "samples.jsonl")
+
+    # persist the patterns as sidecars so the manager can load them (and compute
+    # shapes on the fly) without the embedding index.
+    os.makedirs(shapes_dir, exist_ok=True)
+    for name, value in [
+        ("instance_pattern.sparql", instance_pattern),
+        ("schema_pattern.sparql", schema_pattern),
+    ]:
+        path = os.path.join(shapes_dir, name)
+        if value:
+            dump_text(value, path)
+        elif os.path.exists(path):
+            os.remove(path)
 
     total_classes: int | None = None
     if os.path.exists(samples_file) and not args.overwrite:
@@ -1166,9 +1186,9 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
             total_classes = load_json(info_path).get("total_classes")
     else:
         samples, total_classes = build_shapes(
-            pattern,
-            shapes_dir,
             manager,
+            instance_pattern=instance_pattern,
+            schema_pattern=schema_pattern,
             shape_config=manager.shape_config or ShapeConfig(),
             max_classes=args.max_classes,
             log_level=args.log_level,

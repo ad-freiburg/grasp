@@ -593,13 +593,15 @@ evaluation app for the SPARQL QA task.
 
 ## Supported models
 
-GRASP uses the OpenAI Python SDK and supports any OpenAI-compatible API endpoint.
-The model name and provider are set separately in the config file (or via env variables):
+GRASP supports OpenAI models (via the Responses or Chat Completions API), Anthropic
+models (via the Messages API), and any OpenAI-compatible API endpoint (vLLM, Ollama,
+SGLang, Gemini, etc.). The model name and provider are set separately in the config
+file (or via env variables):
 
 - `model`: the model name as expected by the API (e.g. `gpt-5.4-mini`, `Qwen/Qwen3.5-27B`)
-- `model_provider`: `openai/responses` (default, uses the Responses API) or `openai/completions` (uses the Chat Completions API)
+- `model_provider`: `openai/responses` (default, uses the Responses API), `openai/completions` (uses the Chat Completions API), or `anthropic` (uses the Anthropic Messages API)
 - `model_endpoint`: base URL of the API endpoint (defaults to the official OpenAI endpoint)
-- `model_api_key`: API key (defaults to `OPENAI_API_KEY` env variable)
+- `model_api_key`: API key (defaults to `None`; if unset, the key is read from the env variable designated by the provider's SDK, e.g. `OPENAI_API_KEY` for the OpenAI providers and `ANTHROPIC_API_KEY` for the Anthropic provider)
 
 ### OpenAI
 
@@ -611,6 +613,20 @@ The model name and provider are set separately in the config file (or via env va
 - `o4-mini`
 - `gpt-5.4-mini`
 - `gpt-5.4`
+
+Some models do not support the Responses API and require `model_provider` to be
+set to `openai/completions` to use the Chat Completions API instead (e.g.
+`gpt-4.1`).
+
+### Anthropic
+
+1. Set `model_provider` to `anthropic`
+2. Set `ANTHROPIC_API_KEY` env variable (or `model_api_key` in the config file)
+3. Set `model` in the config file or with `MODEL` env variable, e.g.:
+
+- `claude-opus-4-8`
+- `claude-sonnet-4-6`
+- `claude-haiku-4-5`
 
 ### OpenAI-compatible endpoints
 

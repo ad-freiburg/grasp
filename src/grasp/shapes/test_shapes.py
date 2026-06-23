@@ -1,7 +1,9 @@
 from unittest.mock import Mock
 
 from grasp.build.shapes import (
+    ClassMaps,
     ClassProfile,
+    PropertyFreq,
     PropertyProfile,
     assemble_profile,
     cardinality_tag,
@@ -90,6 +92,18 @@ def literal(value: str, datatype: str | None = None) -> dict:
     return d
 
 
+def make_maps(
+    freq: dict[str, dict] | None = None,
+    literals: dict[str, dict[str, int]] | None = None,
+    ranges: dict[str, dict[str, int]] | None = None,
+) -> ClassMaps:
+    return ClassMaps(
+        freq={p: PropertyFreq(**f) for p, f in (freq or {}).items()},
+        literals=literals or {},
+        ranges=ranges or {},
+    )
+
+
 class TestCardinality:
     def test_mandatory_single(self):
         assert cardinality_tag(0.95, 1.05) == ""
@@ -117,9 +131,7 @@ class TestAssembleProfile:
 
         profile = assemble_profile(
             "http://ex.org/Human",
-            freq_map,
-            lit_counts,
-            range_counts,
+            make_maps(freq_map, lit_counts, range_counts),
             total_entities=1000,
             shape_config=shape_config,
             manager=manager,
@@ -143,9 +155,7 @@ class TestAssembleProfile:
 
         profile = assemble_profile(
             "http://ex.org/C",
-            freq_map,
-            {},
-            {},
+            make_maps(freq_map),
             total_entities=1000,
             shape_config=shape_config,
             manager=manager,
@@ -169,9 +179,7 @@ class TestAssembleProfile:
 
         profile = assemble_profile(
             "http://ex.org/C",
-            freq_map,
-            {},
-            {},
+            make_maps(freq_map),
             total_entities=100,
             shape_config=shape_config,
             manager=manager,
@@ -195,9 +203,7 @@ class TestAssembleProfile:
 
         profile = assemble_profile(
             "http://ex.org/C",
-            freq_map,
-            {},
-            {},
+            make_maps(freq_map),
             total_entities=100,
             shape_config=shape_config,
             manager=manager,
@@ -211,9 +217,7 @@ class TestAssembleProfile:
         shape_config = ShapeConfig()
         profile = assemble_profile(
             "http://ex.org/X",
-            {},
-            {},
-            {},
+            make_maps(),
             total_entities=100,
             shape_config=shape_config,
             manager=manager,
@@ -235,9 +239,7 @@ class TestMixedTargets:
 
         profile = assemble_profile(
             "http://ex.org/Book",
-            freq_map,
-            lit_counts,
-            range_counts,
+            make_maps(freq_map, lit_counts, range_counts),
             total_entities=100,
             shape_config=shape_config,
             manager=manager,
@@ -268,9 +270,7 @@ class TestMixedTargets:
 
         profile = assemble_profile(
             "http://ex.org/C",
-            freq_map,
-            lit_counts,
-            range_counts,
+            make_maps(freq_map, lit_counts, range_counts),
             total_entities=1000,
             shape_config=shape_config,
             manager=manager,
@@ -337,7 +337,10 @@ class TestComputeShape:
 
         shape_config = ShapeConfig()
         profile = compute_shape(
-            "http://ex.org/Human", "?instance wdt:P31 {CLASS} .", manager, shape_config
+            "http://ex.org/Human",
+            manager,
+            instance_pattern="?instance wdt:P31 {CLASS} .",
+            shape_config=shape_config,
         )
 
         assert emit_pseudo_shex(profile, manager, shape_config) == (
@@ -351,10 +354,129 @@ class TestComputeShape:
         manager.execute_sparql.side_effect = Exception("timeout")
 
         try:
-            compute_shape("http://ex.org/X", "?instance a {CLASS} .", manager)
+            compute_shape(
+                "http://ex.org/X", manager, instance_pattern="?instance a {CLASS} ."
+            )
             assert False, "Expected an exception"
         except RuntimeError as e:
             assert "timeout" in str(e)
+
+    def test_schema_pattern_classifies_targets(self):
+        # mirrors EDAS: a single (?property, ?target) query, no instances/counts.
+        manager = make_manager()
+        xsd_string = "http://www.w3.org/2001/XMLSchema#string"
+        schema_result = select(
+            ["property", "target"],
+            [
+                {
+                    "property": uri("http://edas/#hasFirstName"),
+                    "target": uri(xsd_string),
+                },
+                {
+                    "property": uri("http://edas/#attendeeAt"),
+                    "target": uri("http://edas/#ConferenceEvent"),
+                },
+                {"property": uri("http://edas/#noRange")},  # optional target unbound
+            ],
+        )
+        manager.execute_sparql.side_effect = [schema_result]
+
+        shape_config = ShapeConfig()
+        profile = compute_shape(
+            "http://edas/#Person",
+            manager,
+            schema_pattern=(
+                "?property rdfs:domain {CLASS} . "
+                "OPTIONAL { ?property rdfs:range ?target }"
+            ),
+            shape_config=shape_config,
+        )
+
+        # one SELECT DISTINCT ?property ?target query, no instance/total queries
+        assert manager.execute_sparql.call_count == 1
+        assert profile.total_entities == 0  # no cardinality tags
+
+        out = emit_pseudo_shex(profile, manager, shape_config)
+        # xsd:* range -> literal datatype target; class IRI -> class target;
+        # missing range -> bare IRI; total_entities == 0 so no cardinality tags.
+        assert f"http://edas/#hasFirstName {xsd_string} ;" in out
+        assert "http://edas/#attendeeAt http://edas/#ConferenceEvent ;" in out
+        assert "http://edas/#noRange IRI ;" in out
+        assert "?" not in out and "+" not in out and "*" not in out
+
+    def test_merged_keeps_schema_only_props_but_filters_rare_instance_props(self):
+        # both patterns set: instance + schema bindings merge. A rare *instance*
+        # property (low coverage) is filtered, but a pure schema-declared property
+        # with no instance usage (entity_count == 0) is kept.
+        manager = make_manager()
+        freq_result = select(
+            ["p", "tripleCount", "entityCount"],
+            [
+                {
+                    "p": uri("http://ex.org/name"),
+                    "tripleCount": literal("800"),
+                    "entityCount": literal("800"),
+                },
+                {  # coverage 5/1000 = 0.005 < min_property_share (0.01) -> filtered
+                    "p": uri("http://ex.org/rare"),
+                    "tripleCount": literal("5"),
+                    "entityCount": literal("5"),
+                },
+            ],
+        )
+        lit_result = select(
+            ["p", "datatype", "count"],
+            [
+                {
+                    "p": uri("http://ex.org/name"),
+                    "datatype": uri("http://www.w3.org/2001/XMLSchema#string"),
+                    "count": literal("800"),
+                }
+            ],
+        )
+        range_result = select(
+            ["p", "targetClass", "count"],
+            [
+                {
+                    "p": uri("http://ex.org/rare"),
+                    "targetClass": uri("http://ex.org/Thing"),
+                    "count": literal("5"),
+                }
+            ],
+        )
+        total_result = select(["totalEntities"], [{"totalEntities": literal("1000")}])
+        schema_result = select(
+            ["property", "target"],
+            [
+                {
+                    "property": uri("http://ex.org/schemaOnly"),
+                    "target": uri("http://ex.org/Target"),
+                }
+            ],
+        )
+        manager.execute_sparql.side_effect = [
+            freq_result,
+            lit_result,
+            range_result,
+            total_result,
+            schema_result,
+        ]
+
+        shape_config = ShapeConfig()
+        profile = compute_shape(
+            "http://ex.org/C",
+            manager,
+            instance_pattern="?instance a {CLASS} .",
+            schema_pattern="?property rdfs:domain {CLASS} . "
+            "OPTIONAL { ?property rdfs:range ?target }",
+            shape_config=shape_config,
+        )
+
+        assert manager.execute_sparql.call_count == 5
+        out = emit_pseudo_shex(profile, manager, shape_config)
+        assert "http://ex.org/name" in out  # high coverage instance prop kept
+        assert "http://ex.org/schemaOnly" in out  # schema-only prop kept (no usage)
+        assert "http://ex.org/rare" not in out  # rare instance prop filtered
 
 
 def _make_profile(with_target_iris: bool = True) -> ClassProfile:
@@ -441,9 +563,7 @@ class TestWikidataVariantGrouping:
         }
         profile = assemble_profile(
             "http://ex.org/Human",
-            freq_map,
-            {},
-            {},
+            make_maps(freq_map),
             total_entities=100,
             shape_config=ShapeConfig(min_property_share=0.0),
             manager=manager,
@@ -452,12 +572,12 @@ class TestWikidataVariantGrouping:
         assert len(profile.properties) == 1
         prop = profile.properties[0]
         assert prop.iri == "http://www.wikidata.org/entity/P31"
-        assert prop.variants == ["wdt", "p", "ps"]
+        assert prop.variants == ["p", "ps", "wdt"]
         assert prop.triple_count == 300
         assert prop.entity_count == 300
 
         shex = emit_pseudo_shex(profile, manager, ShapeConfig(min_property_share=0.0))
-        assert "as wdt/p/ps" in shex
+        assert "as p/ps/wdt" in shex
         assert shex.count("P31") == 1
 
     def test_collect_iris_emits_all_variants(self):
@@ -474,9 +594,7 @@ class TestWikidataVariantGrouping:
         }
         profile = assemble_profile(
             "http://ex.org/Human",
-            freq_map,
-            {},
-            {},
+            make_maps(freq_map),
             total_entities=10,
             shape_config=ShapeConfig(min_property_share=0.0),
             manager=manager,

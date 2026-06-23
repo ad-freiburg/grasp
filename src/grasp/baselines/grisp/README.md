@@ -184,3 +184,18 @@ grasp evaluate f1 wikidata \
   data/benchmark/wikidata/wwq/test.jsonl \
   data/grisp/runs/my-wikidata-wwq-model/predictions.jsonl
 ```
+
+## Citation
+
+If you use GRISP, please cite our paper:
+
+```bibtex
+@article{DBLP:journals/corr/abs-2604-21133,
+  author       = {Sebastian Walter and
+                  Hannah Bast},
+  title        = {{GRISP:} Guided Recurrent {IRI} Selection over {SPARQL} Skeletons},
+  journal      = {CoRR},
+  volume       = {abs/2604.21133},
+  year         = {2026}
+}
+```

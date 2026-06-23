@@ -8,7 +8,7 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 import yaml
-from peft import LoraConfig, PeftModel, get_peft_model
+from peft import AutoPeftModelForCausalLM, LoraConfig, PeftModel, get_peft_model
 from pydantic import BaseModel
 from torch.utils.data import ConcatDataset, Dataset, Sampler
 from transformers import (
@@ -35,6 +35,7 @@ from grasp.baselines.grisp.data import (
 )
 from grasp.baselines.grisp.utils import (
     SeededRandomSampler,
+    find_best_checkpoint,
     find_latest_checkpoint,
     set_chat_template,
 )
@@ -105,15 +106,69 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def load_from_run_directory(
+    directory: str,
+) -> tuple[PreTrainedModel | PeftModel, PreTrainedTokenizerBase, Lora | None]:
+    # warm-start from a previous GRISP run dir, mirroring run.py: pick its best
+    # checkpoint and load base+adapter (if it was LoRA) or the full model.
+    checkpoint = find_best_checkpoint(directory)
+    assert checkpoint is not None, f"No checkpoint found in run directory {directory}"
+
+    train_cfg = GRISPTrainConfig(**load_config(os.path.join(directory, "config.yaml")))
+    if train_cfg.lora is not None:
+        model = AutoPeftModelForCausalLM.from_pretrained(
+            checkpoint,
+            dtype="auto",
+            is_trainable=True,
+            attn_implementation="eager",
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            checkpoint,
+            dtype="auto",
+            attn_implementation="eager",
+        )
+
+    tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)  # type: ignore
+    return model, tokenizer, train_cfg.lora
+
+
 def load_model_and_tokenizer(
     config: GRISPTrainConfig,
 ) -> tuple[PreTrainedModel | PeftModel, PreTrainedTokenizerBase]:
-    model = AutoModelForCausalLM.from_pretrained(config.model, dtype="auto")
-    tokenizer = AutoTokenizer.from_pretrained(config.model)
+    logger = get_logger("GRISP TRAIN")
+    is_run_dir = os.path.isdir(config.model) and os.path.exists(
+        os.path.join(config.model, "config.yaml")
+    )
+    loaded_lora: Lora | None = None
+    if is_run_dir:
+        model, tokenizer, loaded_lora = load_from_run_directory(config.model)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            config.model,
+            dtype="auto",
+            attn_implementation="eager",
+        )
+        tokenizer = AutoTokenizer.from_pretrained(config.model)
+
     if config.overwrite_chat_template:
         tokenizer = set_chat_template(tokenizer)
 
-    if config.lora is not None:
+    if isinstance(model, PeftModel):
+        # warm-started from a previous LoRA run: continue training the loaded
+        # adapter as is. Its structure is fixed, so adopt the loaded run's lora
+        # config (comparing against the saved config, not the adapter, since e.g.
+        # "all-linear" gets expanded into a concrete module list on save).
+        # Adopting it also keeps the saved run marked as LoRA, which run.py keys
+        # its loading on.
+        if config.lora is not None and config.lora != loaded_lora:
+            logger.warning(
+                "Specified `lora` differs from the loaded adapter; continuing with "
+                "the loaded run's lora config instead.\n"
+                f"  loaded:    {loaded_lora}\n  specified: {config.lora}"
+            )
+        config.lora = loaded_lora
+    elif config.lora is not None:
         peft_config = LoraConfig(
             task_type="CAUSAL_LM",
             r=config.lora.r,
@@ -253,6 +308,9 @@ class GRISPTrainer(Trainer):
     def __init__(self, *args, epochs_trained: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
         self.epochs_trained = epochs_trained
+        # compute_loss normalizes per micro-batch, so let Trainer re-apply its
+        # /gradient_accumulation_steps division (else loss/grads scale with it).
+        self.model_accepts_loss_kwargs = False
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:  # type: ignore
         if dataset is None:
@@ -365,8 +423,27 @@ def main(args: argparse.Namespace) -> None:
     with open(os.path.join(args.output_dir, "config.yaml"), "w") as f:
         yaml.safe_dump(config.model_dump(), f)
 
-    batches_per_epoch = math.ceil(len(train_data) / config.batch_size)  # type: ignore
-    steps_per_epoch = math.ceil(batches_per_epoch / config.gradient_accumulation_steps)
+    # config.batch_size is the global (effective) batch size across data-parallel
+    # replicas and gradient-accumulation micro-batches. Derive the per-device
+    # micro-batch size HF expects, requiring clean divisibility.
+    world_size = max(1, torch.cuda.device_count())
+    accum = config.gradient_accumulation_steps
+    denom = world_size * accum
+    if config.batch_size % denom != 0:
+        raise ValueError(
+            f"Global batch_size ({config.batch_size}) must be divisible by "
+            f"world_size ({world_size}) * gradient_accumulation_steps ({accum}) = {denom}"
+        )
+    per_device_batch_size = config.batch_size // denom
+    # samples per forward across all replicas (one accumulation micro-batch)
+    dataloader_batch_size = per_device_batch_size * world_size
+    logger.info(
+        f"Global batch size {config.batch_size} = per_device {per_device_batch_size} "
+        f"x world_size {world_size} x grad_accum {accum}"
+    )
+
+    batches_per_epoch = math.ceil(len(train_data) / dataloader_batch_size)  # type: ignore
+    steps_per_epoch = math.ceil(batches_per_epoch / accum)
     logging_steps = max(1, steps_per_epoch // 100)  # log 100 times per epoch
 
     # eval once per epoch, but at least 10 times during training
@@ -396,7 +473,7 @@ def main(args: argparse.Namespace) -> None:
                 train_data,
                 seed=config.seed,
                 epochs_trained=epochs_trained,
-                batch_size=config.batch_size,
+                batch_size=dataloader_batch_size,
                 batches_in_current_epoch=batches_in_current_epoch,
             )
 
@@ -406,14 +483,16 @@ def main(args: argparse.Namespace) -> None:
         do_eval=True,
         eval_strategy="steps",
         eval_steps=eval_steps,
+        # only eval_loss is used; skip keeping logits to cut eval peak memory
+        prediction_loss_only=True,
         save_strategy="steps",
         save_total_limit=1,
         save_steps=eval_steps,
         load_best_model_at_end=True,
         logging_strategy="steps",
         logging_steps=logging_steps,
-        per_device_train_batch_size=config.batch_size,
-        per_device_eval_batch_size=config.batch_size,
+        per_device_train_batch_size=per_device_batch_size,
+        per_device_eval_batch_size=per_device_batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         learning_rate=config.lr,
         lr_scheduler_type="cosine",

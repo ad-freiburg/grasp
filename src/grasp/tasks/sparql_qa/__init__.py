@@ -21,7 +21,7 @@ from grasp.tasks.sparql_qa.examples import (
     functions as example_functions,
 )
 from grasp.tasks.utils import prepare_sparql_result
-from grasp.utils import format_list, format_notes
+from grasp.utils import format_enumerate, format_notes, format_section
 
 
 def system_information() -> str:
@@ -433,19 +433,7 @@ def feedback_system_message(
     kg_notes: dict[str, list[str]],
     notes: list[str],
 ) -> str:
-    return f"""\
-You are a question answering assistant providing feedback on the \
-output of a SPARQL-based question answering system for a given user question.
-
-The following knowledge graphs are available:
-{format_kgs(managers, kg_notes)}
-
-The following general notes are available:
-{format_notes(notes)}
-
-The following task specific rules should be followed:
-{format_list(rules()) if rules() else "None"}
-
+    cases = """\
 There are two possible cases:
 
 1) The system was able to find an answer
@@ -459,40 +447,60 @@ You are given the system's explanation for why it failed to find an answer. \
 Optionally, you are provided with the system's best attempt at a SPARQL query \
 so far including the same additional information as in case 1."""
 
+    return "\n\n".join(
+        [
+            "You are a question answering assistant providing feedback on the "
+            "output of a SPARQL-based question answering system for a given user "
+            "question.",
+            format_section(
+                "Available knowledge graphs",
+                format_kgs(managers, kg_notes),
+            ),
+            format_section(
+                "General notes across knowledge graphs",
+                format_notes(notes, enumerated=True),
+            ),
+            format_section(
+                "Rules to follow",
+                format_enumerate(rules()) if rules() else "None",
+            ),
+            cases,
+        ]
+    )
+
 
 def feedback_instructions(questions: list[str], output: dict) -> str:
     assert questions, "At least one question is required for feedback"
 
+    sections = []
     if len(questions) > 1:
-        prompt = (
-            "Previous questions:\n"
-            + "\n\n".join(q.strip() for q in questions[:-1])
-            + "\n\n"
+        sections.append(
+            format_section(
+                "Previous questions",
+                "\n\n".join(q.strip() for q in questions[:-1]),
+            )
         )
 
-    else:
-        prompt = ""
-
-    prompt += f"Question:\n{questions[-1].strip()}"
+    sections.append(format_section("Question", questions[-1].strip()))
 
     if output["type"] == "answer":
         # terminated with answer call
-        prompt += f"""
-
-1) The system was able to find an answer
-
-Answer:
-{output["formatted"]}"""
+        sections.append(
+            format_section(
+                "The system was able to find an answer",
+                f"Answer:\n{output['formatted']}",
+            )
+        )
 
     else:
-        prompt += f"""
+        sections.append(
+            format_section(
+                "The system failed to find an answer",
+                f"Explanation:\n{output['formatted']}",
+            )
+        )
 
-2) The system failed to find an answer
-
-Explanation:
-{output["formatted"]}"""
-
-    return prompt
+    return "\n\n".join(sections)
 
 
 class SparqlQaTask(GraspTask, FeedbackTask):

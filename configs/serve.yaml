@@ -1,15 +1,22 @@
 model: env(MODEL:gpt-5.4-mini)
 model_provider: env(MODEL_PROVIDER:openai/responses)
 model_endpoint: env(MODEL_ENDPOINT:null)
-model_api_key: env(OPENAI_API_KEY)
+model_api_key: env(MODEL_API_KEY:null)
 model_timeout: env(MODEL_TIMEOUT:120)
 model_kwargs:
+  # for OpenAI models
   reasoning:
     effort: env(REASONING_EFFORT:null)
     summary: env(REASONING_SUMMARY:null)
+  text:
+    verbosity: env(VERBOSITY:low)
+  # for Anthropic models
+  # thinking:
+  #   type: enabled
+  #   budget_tokens: env(THINKING_BUDGET:4096)
 
 max_completion_tokens: env(MAX_TOKENS:16384)
-tool_choice: env(TOOL_CHOICE:required)
+tool_choice: env(TOOL_CHOICE:auto)
 
 task_kwargs:
   cea:

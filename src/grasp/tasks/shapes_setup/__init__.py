@@ -11,32 +11,52 @@ from grasp.tasks.functions import find_frequent, find_frequent_function_definiti
 from grasp.utils import FunctionCallException
 
 REFERENCE_SETUP = {
-    "pattern": "?instance a {CLASS}",
-    "description": "All standard RDF classes via the rdf:type (a) property",
+    "instance_pattern": "?instance a {CLASS}",
+    "schema_pattern": (
+        "?property rdfs:domain {CLASS} .\nOPTIONAL { ?property rdfs:range ?target }"
+    ),
+    "description": "All classes derived via rdf:type instances and rdfs:domain properties "
+    "with rdfs:range targets (if any)",
 }
 
 
 class ShapesSetupState(BaseModel):
-    pattern: str | None = None
+    instance_pattern: str | None = None
+    schema_pattern: str | None = None
     description: str | None = None
 
 
-def validate_pattern_format(pattern: str, parser: LR1Parser) -> None:
-    if "{CLASS}" not in pattern:
-        raise FunctionCallException(
-            "Pattern must contain '{CLASS}' as the class placeholder."
-        )
+def extract_variables(pattern: str, parser: LR1Parser) -> set[str]:
     class_pattern = pattern.replace("{CLASS}", "?class")
     test_query = f"SELECT DISTINCT ?class WHERE {{\n  {class_pattern}\n}} LIMIT 1"
     parse, _ = parse_string(test_query, parser)
-    variables = {
+    return {
         child["value"]
         for var in find_all(parse, "Var")
         for child in var.get("children", [])
     }
-    if "?instance" not in variables:
+
+
+def validate_instance_pattern_format(pattern: str, parser: LR1Parser) -> None:
+    if "{CLASS}" not in pattern:
         raise FunctionCallException(
-            "Pattern must contain '?instance' as the instance variable."
+            "Pattern must contain '{CLASS}' as the class placeholder."
+        )
+    if "?instance" not in extract_variables(pattern, parser):
+        raise FunctionCallException(
+            "Instance pattern must contain '?instance' as the instance variable."
+        )
+
+
+def validate_schema_pattern_format(pattern: str, parser: LR1Parser) -> None:
+    if "{CLASS}" not in pattern:
+        raise FunctionCallException(
+            "Pattern must contain '{CLASS}' as the class placeholder."
+        )
+    if "?property" not in extract_variables(pattern, parser):
+        raise FunctionCallException(
+            "Schema pattern must bind '?property' as the property variable "
+            "(and optionally '?target' for the property's target)."
         )
 
 
@@ -48,42 +68,56 @@ class ShapesSetupTask(GraspTask):
         return f"""\
 You are a knowledge graph setup assistant. Your task is to \
 explore the "{manager.kg}" knowledge graph and come up with or improve \
-the setup - a SPARQL graph pattern relating instances to classes and a \
-description - of the shape index.
+the setup - an instance pattern, a schema pattern, and a description - \
+of the shapes index.
 
-The SPARQL graph pattern should relate an instance variable ?instance to \
-a class placeholder {{CLASS}}, using suitable properties and SPARQL constructs. \
-The pattern will then be used in two ways:
-1. To determine all classes in the knowledge graph by replacing {{CLASS}} with \
-a ?class variable and embedding it in a SPARQL query of the form "SELECT DISTINCT \
-?class WHERE {{ <pattern> }}".
-2. To determine the shape of a class by replacing {{CLASS}} with a \
-specific IRI and embedding it in various profiling queries.
+The two patterns are complementary and used to automatically derive class shapes \
+from the knowledge graph. A knowledge graph may need either one or both; \
+set the one(s) that apply and leave the other null. \
+The shapes index will be built from the derived class shapes, and allows \
+to retrieve them via semantic search or exact class IRI lookups for various \
+purposes in downstream tasks.
 
-The description should be a concise summary of the classes captured \
-by the pattern.
+The instance pattern links instances to their classes by relating a ?instance \
+variable to a {{CLASS}} placeholder, e.g. "?instance a {{CLASS}}". \
+Use it when the graph contains instances: the shape of a \
+class is then profiled empirically by walking the triples of its instances. Classes \
+are discovered by replacing {{CLASS}} with ?class.
+
+The schema pattern links properties to their classes by relating a ?property \
+variable (required) and, optionally, a ?target variable to a {{CLASS}} placeholder \
+directly from the schema/ontology - no instances needed. Use it for ontology-only \
+knowledge graphs (or to add curated structure). ?property is a property of the class \
+and ?target is its target type (a class IRI or a datatype IRI such as xsd:string). \
+Examples:
+- RDFS: "?property rdfs:domain {{CLASS}} .\nOPTIONAL {{ ?property rdfs:range ?target }}"
+- Wikidata property constraints: "?prop p:P2302 ?sc . ?sc ps:P2302 wd:Q21503250 ; \
+pq:P2308 {{CLASS}} . ?prop wikibase:directClaim ?property . OPTIONAL {{ ?prop p:P2302 \
+?vc . ?vc ps:P2302 wd:Q21510865 ; pq:P2308 ?target . }}"
+
+When both patterns are set, their per-class properties/targets are merged.
+
+The description should be a concise summary of what the shapes index is \
+about and what classes it contains.
 
 You should follow a step-by-step approach:
-1. Explore the knowledge graph using provided functions to understand how \
-instances and classes are modeled.
-2. Come up with the class graph pattern and validate it against the knowledge graph by \
-executing SPARQL queries. The pattern can contain any SPARQL graph pattern constructs needed \
-to capture all relevant classes. For example, if classes are modeled via more than one property \
-you should use a UNION pattern, or if classes are modeled via more than one hop you should use \
-property paths or multiple triple patterns.
-3. Set the pattern and get the shape of a few exemplary classes \
-to verify that it works as intended. If not, go back to step 1 or 2 and adjust the pattern. \
-Note that you can also set the pattern to null if the knowledge graph does not \
-contain any meaningful instance-class relationships.
-4. Once you are satisfied with the pattern, write the corresponding description \
-and stop.
+1. Explore the knowledge graph to understand how instances and/or classes and their \
+properties are modeled.
+2. Come up with the applicable pattern(s) and validate them against the knowledge \
+graph by executing SPARQL queries. A pattern can contain any SPARQL graph pattern \
+constructs needed (UNION, property paths, multiple triples, OPTIONAL, etc.).
+3. Set the pattern(s) and get the shape of a few exemplary classes to verify they \
+work as intended. If not, go back and adjust. You can set a pattern to null to clear it.
+4. Once satisfied, write the corresponding description and stop.
 
-Below is a reference setup you can use as a starting point if \
-no shape setup is available yet. It is generic and thus \
+Below is a reference setup you can use as a starting point. It is generic and thus \
 may not be optimal for the knowledge graph at hand.
 
-Reference graph pattern:
-{REFERENCE_SETUP["pattern"]}
+Reference instance pattern:
+{REFERENCE_SETUP["instance_pattern"]}
+
+Reference schema pattern:
+{REFERENCE_SETUP["schema_pattern"]}
 
 Reference description:
 {REFERENCE_SETUP["description"]}"""
@@ -91,16 +125,18 @@ Reference description:
     def rules(self) -> list[str]:
         return [
             "If the user provides additional notes about the desired setup, make sure to follow them.",
-            "The pattern should be single-hop; multi-hop instance-class relations may not yield sensible automatic shape computations.",
+            "Set at least one of the instance pattern or the schema pattern; set both only when the knowledge graph meaningfully supports both.",
+            "The instance pattern should be single-hop; multi-hop instance-class relations may not yield sensible automatic shape computations.",
         ]
 
     def function_definitions(self) -> list[dict]:
         manager = self.managers[0]
         kgs = [m.kg for m in self.managers]
-        fns: list[dict] = [find_frequent_function_definition(kgs, self.config.list_k),
+        fns: list[dict] = [
+            find_frequent_function_definition(kgs, self.config.list_k),
             {
                 "name": "show_setup",
-                "description": "Show the current pattern and description for the shape index.",
+                "description": "Show the current patterns and description for the shape index.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -110,14 +146,30 @@ Reference description:
                 "strict": True,
             },
             {
-                "name": "set_pattern",
-                "description": "Set or clear the shape index' SPARQL graph pattern.",
+                "name": "set_instance_pattern",
+                "description": "Set or clear the shape index' instance pattern.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "pattern": {
                             "type": ["string", "null"],
-                            "description": "The SPARQL graph pattern, or null to clear / unset the current pattern.",
+                            "description": "The SPARQL graph pattern binding ?instance for {CLASS}, or null to clear it.",
+                        },
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+            {
+                "name": "set_schema_pattern",
+                "description": "Set or clear the shape index' schema pattern.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": ["string", "null"],
+                            "description": "The SPARQL graph pattern binding ?property (and optionally ?target) for {CLASS}, or null to clear it.",
                         },
                     },
                     "required": ["pattern"],
@@ -157,8 +209,8 @@ Reference description:
                     "name": "get_shape",
                     "description": (
                         "Retrieve the pseudo-ShEx shape for a specific class by "
-                        "running profiling queries using the current pattern. "
-                        "Use this to test the pattern after setting it."
+                        "running profiling queries using the current pattern(s). "
+                        "Use this to test the patterns after setting them."
                     ),
                     "parameters": {
                         "type": "object",
@@ -210,21 +262,28 @@ Reference description:
         elif fn_name == "show_setup":
             return format_setup(self.state)
 
-        elif fn_name == "set_pattern":
+        elif fn_name == "set_instance_pattern":
             pattern = fn_args["pattern"]
             if pattern is not None:
-                validate_pattern_format(pattern, manager.sparql_parser)
-            self.state.pattern = pattern
-            if pattern is None:
-                manager.shapes = None
-            elif manager.shapes is None or manager.shapes.pattern != pattern:
-                # Pattern changed or newly set — existing index is no longer valid.
-                manager.shapes = Shapes(pattern=pattern)
-            # else: same pattern, keep existing shapes (index intact).
+                validate_instance_pattern_format(pattern, manager.sparql_parser)
+            self.state.instance_pattern = pattern
+            self.apply_patterns(manager)
             return (
-                "Pattern updated. Use get_shape to test it live."
+                "Instance pattern updated. Use get_shape to test it live."
                 if pattern
-                else "Pattern cleared."
+                else "Instance pattern cleared."
+            )
+
+        elif fn_name == "set_schema_pattern":
+            pattern = fn_args["pattern"]
+            if pattern is not None:
+                validate_schema_pattern_format(pattern, manager.sparql_parser)
+            self.state.schema_pattern = pattern
+            self.apply_patterns(manager)
+            return (
+                "Schema pattern updated. Use get_shape to test it live."
+                if pattern
+                else "Schema pattern cleared."
             )
 
         elif fn_name == "set_description":
@@ -235,6 +294,25 @@ Reference description:
             return "Stopping"
 
         raise FunctionCallException(f"Unknown function {fn_name}")
+
+    def apply_patterns(self, manager) -> None:
+        assert isinstance(self.state, ShapesSetupState)
+        inst = self.state.instance_pattern
+        sch = self.state.schema_pattern
+        if inst is None and sch is None:
+            manager.shapes = None
+            return
+        existing = manager.shapes
+        if (
+            existing is not None
+            and existing.instance_pattern == inst
+            and existing.schema_pattern == sch
+        ):
+            # patterns unchanged, keep current index
+            return
+
+        # new patterns, discard existing index
+        manager.shapes = Shapes(instance_pattern=inst, schema_pattern=sch)
 
     def done(self, fn_name: str) -> bool:
         return fn_name == "stop"
@@ -250,18 +328,15 @@ Reference description:
 
     def output(self, messages: list[Message]) -> dict:
         assert isinstance(self.state, ShapesSetupState)
-        if self.state.pattern:
-            formatted = (
-                f"Shape setup complete.\n\n"
-                f"Pattern:\n{self.state.pattern}\n\n"
-                f"Description:\n{self.state.description or 'None'}"
-            )
+        if self.state.instance_pattern or self.state.schema_pattern:
+            formatted = "Shape setup complete.\n\n" + format_setup(self.state)
         else:
-            formatted = "Shape setup stopped without a pattern."
+            formatted = "Shape setup stopped without any pattern."
 
         return {
             "type": "output",
-            "pattern": self.state.pattern,
+            "instance_pattern": self.state.instance_pattern,
+            "schema_pattern": self.state.schema_pattern,
             "description": self.state.description,
             "formatted": formatted,
         }
@@ -269,8 +344,11 @@ Reference description:
 
 def format_setup(state: ShapesSetupState) -> str:
     return f"""\
-Pattern:
-{state.pattern or "None"}
+Instance pattern:
+{state.instance_pattern or "None"}
+
+Schema pattern:
+{state.schema_pattern or "None"}
 
 Description:
 {state.description or "None"}"""

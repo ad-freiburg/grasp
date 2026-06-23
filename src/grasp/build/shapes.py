@@ -1,13 +1,15 @@
-import os
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from tqdm import tqdm
-from universal_ml_utils.io import dump_text
 from universal_ml_utils.logging import get_logger
 
 from grasp.configs import ShapeConfig
 from grasp.manager import KgManager
+from grasp.manager.normalizer import Normalizer
 from grasp.shapes import (
     ClassProfile,
     PropertyProfile,
@@ -158,6 +160,124 @@ def build_per_class_total_query(pattern: str, class_iri: str) -> str:
     return f"SELECT (COUNT(DISTINCT ?instance) AS ?totalEntities)\nWHERE {{\n{ip}\n}}"
 
 
+XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#"
+RDF_DATATYPE_IRIS = {
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#XMLLiteral",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON",
+}
+
+
+def is_datatype_iri(iri: str) -> bool:
+    return iri.startswith(XSD_NAMESPACE) or iri in RDF_DATATYPE_IRIS
+
+
+def nested_counter() -> dict[str, dict[str, int]]:
+    return defaultdict(lambda: defaultdict(int))
+
+
+@dataclass
+class PropertyFreq:
+    triple_count: int = 0
+    entity_count: int = 0
+
+    def add(self, other: "PropertyFreq") -> None:
+        self.triple_count += other.triple_count
+        self.entity_count += other.entity_count
+
+
+@dataclass
+class ClassMaps:
+    freq: dict[str, PropertyFreq] = field(default_factory=dict)
+    literals: dict[str, dict[str, int]] = field(default_factory=nested_counter)
+    ranges: dict[str, dict[str, int]] = field(default_factory=nested_counter)
+
+    def merge(self, other: "ClassMaps") -> None:
+        for p, freq in other.freq.items():
+            self.freq.setdefault(p, PropertyFreq()).add(freq)
+        for p, dtype_counts in other.literals.items():
+            for dt, c in dtype_counts.items():
+                self.literals[p][dt] += c
+        for p, target_counts in other.ranges.items():
+            for t, c in target_counts.items():
+                self.ranges[p][t] += c
+
+    @classmethod
+    def from_instance_rows(
+        cls,
+        freq_rows: list[dict],
+        lit_rows: list[dict],
+        range_rows: list[dict],
+        manager: KgManager,
+    ) -> "ClassMaps":
+        maps = cls()
+        for row in freq_rows:
+            maps.freq[row["p"]] = PropertyFreq(
+                triple_count=int(row["tripleCount"]),
+                entity_count=int(row["entityCount"]),
+            )
+        for row in lit_rows:
+            dt = manager.format_iri(row["datatype"], wrap=True)
+            maps.literals[row["p"]][dt] += int(row["count"])
+        for row in range_rows:
+            maps.ranges[row["p"]][row["targetClass"]] += int(row["count"])
+        return maps
+
+    @classmethod
+    def from_schema_rows(cls, rows: list, manager: KgManager) -> "ClassMaps":
+        maps = cls()
+        for row in rows:
+            prop = row.get("property")
+            if prop is None:
+                continue
+            p = prop.value
+            maps.freq.setdefault(p, PropertyFreq())
+            target = row.get("target")
+            if target is None:
+                continue
+            if target.typ == "literal":
+                dt_iri = target.datatype or f"{XSD_NAMESPACE}string"
+                maps.literals[p][manager.format_iri(dt_iri, wrap=True)] += 1
+            elif target.typ == "uri" and is_datatype_iri(target.value):
+                maps.literals[p][manager.format_iri(target.value, wrap=True)] += 1
+            elif target.typ == "uri":
+                maps.ranges[p][target.value] += 1
+            else:
+                # blank-node target (e.g. an owl:unionOf range): no usable class
+                # IRI; keep the property but add no target (renders as bare IRI).
+                continue
+            maps.freq[p].triple_count += 1
+        return maps
+
+
+@dataclass
+class NormalizedMaps:
+    freq: dict[str, PropertyFreq]
+    literals: dict[str, dict[str, int]]
+    ranges: dict[str, dict[str, int]]
+    prop_variants: dict[str, list[str]]
+    target_variants: dict[str, dict[str, list[str]]]
+
+
+def schema_class_pattern(pattern: str) -> str:
+    return pattern.replace("{CLASS}", "?class")
+
+
+def schema_iri_pattern(pattern: str, class_iri: str) -> str:
+    return pattern.replace("{CLASS}", f"<{class_iri}>")
+
+
+def build_schema_class_query(pattern: str) -> str:
+    cp = wrap_pattern(schema_class_pattern(pattern))
+    return f"SELECT DISTINCT ?class\nWHERE {{\n{cp}\n}}"
+
+
+def build_schema_profile_query(pattern: str, class_iri: str) -> str:
+    sp = wrap_pattern(schema_iri_pattern(pattern, class_iri))
+    return f"SELECT DISTINCT ?property ?target\nWHERE {{\n{sp}\n}}"
+
+
 def property_rank(iri: str, manager: KgManager) -> int:
     data = manager.try_get_data("properties")
     if data is None:
@@ -258,7 +378,9 @@ def select_properties(
     kept: list[PropertyProfile] = []
     filtered = 0
     for prop in candidates:
-        if profile.total_entities > 0:
+        # only filter rare *instance* properties; a property with no instance
+        # usage (entity_count == 0) is a pure schema declaration, not noise.
+        if profile.total_entities > 0 and prop.entity_count > 0:
             coverage = prop.entity_count / profile.total_entities
             if coverage < shape_config.min_property_share:
                 filtered += 1
@@ -344,51 +466,20 @@ def collect_iris(
     return iris
 
 
-def group_by_normalized(
-    freq_map: dict[str, dict],
-    lit_counts: dict[str, dict[str, int]],
-    range_counts: dict[str, dict[str, int]],
-    manager: KgManager,
-) -> tuple[
-    dict[str, dict],
-    dict[str, dict[str, int]],
-    dict[str, dict[str, int]],
-    dict[str, list[str]],
-    dict[str, dict[str, list[str]]],
-]:
-    """Group property IRIs (and target-class IRIs) by their normalized form.
-
-    Returns regrouped freq_map / literal-count map / range-count map keyed on
-    the normalized property IRI, plus a prop_variants map
-    (normalized prop iri -> ordered variant short names) and a target_variants
-    map (normalized prop iri -> normalized target iri -> ordered variants).
-    Counts are summed when merging variants.
-    """
+def group_by_normalized(maps: ClassMaps, manager: KgManager) -> NormalizedMaps:
     prop_normalizer = manager.get_normalizer("properties")
     ent_normalizer = manager.get_normalizer("entities")
 
-    def prop_key(iri: str) -> tuple[str, str | None]:
-        norm = prop_normalizer.normalize(iri)
-        if isinstance(norm, tuple) and len(norm) == 2:
-            return norm[0], norm[1]
-        return iri, None
+    def norm_key(iri: str, normalizer: Normalizer) -> tuple[str, str | None]:
+        norm = normalizer.normalize(iri)
+        if norm is None:
+            return iri, None
+        return norm
 
-    def ent_key(iri: str) -> tuple[str, str | None]:
-        norm = ent_normalizer.normalize(iri)
-        if isinstance(norm, tuple) and len(norm) == 2:
-            return norm[0], norm[1]
-        return iri, None
+    prop_key = partial(norm_key, normalizer=prop_normalizer)
+    ent_key = partial(norm_key, normalizer=ent_normalizer)
 
-    prop_default = prop_normalizer.default_variants() or []
-    ent_default = ent_normalizer.default_variants() or []
-
-    def sort_variants(vs: list[str], order: list[str]) -> list[str]:
-        if not order:
-            return vs
-        order_idx = {v: i for i, v in enumerate(order)}
-        return sorted(vs, key=lambda v: order_idx.get(v, len(order)))
-
-    new_freq: dict[str, dict] = {}
+    new_freq: dict[str, PropertyFreq] = {}
     new_lit: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     new_range: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     prop_variants: dict[str, list[str]] = defaultdict(list)
@@ -396,21 +487,18 @@ def group_by_normalized(
         lambda: defaultdict(list)
     )
 
-    for p_iri, freq in freq_map.items():
+    for p_iri, freq in maps.freq.items():
         k, v = prop_key(p_iri)
-        if k not in new_freq:
-            new_freq[k] = {"triple_count": 0, "entity_count": 0}
-        new_freq[k]["triple_count"] += freq.get("triple_count", 0)
-        new_freq[k]["entity_count"] += freq.get("entity_count", 0)
+        new_freq.setdefault(k, PropertyFreq()).add(freq)
         if v is not None and v not in prop_variants[k]:
             prop_variants[k].append(v)
 
-    for p_iri, dtype_counts in lit_counts.items():
+    for p_iri, dtype_counts in maps.literals.items():
         k, _ = prop_key(p_iri)
         for dt, c in dtype_counts.items():
             new_lit[k][dt] += c
 
-    for p_iri, tc_counts in range_counts.items():
+    for p_iri, tc_counts in maps.ranges.items():
         k, _ = prop_key(p_iri)
         for t_iri, c in tc_counts.items():
             tk, tv = ent_key(t_iri)
@@ -418,64 +506,65 @@ def group_by_normalized(
             if tv is not None and tv not in target_variants[k][tk]:
                 target_variants[k][tk].append(tv)
 
-    # canonicalize variant order
+    # sort variants
     for k in list(prop_variants.keys()):
-        prop_variants[k] = sort_variants(prop_variants[k], prop_default)
+        prop_variants[k] = sorted(prop_variants[k])
+
     for k in list(target_variants.keys()):
         for tk in list(target_variants[k].keys()):
-            target_variants[k][tk] = sort_variants(target_variants[k][tk], ent_default)
+            target_variants[k][tk] = sorted(target_variants[k][tk])
 
-    return new_freq, new_lit, new_range, prop_variants, target_variants
+    return NormalizedMaps(
+        freq=new_freq,
+        literals=new_lit,
+        ranges=new_range,
+        prop_variants=prop_variants,
+        target_variants=target_variants,
+    )
 
 
 def assemble_profile(
     class_iri: str,
-    freq_map: dict[str, dict],
-    lit_counts: dict[str, dict[str, int]],
-    range_counts: dict[str, dict[str, int]],
+    maps: ClassMaps,
     total_entities: int,
     shape_config: ShapeConfig,
     manager: KgManager,
 ) -> ClassProfile:
-    freq_map, lit_counts, range_counts, prop_variants, target_variants = (
-        group_by_normalized(freq_map, lit_counts, range_counts, manager)
-    )
+    norm = group_by_normalized(maps, manager)
 
     common_props = sorted(
-        freq_map.items(),
+        norm.freq.items(),
         key=lambda item: (
             property_rank(item[0], manager),
-            -item[1].get("triple_count", 0),
+            -item[1].triple_count,
         ),
     )
 
     properties: list[PropertyProfile] = []
     for p_iri, freq in common_props:
-        triple_count = freq.get("triple_count", 0)
         targets: list[Target] = []
 
-        for dt, c in lit_counts.get(p_iri, {}).items():
+        for dt, c in norm.literals.get(p_iri, {}).items():
             targets.append(TargetLiteral(datatype=dt, triple_count=c))
 
-        for t_iri, c in range_counts.get(p_iri, {}).items():
+        for t_iri, c in norm.ranges.get(p_iri, {}).items():
             targets.append(
                 TargetClass(
                     iri=t_iri,
                     short_iri=manager.format_iri(t_iri, wrap=True),
-                    variants=target_variants.get(p_iri, {}).get(t_iri, []),
+                    variants=norm.target_variants.get(p_iri, {}).get(t_iri, []),
                     triple_count=c,
                 )
             )
 
-        # gap between total triples and the typed buckets is "untyped IRI" traffic.
-        # truncated/approximate count queries can produce small spurious gaps, so
+        # gap between total triples and the typed buckets are untyped IRIs.
         # require the gap to be both positive and a meaningful share of total.
         typed_sum = sum(t.triple_count for t in targets)
-        gap = triple_count - typed_sum
+        gap = freq.triple_count - typed_sum
         if (
             gap > 0
-            and triple_count > 0
-            and gap / triple_count >= shape_config.min_target_share
+            and freq.triple_count > 0
+            and gap / freq.triple_count >= shape_config.min_target_share
         ):
             targets.append(TargetIri(triple_count=gap))
 
@@ -486,9 +575,9 @@ def assemble_profile(
             PropertyProfile(
                 iri=p_iri,
                 short_iri=manager.format_iri(p_iri, wrap=True),
-                triple_count=triple_count,
-                entity_count=freq.get("entity_count", 0),
-                variants=prop_variants.get(p_iri, []),
+                triple_count=freq.triple_count,
+                entity_count=freq.entity_count,
+                variants=norm.prop_variants.get(p_iri, []),
                 targets=targets,
             )
         )
@@ -501,16 +590,61 @@ def assemble_profile(
     )
 
 
+def select_values(result: SelectResult) -> list[dict[str, Any]]:
+    return [{var: row[var].value for var in result.variables} for row in result.rows()]
+
+
+def collect_class_maps(
+    class_iri: str,
+    manager: KgManager,
+    execute: Callable[[str], SelectResult],
+    instance_pattern: str | None = None,
+    schema_pattern: str | None = None,
+    include_total: bool = False,
+) -> tuple[ClassMaps, int]:
+    maps = ClassMaps()
+    total = 0
+    if instance_pattern is not None:
+        freq_rows = select_values(
+            execute(
+                build_per_class_property_frequency_query(instance_pattern, class_iri)
+            )
+        )
+        lit_rows = select_values(
+            execute(build_per_class_literal_profile_query(instance_pattern, class_iri))
+        )
+        range_rows = select_values(
+            execute(build_per_class_range_profile_query(instance_pattern, class_iri))
+        )
+        maps.merge(
+            ClassMaps.from_instance_rows(freq_rows, lit_rows, range_rows, manager)
+        )
+        if include_total:
+            total_rows = select_values(
+                execute(build_per_class_total_query(instance_pattern, class_iri))
+            )
+            total = int(total_rows[0]["totalEntities"]) if total_rows else 0
+    if schema_pattern is not None:
+        rows = list(
+            execute(build_schema_profile_query(schema_pattern, class_iri)).rows()
+        )
+        maps.merge(ClassMaps.from_schema_rows(rows, manager))
+    return maps, total
+
+
 def compute_shape(
     class_iri: str,
-    pattern: str,
     manager: KgManager,
+    instance_pattern: str | None = None,
+    schema_pattern: str | None = None,
     shape_config: ShapeConfig | None = None,
 ) -> ClassProfile:
     if shape_config is None:
         shape_config = ShapeConfig()
+    if instance_pattern is None and schema_pattern is None:
+        raise ValueError("compute_shape requires an instance and/or schema pattern")
 
-    def run(query: str) -> list[dict]:
+    def execute(query: str) -> SelectResult:
         result = manager.execute_sparql(
             query,
             shape_config.request_timeout,
@@ -518,53 +652,29 @@ def compute_shape(
             sparql_result_max_rows=shape_config.sparql_result_max_rows,
         )
         assert isinstance(result, SelectResult), "Expected SELECT query result"
-        return [
-            {var: row[var].value for var in result.variables} for row in result.rows()
-        ]
+        return result
 
     try:
-        freq_rows = run(build_per_class_property_frequency_query(pattern, class_iri))
-        lit_rows = run(build_per_class_literal_profile_query(pattern, class_iri))
-        range_rows = run(build_per_class_range_profile_query(pattern, class_iri))
-        total_rows = run(build_per_class_total_query(pattern, class_iri))
+        maps, total = collect_class_maps(
+            class_iri,
+            manager,
+            execute,
+            instance_pattern,
+            schema_pattern,
+            include_total=True,
+        )
     except Exception as e:
         raise RuntimeError(
             f"One of the queries for computing the shape of '{class_iri}' failed:\n{e}"
         )
 
-    total = int(total_rows[0]["totalEntities"]) if total_rows else 0
-
-    freq_map: dict[str, dict] = {}
-    for row in freq_rows:
-        freq_map[row["p"]] = {
-            "triple_count": int(row["tripleCount"]),
-            "entity_count": int(row["entityCount"]),
-        }
-
-    lit_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for row in lit_rows:
-        dt = manager.format_iri(row["datatype"], wrap=True)
-        lit_counts[row["p"]][dt] += int(row["count"])
-
-    range_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for row in range_rows:
-        range_counts[row["p"]][row["targetClass"]] += int(row["count"])
-
-    return assemble_profile(
-        class_iri,
-        freq_map,
-        lit_counts,
-        range_counts,
-        total,
-        shape_config,
-        manager,
-    )
+    return assemble_profile(class_iri, maps, total, shape_config, manager)
 
 
 def build_shapes(
-    pattern: str,
-    shapes_dir: str,
     manager: KgManager,
+    instance_pattern: str | None = None,
+    schema_pattern: str | None = None,
     shape_config: ShapeConfig = ShapeConfig(),
     max_classes: int = 500,
     log_level: str | int | None = None,
@@ -572,8 +682,11 @@ def build_shapes(
     read_timeout: float | None = None,
 ) -> tuple[list[ShapeSample], int]:
     logger = get_logger("GRASP SHAPES BUILD", log_level)
+    assert instance_pattern is not None or schema_pattern is not None, (
+        "build_shapes requires an instance and/or schema pattern"
+    )
 
-    def run(query: str) -> list[dict[str, Any]]:
+    def execute(query: str) -> SelectResult:
         logger.debug(f"Running query:\n{query}")
         result = manager.execute_sparql(
             query,
@@ -582,35 +695,62 @@ def build_shapes(
             sparql_result_max_rows=shape_config.sparql_result_max_rows,
         )
         assert isinstance(result, SelectResult), "Expected SELECT query result"
-        return [
-            {var: row[var].value for var in result.variables} for row in result.rows()
-        ]
+        return result
 
     logger.info("Discovering classes")
-    try:
-        total_rows = run(build_total_entities_query(pattern))
-    except Exception as e:
-        raise ValueError(
-            f"Pattern validation failed: could not query classes ({e}). "
-            "Check that the pattern correctly connects instances to class nodes."
-        ) from e
-    if not total_rows:
+    instance_total: dict[str, int] = {}
+    if instance_pattern is not None:
+        try:
+            total_rows = select_values(
+                execute(build_total_entities_query(instance_pattern))
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Instance pattern validation failed: could not query classes ({e}). "
+                "Check that the pattern correctly connects instances to class nodes."
+            ) from e
+        instance_total = {row["class"]: int(row["totalEntities"]) for row in total_rows}
+
+    schema_classes: list[str] = []
+    if schema_pattern is not None:
+        try:
+            class_rows = select_values(
+                execute(build_schema_class_query(schema_pattern))
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Schema pattern validation failed: could not query classes ({e}). "
+                "Check that the pattern binds ?property (and optionally ?target) for {CLASS}."
+            ) from e
+        schema_classes = [row["class"] for row in class_rows]
+
+    schema_set = set(schema_classes)
+    # union of discovered classes: instance classes first (in discovery order),
+    # then schema-only classes.
+    ordered = list(instance_total.keys()) + [
+        c for c in schema_classes if c not in instance_total
+    ]
+    if not ordered:
         raise ValueError(
             "Pattern validation failed: no classes found. "
-            "Check that the pattern correctly connects instances to class nodes."
+            "Check that the pattern(s) correctly identify classes."
         )
-    total_entities = {row["class"]: int(row["totalEntities"]) for row in total_rows}
-
-    all_class_iris = list(total_entities.keys())[:max_classes]
+    total_classes = len(ordered)
+    all_class_iris = ordered[:max_classes]
     logger.info(f"Building shapes for {len(all_class_iris)} classes")
 
     samples = []
     skipped = 0
     for c_iri in tqdm(all_class_iris, desc="Profiling classes"):
         try:
-            freq_rows = run(build_per_class_property_frequency_query(pattern, c_iri))
-            lit_rows = run(build_per_class_literal_profile_query(pattern, c_iri))
-            range_rows = run(build_per_class_range_profile_query(pattern, c_iri))
+            # total comes from the discovery query above, not a per-class query
+            maps, _ = collect_class_maps(
+                c_iri,
+                manager,
+                execute,
+                instance_pattern if c_iri in instance_total else None,
+                schema_pattern if c_iri in schema_set else None,
+            )
         except Exception as e:
             logger.warning(
                 f"Skipping {c_iri}: profiling query failed ({e}). "
@@ -619,28 +759,10 @@ def build_shapes(
             skipped += 1
             continue
 
-        freq_map: dict[str, dict] = {}
-        for row in freq_rows:
-            freq_map[row["p"]] = {
-                "triple_count": int(row["tripleCount"]),
-                "entity_count": int(row["entityCount"]),
-            }
-
-        lit_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for row in lit_rows:
-            dt = manager.format_iri(row["datatype"], wrap=True)
-            lit_counts[row["p"]][dt] += int(row["count"])
-
-        range_counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-        for row in range_rows:
-            range_counts[row["p"]][row["targetClass"]] += int(row["count"])
-
         profile = assemble_profile(
             c_iri,
-            freq_map,
-            lit_counts,
-            range_counts,
-            total_entities[c_iri],
+            maps,
+            instance_total.get(c_iri, 0),
             shape_config,
             manager,
         )
@@ -663,8 +785,5 @@ def build_shapes(
     if skipped:
         logger.warning(f"Skipped {skipped:,} class(es) due to query failures")
 
-    os.makedirs(shapes_dir, exist_ok=True)
-    pattern_file = os.path.join(shapes_dir, "pattern.sparql")
-    dump_text(pattern, pattern_file)
-    logger.info(f"Wrote {len(samples)} shapes and pattern to {shapes_dir}")
-    return samples, len(total_entities)
+    logger.info(f"Built {len(samples)} shapes")
+    return samples, total_classes

@@ -351,13 +351,6 @@ def evaluate_with_judge(
 ):
     logger = get_logger("GRASP EVALUATION", log_level)
 
-    tool_choice = judge_config.tool_choice
-    if tool_choice != "required":
-        judge_config.tool_choice = "required"
-        logger.warning(
-            f"Setting tool choice to 'required' for judge evaluation, overriding '{tool_choice}'"
-        )
-
     manager = None
     if reformat_sparql or with_ground_truth_reference:
         assert judge_config.knowledge_graph is not None, (
@@ -567,9 +560,6 @@ def evaluate_with_judge(
         ratio = summary["ratio"]
         count = summary["count"]
         logger.info(f"{pred_file}: {ratio:.2%} ({count})")
-
-    # reset tool choice to original
-    judge_config.tool_choice = tool_choice
 
 
 def evaluate_with_expert(
