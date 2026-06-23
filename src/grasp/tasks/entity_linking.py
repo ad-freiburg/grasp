@@ -61,16 +61,16 @@ class Text(BaseModel):
         start/end plus context otherwise. If context is None, does not trim the Text.
         """
         if context and context < 0:
-            raise ValueError(f"'context' {context} must be non negative.")
+            raise ValueError(f"context '{context}' must be non negative.")
         if self.start and (self.start >= self.length or self.start < 0):
             raise ValueError(
-                f"'annotate_from' {self.start} must be less than length {self.length} "
-                f"and greater than zero."
+                f"annotate_from '{self.start}' must be less than length '{self.length}'"
+                f" and greater than zero."
             )
         if self.end and (self.end <= 0 or (self.start and self.end <= self.start)):
             raise ValueError(
-                f"'annotate_up_to' {self.end} must be greater than 'annotate_from' "
-                f"{self.start}, greater than zero and less than length {self.length}."
+                f"annotate_up_to '{self.end}' must be greater than annotate_from "
+                f"'{self.start}' and less than length '{self.length}'."
             )
         
         # without context the text is not trimmed
@@ -78,6 +78,9 @@ class Text(BaseModel):
             return self, 0
 
         # 4 variables: start/end of new context and start/end of new annotation window
+        new_start, new_end = self.start, self.end
+        window_start, window_end = 0, self.length
+
         if self.start > 0:
             new_start = max(0, self.start - context)
             window_start = self.start - new_start
@@ -114,9 +117,8 @@ class AnnotationState:
     ) -> None:
 
         self.text, self.offset = text.trim(context)
-        self.annotation_window: slice = (slice(self.text.start, self.text.end))
+        self.annotation_window: slice = slice(self.text.start, self.text.end)
         self.annotations: dict[tuple[int, int], Annotation] = {}
-
 
     def annotate(
         self,
@@ -232,12 +234,12 @@ class AnnotationState:
         return result
 
 
-def rules(special_instructions: str | None = None) -> list[str]:
-    rules = [
+def rules() -> list[str]:
+    return [
         ("If you cannot find any suitable entity mention in the text excerpt, "
         "leave the excerpt unannotated and just finalize."),
         ("If an entity is cut off at the end of the text or beginning of the text, "
-        "don't annotate it."),
+        "don't annotate it. Use the context to see if it is cut off or not."),
         ("If there are multiple suitable entities for a number of words, choose "
         "the one that fits best in the context of the text and is more general."),
         ("Annotate every occurence of an entity you find in the excerpt even if it "
@@ -245,17 +247,11 @@ def rules(special_instructions: str | None = None) -> list[str]:
         ("If you cannot find the entity in the knowledge graph, annotate it with "
         "'<NIL>' (without the apostrophes but with the angle brackets)"),
         ("Do not link coreferences that do not contain at least part of the name "
-        "but **do** link entity mentions that do contain at least a part of a name."),
+        "but **do** link entity mentions that contain at least a part of a name."),
         ("If you realize you are stuck in a loop do something different immediately "
         "to break the loop!"),
+        "If the user specifies additional instructions follow those instructions.",
     ]
-    if special_instructions:
-        rules += [
-            "<additional_instructions>"
-            + special_instructions
-            + "</additional_instructions>."
-        ]
-    return rules
 
 
 def system_information() -> str:
@@ -279,11 +275,10 @@ def functions(managers: list[KgManager]) -> list[dict]:
             "description": """\
 Annotate a word or a sequence of words with an entity from the specified knowledge \
 graph by writing the exact words to be annotated as 'words_to_be_annotated'.
-Specify the words further by the index of the occurrence, if the words only occur once, set it to 0.
-If you only want to annotate the second occurence, just set it to 1.
+Specify the words further by the occurrence_index, if the words only occur once, set it to 0,
+if you only want to annotate the second occurence, just set it to 1.
 Careful, sometimes a word you want to annotate can be a substring of another word earlier in the text excerpt, \
 so always keep that in mind and adjust the occurrence_index accordingly.
-You can set 'entity' to 'None' to delete an existing annotation.
 This function overwrites any previous annotation of the words.""",
             "parameters": {
                 "type": "object",
@@ -293,7 +288,7 @@ This function overwrites any previous annotation of the words.""",
                         "enum": kgs,
                         "description": "The knowledge graph to use for the annotation.",
                     },
-                    "exact_words_to_be_annotated": {
+                    "words_to_be_annotated": {
                         "type": "string",
                         "description": "The exact words to be annotated written exactly like in the original text.",
                     },
@@ -306,7 +301,33 @@ This function overwrites any previous annotation of the words.""",
                         "description": "The IRI of the entity to annotate the words with.",
                     },
                 },
-                "required": ["kg", "exact_words_to_be_annotated", "occurrence_index", "entity"],
+                "required": ["kg", "words_to_be_annotated", "occurrence_index", "entity"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+        {
+            "name": "delete_annotation",
+            "description": """\
+Delete the annotation of a word or a sequence of words \
+by writing the exact words whose annotation should be deleted as 'words_to_be_annotated'.
+Specify the words further by the occurrence_index, if the words only occur once, set it to 0,
+if you only want to delete the annotation of the second occurence, just set it to 1.
+Careful, sometimes an annotation you want to delete can be a substring of another word earlier in the text excerpt, \
+so always keep that in mind and adjust the occurrence_index accordingly.""",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "words_to_be_annotated": {
+                        "type": "string",
+                        "description": "The exact words whose annotation should be deleted, written exactly like in the original text.",
+                    },
+                    "occurrence_index": {
+                        "type": "int",
+                        "description": "Index of the occurrence of the words in the text.",
+                    },
+                },
+                "required": ["words_to_be_annotated", "occurrence_index"],
                 "additionalProperties": False,
             },
             "strict": True,
@@ -352,7 +373,6 @@ def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
         [identifier], ObjType.ENTITY.index_name
     )
     info = infos.get(identifier, {})
-    
     label = info.get("label")
     aliases = info.get("alias", [])
     infos = info.get("info", [])
@@ -380,7 +400,7 @@ def annotate(
     """
     A function for the llm to call to annotate the words_to_be_annotated in the text 
     with the entity and knowledge graph. The occurrence_index helps to distinguish 
-    between different occurrences of the words in the text.
+    between different occurrences of the words in the text excerpt.
     """
     manager, _ = find_manager(managers, kg)
     sequence = state.text.data[state.annotation_window]
@@ -410,57 +430,38 @@ def annotate(
 
     if occurrence_index >= len(word_matches):
         raise ValueError(
-            f"occurrence_index '{occurrence_index}' must be less than number of matches: {len(word_matches)}."
+            f"occurrence_index '{occurrence_index}' must be less than "
+            f"number of matches: {len(word_matches)}."
         )
 
     start_idx, end_idx = word_matches[occurrence_index]
 
-    # deleting an annotation
-    if entity == "None":
-        try:
-            current = state.annotate(start_idx, end_idx, None)
-        except ValueError as e:
-            raise FunctionCallException(str(e)) from e
-
-        if current is None:
+    try:
+        annotation = prepare_annotation(manager, entity)
+        if know_before_use and annotation.identifier not in known:
             raise FunctionCallException(
-                f"Text sequence [{start_idx}, {end_idx}] "
-                f"'{sequence[start_idx: end_idx]}' is not annotated "
-                "so there is no annotation to be deleted."
+                f"The entity {entity} cannot be used for annotation "
+                "without being known from previous function call results. "
+                "This does not mean it is invalid, but you should verify "
+                "that it indeed exists (e.g., by listing example triples) "
+                "in the knowledge graphs first."
             )
-        result = (
-            f"Deleted annotation {current.entity} from Text sequence "
-            f"[{start_idx}, {end_idx}] '{sequence[start_idx: end_idx]}'"
+
+        current = state.annotate(start_idx, end_idx, annotation)
+
+    except ValueError as e:
+        raise FunctionCallException(str(e)) from e
+
+    if current is None:
+        result =  (
+            f"Annotated text sequence [{start_idx}: {end_idx}] "
+            f"'{sequence[start_idx: end_idx]}' with entity '{entity}'"
         )
-
-    # annotating
     else:
-        try:
-            annotation = prepare_annotation(manager, entity)
-            if know_before_use and annotation.identifier not in known:
-                raise FunctionCallException(
-                    f"The entity {entity} cannot be used for annotation "
-                    "without being known from previous function call results. "
-                    "This does not mean it is invalid, but you should verify "
-                    "that it indeed exists (e.g., by listing example triples) "
-                    "in the knowledge graphs first."
-                )
-
-            current = state.annotate(start_idx, end_idx, annotation)
-
-        except ValueError as e:
-            raise FunctionCallException(str(e)) from e
-
-        if current is None:
-            result =  (
-                f"Annotated text sequence [{start_idx}: {end_idx}] "
-                f"'{sequence[start_idx: end_idx]}' with entity {entity}"
-            )
-        else:
-            result = (
-                f"Updated annotation of text sequence [{start_idx}, {end_idx}] "
-                f"'{sequence[start_idx: end_idx]}' from {current.entity} to {entity}"
-            )
+        result = (
+            f"Updated annotation of text sequence [{start_idx}, {end_idx}] "
+            f"'{sequence[start_idx: end_idx]}' from {current.entity} to {entity}"
+        )
     if show_state_after_annotation:
         result += (
             "\nThe current annotation state of the text excerpt is the following:\n\n"
@@ -469,21 +470,101 @@ def annotate(
     return result
 
 
-def input_instructions(state: AnnotationState) -> str:
-    return (
-        "This is the full text only for context to better understand entities "
-        "that are not clear from the excerpt alone. \n\n"
-        "<full_text_for_context>"
-        f"{state.format(only_current_window=False)}"
-        "</full_text_for_context>\n\n"
-        "The following is the excerpt of the text that you need to annotate:\n\n"
-        "<text_excerpt_to_annotate>"
-        f"{state.format(only_current_window=True)}"
-        "</text_excerpt_to_annotate>.\n\n"
+def delete_annotation(
+    words_to_be_annotated: str,
+    occurrence_index: int,
+    state: AnnotationState,
+    show_state_after_annotation = True,
+) -> str:
+    """
+    A function for the llm to call to delete the annotation of the 
+    words_to_be_annotated in the text. The occurrence_index helps to 
+    distinguish between different occurrences of the words in the text.
+    """
+    sequence = state.text.data[state.annotation_window]
+    # normalizing, because some llms are heavily biased towards specific characters like
+    # the ascii apostrophe although they are technically able to output the correct one.
+    def normalize(string: str) -> str:
+        return unicodedata.normalize("NFC", string).replace("‘", "'").replace("’", "'")
+
+    words_to_be_annotated = normalize(words_to_be_annotated)
+    sequence = normalize(sequence)
+
+    word_matches = [
+        m.span() for m in re.finditer(re.escape(words_to_be_annotated), sequence)
+    ]
+
+    if not word_matches:
+        raise ValueError(
+            f"No match found for the given words_to_be_annotated "
+            f"'{words_to_be_annotated}' in the current annotation window."
+            "(Did you use the correct characters when specifying the words?)"
+        )
+    
+    if occurrence_index < 0:
+        raise ValueError(
+            f"occurrence_index '{occurrence_index}' must be non negative."
+        )
+
+    if occurrence_index >= len(word_matches):
+        raise ValueError(
+            f"occurrence_index '{occurrence_index}' must be less than "
+            f"number of matches: {len(word_matches)}."
+        )
+
+    start_idx, end_idx = word_matches[occurrence_index]
+
+    # deleting an annotation
+    try:
+        current = state.annotate(start_idx, end_idx, None)
+    except ValueError as e:
+        raise FunctionCallException(str(e)) from e
+
+    if current is None:
+        raise FunctionCallException(
+            f"Text sequence [{start_idx}, {end_idx}] '{sequence[start_idx: end_idx]}' "
+            "is not annotated so there is no annotation to delete."
+        )
+    result = (
+        f"Deleted annotation {current.entity} from Text sequence "
+        f"[{start_idx}, {end_idx}] '{sequence[start_idx: end_idx]}'"
     )
+    if show_state_after_annotation:
+        result += (
+            "\nThe current annotation state of the text excerpt is the following:\n\n"
+            f"{state.format(only_current_window=True, list_entities=False)}"
+        )
+    return result
 
 
-def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AnnotationState]:
+def input_instructions(
+        state: AnnotationState, special_instructions: str | None = None
+    ) -> str:
+    user_input = (
+        "This is the full text only for context to better understand entities "
+        "that are not clear from the excerpt alone.\n\n"
+        "=== START FULL TEXT FOR CONTEXT ===\n"
+        f"{state.format(only_current_window=False)}\n"
+        "=== END FULL TEXT FOR CONTEXT ===\n\n"
+        "The following is the excerpt of the text that you need to annotate:\n\n"
+        "=== START TEXT EXCERPT TO ANNOTATE ===\n"
+        f"{state.format(only_current_window=True)}\n"
+        "=== END TEXT EXCERPT TO ANNOTATE ===\n"
+    )
+    if special_instructions:
+        user_input = (
+            "These are additional instructions that you need to follow.\n\n"
+            "=== START ADDITIONAL INSTRUCTIONS ===\n"
+            f"{special_instructions}\n"
+            "=== END ADDITIONAL INSTRUCTIONS ===\n\n"
+        ) + user_input
+    return user_input
+
+
+def input_and_state(
+        input: Any,
+        config: GraspConfig,
+    ) -> tuple[str, AnnotationState]:
     try:
         text = Text(**input)
     except Exception as e:
@@ -496,7 +577,7 @@ def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AnnotationSta
         text,
         context=config.task_kwargs.get("entity-linking", {}).get("context", None),
     )
-    instructions = input_instructions(annots)
+    instructions = input_instructions(annots, text.special_instructions)
 
     return instructions, annots
 
@@ -521,13 +602,25 @@ def call_function(
         return annotate(
             managers,
             fn_args["kg"],
-            fn_args["exact_words_to_be_annotated"],
+            fn_args["words_to_be_annotated"],
             fn_args["occurrence_index"],
             fn_args["entity"],
             state,
             known,
             config.know_before_use,
-            config.task_kwargs.get("entity-linking", {}).get("show_state_after_annotate", True)
+            config.task_kwargs.get("entity-linking", {}).get(
+                "show_state_after_annotate", True
+            )
+        )
+        
+    elif fn_name == "delete_annotation":
+        return delete_annotation(
+            fn_args["words_to_be_annotated"],
+            fn_args["occurrence_index"],
+            state,
+            config.task_kwargs.get("entity-linking", {}).get(
+                "show_state_after_annotate", True
+            )
         )
         
     elif fn_name == "show_current_annotations":
@@ -537,14 +630,13 @@ def call_function(
         return "Finalized the annotation process."
 
     else:
-        raise ValueError(f"Unknown function {fn_name}")
+        raise ValueError(f"Unknown function '{fn_name}'")
 
 
 def feedback_system_message(
     managers: list[KgManager],
     kg_notes: dict[str, list[str]],
     notes: list[str],
-    special_instructions: str | None,
 ) -> str:
     return "\n\n".join(
         [
@@ -560,7 +652,7 @@ def feedback_system_message(
             ),
             format_section(
                 "Rules to follow",
-                format_enumerate(rules(special_instructions)) if rules() else "None",
+                format_enumerate(rules()) if rules() else "None",
             ),
             "Provide your feedback with the give_feedback function.",
         ]
@@ -591,7 +683,7 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         return system_information()
 
     def rules(self) -> list[str]:
-        return rules(self.state.text.special_instructions)
+        return rules()
 
     def function_definitions(self) -> list[dict]:
         return functions(self.managers)
@@ -635,7 +727,7 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         self, kg_notes: dict[str, list[str]], notes: list[str]
     ) -> str:
         return feedback_system_message(
-            self.managers, kg_notes, notes, self.state.text.special_instructions
+            self.managers, kg_notes, notes
         )
 
     def feedback_instructions(self, inputs: list[str], output: dict) -> str:
