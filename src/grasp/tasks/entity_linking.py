@@ -6,18 +6,22 @@
 import re
 import unicodedata
 from typing import Any
-
 from pydantic import BaseModel
 
 from grasp.configs import GraspConfig
-from grasp.functions import find_manager
-from grasp.manager import KgManager, format_kgs
-from grasp.sparql.types import Alternative, ObjType
-from grasp.model import Message
-from grasp.sparql.utils import parse_into_binding
-from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.examples import Sample
-from grasp.utils import FunctionCallException, format_list, format_notes
+from grasp.functions import find_manager, parse_iri_or_literal
+from grasp.manager import KgManager, format_kgs
+from grasp.model import Message
+from grasp.sparql.types import Alternative, ObjType
+from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.utils import (
+    FunctionCallException,
+    format_enumerate,
+    format_list,
+    format_notes,
+    format_section
+)
 
 
 class Annotation(BaseModel):
@@ -53,7 +57,7 @@ class Text(BaseModel):
 
     def trim(self, context: int | None = None) -> tuple["Text", int]:
         """
-        Trims the Text to the start/end values if context is 0 OR trims the Text to 
+        Trims the Text to the start/end values if context is 0, trims the Text to 
         start/end plus context otherwise. If context is None, does not trim the Text.
         """
         if context and context < 0:
@@ -110,8 +114,6 @@ class AnnotationState:
     ) -> None:
 
         self.text, self.offset = text.trim(context)
-        self.max_annotation_window_size: int = 300
-        self.use_annotation_window: bool = True
         self.annotation_window: slice = (slice(self.text.start, self.text.end))
         self.annotations: dict[tuple[int, int], Annotation] = {}
 
@@ -154,8 +156,8 @@ class AnnotationState:
         ) -> str:
         """
         Returns a string with the current annotation state of the text.
-        Annotations are visualized in the following format: '[annotated words]\(q123)',
-        '[[Nested [annotations]\(q123)]\(q456) are supported]\(q789)'.
+        Annotations are visualized in the following format: '[annotated words](q123)',
+        '[[Nested [annotations](q123)](q456) are supported](q789)'.
         If only_current_window is true, only the text of the current annotation window
         is shown. If list_entities is true, the used entities are listed at the end.'
         """
@@ -230,12 +232,11 @@ class AnnotationState:
         return result
 
 
-def rules(special_instructions: str = "") -> list[str]:
+def rules(special_instructions: str | None = None) -> list[str]:
     rules = [
         ("If you cannot find any suitable entity mention in the text excerpt, "
         "leave the excerpt unannotated and just finalize."),
-        ("If an entity is cut off at the beginning of the text, don't annotate it."
-        "If an entity is cut off at the end of the text or beginning of the text, "
+        ("If an entity is cut off at the end of the text or beginning of the text, "
         "don't annotate it."),
         ("If there are multiple suitable entities for a number of words, choose "
         "the one that fits best in the context of the text and is more general."),
@@ -248,7 +249,7 @@ def rules(special_instructions: str = "") -> list[str]:
         ("If you realize you are stuck in a loop do something different immediately "
         "to break the loop!"),
     ]
-    if special_instructions != "":
+    if special_instructions:
         rules += [
             "<additional_instructions>"
             + special_instructions
@@ -270,19 +271,20 @@ You need to **exactly follow these step-by-step instructions** to annotate the t
 5. When you are certain that the annotation of the current excerpt is correct and complete use the finalize function."""
 
 
-def functions(managers: list[KgManager], config: GraspConfig) -> list[dict]:
+def functions(managers: list[KgManager]) -> list[dict]:
     kgs = [manager.kg for manager in managers]
     fns = [
         {
             "name": "annotate",
             "description": """\
-    Annotate a word or a sequence of words with an entity from the specified knowledge \
-    graph by writing the exact words to be annotated as 'words_to_be_annotated'.
-    Specify the words further by the index of the occurrence, if the words only occur once, set it to 0.
-    If you only want to annotate the second occurence, just set it to 1.
-    Careful, sometimes a word you want to annotate can occur earlier in the text excerpt, so always keep that in mind and adjust the index.
-    You can set 'entity' to 'None' to delete an existing annotation.
-    This function overwrites any previous annotation of the words.""",
+Annotate a word or a sequence of words with an entity from the specified knowledge \
+graph by writing the exact words to be annotated as 'words_to_be_annotated'.
+Specify the words further by the index of the occurrence, if the words only occur once, set it to 0.
+If you only want to annotate the second occurence, just set it to 1.
+Careful, sometimes a word you want to annotate can be a substring of another word earlier in the text excerpt, \
+so always keep that in mind and adjust the occurrence_index accordingly.
+You can set 'entity' to 'None' to delete an existing annotation.
+This function overwrites any previous annotation of the words.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -336,7 +338,7 @@ def functions(managers: list[KgManager], config: GraspConfig) -> list[dict]:
 
 
 def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
-    binding = parse_into_binding(entity, manager.iri_literal_parser, manager.prefixes)
+    binding = parse_iri_or_literal(entity, manager.iri_literal_parser, manager.prefixes)
     if binding is None or binding.typ != "uri":
         raise ValueError(f"Entity {entity} is not a valid IRI")
 
@@ -346,7 +348,9 @@ def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
     if norm is not None:
         identifier, _ = norm
     
-    infos = manager.get_info_for_identifiers_from_index([identifier], ObjType.ENTITY.index_name)
+    infos = manager.get_info_for_identifiers_from_index(
+        [identifier], ObjType.ENTITY.index_name
+    )
     info = infos.get(identifier, {})
     
     label = info.get("label")
@@ -424,7 +428,6 @@ def annotate(
                 f"'{sequence[start_idx: end_idx]}' is not annotated "
                 "so there is no annotation to be deleted."
             )
-
         result = (
             f"Deleted annotation {current.entity} from Text sequence "
             f"[{start_idx}, {end_idx}] '{sequence[start_idx: end_idx]}'"
@@ -439,7 +442,8 @@ def annotate(
                     f"The entity {entity} cannot be used for annotation "
                     "without being known from previous function call results. "
                     "This does not mean it is invalid, but you should verify "
-                    "that it indeed exists in the knowledge graphs first."
+                    "that it indeed exists (e.g., by listing example triples) "
+                    "in the knowledge graphs first."
                 )
 
             current = state.annotate(start_idx, end_idx, annotation)
@@ -457,18 +461,16 @@ def annotate(
                 f"Updated annotation of text sequence [{start_idx}, {end_idx}] "
                 f"'{sequence[start_idx: end_idx]}' from {current.entity} to {entity}"
             )
-
     if show_state_after_annotation:
         result += (
             "\nThe current annotation state of the text excerpt is the following:\n\n"
             f"{state.format(only_current_window=True, list_entities=False)}"
         )
-
     return result
 
 
 def input_instructions(state: AnnotationState) -> str:
-    instructions = (
+    return (
         "This is the full text only for context to better understand entities "
         "that are not clear from the excerpt alone. \n\n"
         "<full_text_for_context>"
@@ -479,8 +481,6 @@ def input_instructions(state: AnnotationState) -> str:
         f"{state.format(only_current_window=True)}"
         "</text_excerpt_to_annotate>.\n\n"
     )
-    
-    return instructions
 
 
 def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AnnotationState]:
@@ -544,37 +544,44 @@ def feedback_system_message(
     managers: list[KgManager],
     kg_notes: dict[str, list[str]],
     notes: list[str],
+    special_instructions: str | None,
 ) -> str:
-    return f"""\
-You are a text annotation assistant providing feedback on the \
-output of a text annotation system for a given input text.
-
-The system has access to the following knowledge graphs:
-{format_kgs(managers, kg_notes)}
-
-The system was provided the following notes across all knowledge graphs:
-{format_notes(notes)}
-
-The system was provided the following rules to follow:
-{format_list(rules())}
-
-Provide your feedback with the give_feedback function."""
+    return "\n\n".join(
+        [
+            "You are a text annotation assistant providing feedback on the "
+            "output of a text annotation system for a given input text.",
+            format_section(
+                "Available knowledge graphs",
+                format_kgs(managers, kg_notes),
+            ),
+            format_section(
+                "General notes across knowledge graphs",
+                format_notes(notes, enumerated=True),
+            ),
+            format_section(
+                "Rules to follow",
+                format_enumerate(rules(special_instructions)) if rules() else "None",
+            ),
+            "Provide your feedback with the give_feedback function.",
+        ]
+    )
 
 
 def feedback_instructions(inputs: list[str], output: dict) -> str:
     assert inputs, "At least one input is required for feedback"
 
+    sections = []
     if len(inputs) > 1:
-        prompt = (
-            "Previous inputs:\n" + "\n\n".join(i.strip() for i in inputs[:-1]) + "\n\n"
+        sections.append(
+            format_section(
+                "Previous inputs",
+                "\n\n".join(i.strip() for i in inputs[:-1]),
+            )
         )
 
-    else:
-        prompt = ""
-
-    prompt += f"Input:\n{inputs[-1].strip()}"
-    prompt += f"\n\nAnnotations:\n{output['formatted']}"
-    return prompt
+    sections.append(format_section("Input", inputs[-1].strip()))
+    sections.append(format_section("Annotations", output["formatted"]))
+    return "\n\n".join(sections)
 
 
 class EntityLinkingTask(GraspTask, FeedbackTask):
@@ -584,10 +591,10 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         return system_information()
 
     def rules(self) -> list[str]:
-        return rules(self.state, )
+        return rules(self.state.text.special_instructions)
 
     def function_definitions(self) -> list[dict]:
-        return functions(self.managers, self.config)
+        return functions(self.managers)
 
     def call_function(
         self,
@@ -595,9 +602,15 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         fn_args: dict,
         known: set[str],
         example_indices: dict | None = None,
-    ) -> str | None:
+    ) -> str:
         return call_function(
-            self.config, self.managers, fn_name, fn_args, known, self.state, example_indices
+            self.config,
+            self.managers,
+            fn_name,
+            fn_args,
+            known,
+            self.state,
+            example_indices
         )
 
     def done(self, fn_name: str) -> bool:
@@ -615,13 +628,15 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         return "text"
 
     @classmethod
-    def sample_cls(cls) -> type[EntityLinkingSample]:
+    def sample_cls(cls) -> type[EntityLinkingSample] | None:
         return EntityLinkingSample
 
     def feedback_system_message(
         self, kg_notes: dict[str, list[str]], notes: list[str]
     ) -> str:
-        return feedback_system_message(self.managers, kg_notes, notes)
+        return feedback_system_message(
+            self.managers, kg_notes, notes, self.state.text.special_instructions
+        )
 
     def feedback_instructions(self, inputs: list[str], output: dict) -> str:
         return feedback_instructions(inputs, output)
