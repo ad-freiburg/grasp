@@ -62,6 +62,7 @@ class Correspondence(BaseModel):
 
 class AlignmentTaskInput(BaseModel):
     source_data: list[Entity]
+    incoming_matches: list[Correspondence] = []
 
     source_kg: str
     target_kg: str
@@ -367,6 +368,8 @@ def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AlignmentStat
 
     state = AlignmentState()
     state.task_input = task_input
+    for correspondence in state.task_input.incoming_matches:
+        state.add_1_to_1_correspondence(correspondence)
 
     instructions = input_instructions(task_input, state)
     return instructions, state
