@@ -202,6 +202,7 @@ def get_embedding_search_params(
 def add_image_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--image-input",
+        nargs="+",
         type=str,
         default=None,
         help="Path to Image File for loading into Context",
@@ -871,7 +872,8 @@ def run_grasp(args: argparse.Namespace) -> None:
             ipt = args.input
 
         image_url = None
-        if getattr(args, "image_input", None):
+        # if getattr(args, "image_input", None):
+        if args.image_input is not None:
             if args.image_input.startswith("http"):
                 image_url = image_url_to_base64(args.image_input)
             elif args.image_input.startswith("data:"):
