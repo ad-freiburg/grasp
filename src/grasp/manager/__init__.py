@@ -9,12 +9,11 @@ from typing import Any, Iterable
 from cachetools import LRUCache
 from search_rdf import Data, EmbeddingIndex
 from search_rdf.model import (
-    HuggingFaceImageModel,
     OpenClipModel,
     SentenceTransformerModel,
+    HuggingFaceImageModel,
     ClapCapModel,
 )
-from universal_ml_utils.io import load_text
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
@@ -26,9 +25,7 @@ from grasp.manager.utils import (
     SearchIndex,
     format_index_meta,
     get_common_sparql_prefixes,
-    get_embedding_model_key,
     load_embedding_model,
-    load_image_from_url,
     load_index_description,
     load_info_sparql,
     load_kg_info,
@@ -81,6 +78,11 @@ from grasp.utils import (
     get_index_dir,
     ordered_unique,
 )
+from grasp.multimodal.utils import (
+    Modality,
+    guess_modality_type,
+)
+
 
 SEARCH_CACHE_MAX_SIZE = int(os.getenv("GRASP_SEARCH_CACHE_MAX_SIZE", "1024"))
 SEARCH_CACHE_MIN_MS = float(os.getenv("GRASP_SEARCH_CACHE_MIN_MS", "100"))
@@ -545,41 +547,60 @@ class KgManager:
             matched_label=matched_via,
         )
 
+    def get_embedding_model_key(index: EmbeddingIndex) -> str:
+        assert index.model is not None, "Embedding index must have model metadata"
+        provider = index.provider or "sentence-transformer"
+        return f"{provider}/{index.model}"
+
+    # def embed_query(
+    #     self,
+    #     index: EmbeddingIndex,
+    #     query: str,
+    #     modality: Modality = Modality.TEXT,
+    # ) -> list[float]:
+    #     # return _embed_query(index, query, modality, self.embedding_models)
+    #     return []
     def embed_query(
         self,
         index: EmbeddingIndex,
         query: str,
-        query_type: str = "text",
+        modality: Modality,
+        models: dict[str, EmbeddingModel],
     ) -> list[float]:
-        model_key = get_embedding_model_key(index)
-        model = self.embedding_models[model_key]
+        from grasp.multimodal.functions import load  # avoid circular import
+        model_key = self.get_embedding_model_key(index)
+        model = models[model_key]
 
-        if query_type == "text":
+        if modality == Modality.TEXT:
             if isinstance(model, SentenceTransformerModel):
-                return model.embed([query])[0].tolist()
+                return model.embed(query)[0].tolist()
             elif isinstance(model, OpenClipModel):
-                return model.embed_text([query])[0].tolist()
-            elif isinstance(model, HuggingFaceImageModel):
-                raise ValueError("Image embedding model does not support text queries")
+                return model.embed_text(query)[0].tolist()
+            elif isinstance(model, ClapCapModel):
+                return model.embed_text(query)[0].tolist()
             else:
-                raise ValueError(f"Unsupported embedding model type: {type(model)}")
+                raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
-        elif query_type == "image":
-            image = load_image_from_url(query)
+        elif modality == Modality.IMAGE:
+            input_type = guess_modality_type(query)
+            image = load(query, modality, input_type)
             if isinstance(model, OpenClipModel):
-                return model.embed_image([image])[0].tolist()
+                return model.embed_image(image)[0].tolist()
             elif isinstance(model, HuggingFaceImageModel):
-                return model.embed([image])[0].tolist()
-            elif isinstance(model, SentenceTransformerModel):
-                raise ValueError(
-                    "SentenceTransformer model does not support image queries"
-                )
+                return model.embed_image(image)[0].tolist()
             else:
-                raise ValueError(f"Unsupported embedding model type: {type(model)}")
+                raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
+        elif modality == Modality.AUDIO:
+            input_type = guess_modality_type(query)
+            audio = load(query, modality, input_type)
+            if isinstance(model, ClapCapModel):
+                model.embed_audio(audio)[0].tolist()
+            else:
+                raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
         else:
             raise ValueError(
-                f"Unsupported query_type '{query_type}', expected 'text' or 'image'"
+                f"Unsupported querytype '{modality}'"
             )
 
     def search_index(
@@ -588,7 +609,7 @@ class KgManager:
         query: str | None = None,
         k: int = 10,
         identifier_map: dict[str, list[str]] | None = None,
-        query_type: str = "text",
+        query_type: Modality = Modality.TEXT,
     ) -> list[Alternative]:
         start = time.monotonic()
         cache_key = None

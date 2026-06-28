@@ -238,18 +238,21 @@ def generate(
     start = time.monotonic()
 
     # add user input if main model supports vision
-    if image_url and "vision" in config.get_default_model.modality:
-        messages.append(
-            Message(
-                role="user",
-                content=[
-                    {"type": "text", "text": text_input},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
+    if image_url:
+        if "vision" in config.get_default_model.modality:
+            messages.append(
+                Message(
+                    role="user",
+                    content=[
+                        {"type": "text", "text": text_input},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                )
             )
-        )
+        else:
+            messages.append(Message.user(content=text_input + " [info] user has appended an image, use 'analyze(input='USER_INPUT', ... )' to retrieve its informations"))
     else:
-        messages.append(Message.user(content=text_input + " [info] user has appended an image, use 'analyze(input='USER_INPUT', ... )' to retrieve its informations"))
+        messages.append(Message.user(content=text_input))
 
     if (
         config.force_examples

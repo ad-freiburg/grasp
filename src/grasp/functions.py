@@ -1,12 +1,9 @@
 import math
 import time
-import os
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Iterable
-from enum import Enum
 import json
-import numpy as np
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
@@ -18,8 +15,6 @@ from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
 from grasp.shapes import ShapeSample
 from grasp.sparql.item import parse_into_binding
-from grasp.model.openai import OpenAICompletionsModel
-from grasp.model.base import Message, Response, ResponseMessage
 from grasp.sparql.types import (
     Alternative,
     AskResult,
@@ -45,8 +40,9 @@ from grasp.utils import (
 from grasp.multimodal.functions import (
     analyze,
     load,
-    guess_modality_type
+    Modality,
 )
+from grasp.multimodal.utils import guess_modality_type
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -54,10 +50,22 @@ if TYPE_CHECKING:
 # maximum number of results for constraining with sub indices
 MAX_RESULTS = 131072
 
-MODALITY_QUERY_TYPES = {
-    "text": [("text", "textual search query")],
-    "image": [("image", "URL pointing to an image")],
+MODALITY_QUERY_TYPES: dict[Modality, list[tuple[str, str]]] = {
+    Modality.TEXT: [(Modality.TEXT.value, "textual search query")],
+    Modality.IMAGE: [(Modality.IMAGE.value, "URL pointing to an image")],
+    Modality.AUDIO: [(Modality.AUDIO.value, "URL or path pointing to an audio file")],
 }
+
+
+def _parse_query_type(fn_args: dict) -> Modality:
+    raw = fn_args.get("query_type", Modality.TEXT.value)
+    try:
+        return Modality(raw)
+    except ValueError:
+        raise FunctionCallException(
+            f"Unknown query_type '{raw}', expected one of: "
+            + ", ".join(m.value for m in Modality)
+        )
 
 
 def kg_functions(
@@ -87,7 +95,7 @@ def kg_functions(
                 continue
             known_modalities.update(idx.index.modality)
 
-    assert all(mod in MODALITY_QUERY_TYPES for mod in known_modalities), (
+    assert all(Modality(mod) in MODALITY_QUERY_TYPES for mod in known_modalities), (
         f"Unknown modality in {known_modalities}"
     )
     index_names = sorted(known_indices)
@@ -575,7 +583,7 @@ query="restaurant", index="literals", page=1)""",
             )
 
     # prepare query type arg
-    query_types = [typ for mod in known_modalities for typ in MODALITY_QUERY_TYPES[mod]]
+    query_types = [typ for mod in known_modalities for typ in MODALITY_QUERY_TYPES[Modality(mod)]]
     query_type_prop = {
         "type": "string",
         "enum": sorted(qt for qt, _ in query_types),
@@ -788,7 +796,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
@@ -800,7 +808,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
@@ -812,7 +820,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
@@ -827,7 +835,7 @@ def call_function(
             {"subject": fn_args["entity"]},
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
@@ -868,7 +876,7 @@ def call_function(
             {"property": fn_args["property"]},
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
@@ -887,7 +895,7 @@ def call_function(
             fn_args.get("constraints"),
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
@@ -905,7 +913,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.know_before_use,
             config.sparql_request_timeout,
             config.sparql_read_timeout,
@@ -925,7 +933,6 @@ def call_function(
         manager = None
 
         model_choice = fn_args["models"]
-        print(f"[DEBUG]: Model Choice: {model_choice}")
         if not model_choice:
             raise FunctionCallException("no model choice given for analysis")
 
@@ -1117,7 +1124,7 @@ def search_entity(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
@@ -1146,7 +1153,7 @@ def search_property(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
@@ -1175,7 +1182,7 @@ def search_literal(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
@@ -1630,7 +1637,7 @@ def search_with_constraints(
     constraints: dict[str, str | None] | None,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     request_timeout: float | tuple[float, float] | None = None,
     read_timeout: float | None = None,
     page: int = 1,
@@ -1769,7 +1776,7 @@ def search_with_filter(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     know_before_use: bool = False,
     request_timeout: float | tuple[float, float] | None = None,
     read_timeout: float | None = None,

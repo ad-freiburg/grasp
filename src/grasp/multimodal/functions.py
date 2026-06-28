@@ -1,46 +1,25 @@
 import os
-from enum import Enum
 import numpy as np
 
-from grasp.configs import GraspConfig, LLMConfig
+from grasp.configs import LLMConfig
 from grasp.manager import KgManager
 from grasp.model.openai import OpenAICompletionsModel
 from grasp.model.base import Message, Response, ResponseMessage
 
 from grasp.multimodal.utils import (
+    guess_modality_type,
     image_file_to_base64,
     image_url_to_base64,
     audio_url_to_base64,
     audio_base64_to_file,
-    convert_base64_to_np_array
+    convert_base64_to_np_array,
+    ModalityTypes,
+    Modality,
 )
 from search_rdf.model.embedding import (
     OpenClipModel,
     ClapCapModel,
 )
-
-
-class Modality(str, Enum):
-    IMAGE = "image",
-    AUDIO = "audio",
-
-
-class ModalityTypes(str, Enum):
-    BASE64 = "base64"
-    URL = "url"
-    FILE = "file"
-
-
-def guess_modality_type(image_url: str) -> ModalityTypes:
-    # Guess data_type
-    input_type: ModalityTypes
-    if image_url.startswith("http"):
-        input_type = ModalityTypes.URL
-    elif image_url.startswith("data:"):
-        input_type = ModalityTypes.BASE64
-    else:
-        input_type = ModalityTypes.FILE
-    return input_type
 
 
 def load(input: str, modality: str, datatype: str) -> dict:
@@ -91,7 +70,6 @@ def verify(
     embedding_entity_image = model.embed_image([entity_image])
 
     score = float(np.dot(embedding_entity_image[0], embedding_input_image[0]))
-    print(f"[DEBUG] verified with score: {score}")
     return score if score >= THRESHOLD_IMAGE_TO_IMAGE else 0.0
 
 
@@ -153,40 +131,39 @@ def analyze_audio(audio_url: str, model: ClapCapModel) -> str:
 
 def analyze(
     input: str,
-    modality: str,
-    input_type: str,
+    modality: Modality,
+    input_type: ModalityTypes,
     manager: KgManager,
     models: list[LLMConfig],
     prompt: str | None = None,
 ) -> str:
 
-    modality = modality.lower()
-
-    if "image" in modality:
+    if modality == Modality.IMAGE:
         if prompt is None or not prompt.strip():
             raise ValueError("prompt is required for image analysis")
 
-        image_payload = load(input, datatype=ModalityTypes.BASE64 if "base64" in modality else ModalityTypes.URL, modality=Modality.IMAGE)
+        data_type = guess_modality_type(input)
+        image_payload = load(input, modality, data_type)
         image_url = image_payload["image_url"]["url"]
 
         return analyze_image(image_url, prompt, models)
 
-    if "audio" in modality:
+    if modality == Modality.AUDIO:
         if manager.clap_model is None:
             raise ValueError("clap_model is required for audio analysis")
 
         temp_file = None
 
         try:
-            if input_type == "filepath":
+            if input_type == ModalityTypes.FILE:
                 file_path = input
-            elif input_type == "audio_url":
+            elif input_type == ModalityTypes.URL:
                 audio = audio_url_to_base64(input)
                 format = audio["input_audio"]["format"]
                 data = audio["input_audio"]["data"]
                 file_path = audio_base64_to_file(data, format)
                 temp_file = file_path
-            elif input_type == "base64":
+            elif input_type == ModalityTypes.BASE64:
                 file_path = audio_base64_to_file(input)
                 temp_file = file_path
             else:
