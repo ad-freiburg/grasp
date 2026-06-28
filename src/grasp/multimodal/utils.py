@@ -2,10 +2,23 @@ import os
 import io
 import base64
 import tempfile
+from enum import Enum
 from urllib.request import Request, urlopen
 from PIL import Image
 import numpy as np
 from grasp.utils import FunctionCallException
+
+
+class Modality(str, Enum):
+    IMAGE = "image",
+    AUDIO = "audio",
+    TEXT = "text",
+
+
+class ModalityTypes(str, Enum):
+    BASE64 = "base64"
+    URL = "url"
+    FILE = "file"
 
 
 MAX_IMAGE_BYTES = 50 * 1048  # 50 KB Images at most
@@ -99,6 +112,18 @@ def resize_image(bytes: bytes, content_type: str) -> str:
     image_bytes = buffer.getvalue()
     data = base64.b64encode(image_bytes).decode("utf-8")
     return f"data:{content_type};base64,{data}"
+
+
+def guess_modality_type(image_url: str) -> ModalityTypes:
+    # Guess data_type
+    input_type: ModalityTypes
+    if image_url.startswith("http"):
+        input_type = ModalityTypes.URL
+    elif image_url.startswith("data:"):
+        input_type = ModalityTypes.BASE64
+    else:
+        input_type = ModalityTypes.FILE
+    return input_type
 
 
 _AUDIO_FORMAT_MAP = {
