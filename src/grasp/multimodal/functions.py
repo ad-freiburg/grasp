@@ -2,7 +2,7 @@ import os
 from enum import Enum
 import numpy as np
 
-from grasp.configs import GraspConfig
+from grasp.configs import GraspConfig, LLMConfig
 from grasp.manager import KgManager
 from grasp.model.openai import OpenAICompletionsModel
 from grasp.model.base import Message, Response, ResponseMessage
@@ -95,8 +95,8 @@ def verify(
     return score if score >= THRESHOLD_IMAGE_TO_IMAGE else 0.0
 
 
-def analyze_image(image_url: str, prompt: str, config: GraspConfig) -> str:
-    vision_configs = config.get_vision_models
+def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
+    vision_configs = models
 
     output_messages = {}
 
@@ -155,8 +155,8 @@ def analyze(
     input: str,
     modality: str,
     input_type: str,
-    config: GraspConfig,
     manager: KgManager,
+    models: list[LLMConfig],
     prompt: str | None = None,
 ) -> str:
 
@@ -169,7 +169,7 @@ def analyze(
         image_payload = load(input, datatype=ModalityTypes.BASE64 if "base64" in modality else ModalityTypes.URL, modality=Modality.IMAGE)
         image_url = image_payload["image_url"]["url"]
 
-        return analyze_image(image_url, prompt, config)
+        return analyze_image(image_url, prompt, models)
 
     if "audio" in modality:
         if manager.clap_model is None:

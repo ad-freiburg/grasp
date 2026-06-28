@@ -263,8 +263,19 @@ list(kg="wikidata", property="wdt:P19")""",
                             "For audio, this may be a question or null if a generic caption/description is enough."
                         ),
                     },
+                    "models": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": (
+                            "Choice of Models used for analysis ."
+                            "Available Models are given in the System Prompt. "
+                            "You can choose one or more models for an analysis. "
+                        )
+                    }
                 },
-                "required": ["input", "modality", "kg", "prompt"],
+                "required": ["input", "modality", "kg", "prompt", "models"],
                 "additionalProperties": False,
             },
             "strict": True,
@@ -913,6 +924,14 @@ def call_function(
         kg = fn_args["kg"]
         manager = None
 
+        model_choice = fn_args["models"]
+        print(f"[DEBUG]: Model Choice: {model_choice}")
+        if not model_choice:
+            raise FunctionCallException("no model choice given for analysis")
+
+        vision_models = config.get_vision_models
+        models = [model for model in vision_models if model.model in model_choice]
+
         if kg is not None:
             manager, _ = find_manager(managers, kg)
 
@@ -927,8 +946,8 @@ def call_function(
             input=input,
             modality=fn_args["modality"],
             input_type=modality_type,
-            config=config,
             manager=manager,
+            models=models,
             prompt=fn_args["prompt"],
         )
 
