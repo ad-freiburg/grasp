@@ -250,7 +250,7 @@ def generate(
                 )
             )
         else:
-            messages.append(Message.user(content=text_input + " [info] user has appended an image, use 'analyze(input='USER_INPUT', ... )' to retrieve its informations"))
+            messages.append(Message.user(content=text_input + r" [info] user has appended an images, use 'analyze(input='USER_INPUT{i}', ... )' to retrieve its informations, i ist the number of the image. Images attached:" + str(len(image_url))))
     else:
         messages.append(Message.user(content=text_input))
 

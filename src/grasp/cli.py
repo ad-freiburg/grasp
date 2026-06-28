@@ -827,7 +827,7 @@ def run_grasp(args: argparse.Namespace) -> None:
             if id is None:
                 ipt["id"] = str(i)
 
-            image_url = None
+            image_url = []
             if isinstance(ipt, dict):
                 image_url = ipt.get("image_url")
 
@@ -873,16 +873,17 @@ def run_grasp(args: argparse.Namespace) -> None:
         else:
             ipt = args.input
 
-        image_url = None
-        # if getattr(args, "image_input", None):
+        image_urls = []
         if args.image_input is not None:
-            if args.image_input[0].startswith("http"):
-                image_url = image_url_to_base64(args.image_input[0])
-            elif args.image_input[0].startswith("data:"):
-                image_url = args.image_input[0]
-            else:
-                image_url = image_file_to_base64(args.image_input[0])
-        if getattr(args, "audio_input", None):
+            for image in args.image_input:
+                if image.startswith("http"):
+                    image_url = image_url_to_base64(image)
+                elif image.startswith("data:"):
+                    image_url = image
+                else:
+                    image_url = image_file_to_base64(image)
+                image_urls.append(image_url)
+        if args.audio_input is not None:
             if not os.path.exists(args.audio_input):
                 raise FileNotFoundError(f"Audio input not found: {args.audio_input}")
             if not hasattr(managers[0], "clap_model") or managers[0].clap_model is None:
@@ -892,14 +893,14 @@ def run_grasp(args: argparse.Namespace) -> None:
         if args.input_format == "json":
             obj = json.loads(ipt)
             if image_url is not None:
-                obj["image_url"] = image_url
+                obj["image_url"] = image_urls
             inputs = [obj]
         else:
             if isinstance(ipt, str) and isinstance(audio_caption, str):
                 ipt += audio_caption
             inputs = [{
                 "input": ipt,
-                "image_url": image_url,
+                "image_url": image_urls,
             }]
             input_field = None  # overwrite
 
