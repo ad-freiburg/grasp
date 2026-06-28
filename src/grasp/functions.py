@@ -942,8 +942,9 @@ def call_function(
         if kg is not None:
             manager, _ = find_manager(managers, kg)
 
-        if fn_args["input"] == "USER_INPUT":
-            input = user_input
+        if str(fn_args["input"]).startswith("USER_INPUT"):
+            i = int(str(fn_args["input"]).lstrip("USER_INPUT"))
+            input = user_input[i - 1]
         else:
             input = fn_args["input"]
 
