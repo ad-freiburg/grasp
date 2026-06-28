@@ -60,6 +60,8 @@ from grasp.utils import (
     is_invalid_output,
     link,
     parse_key_value_pairs,
+)
+from grasp.multimodal.utils import (
     image_file_to_base64,
     image_url_to_base64,
 )
