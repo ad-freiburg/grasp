@@ -100,23 +100,17 @@ def system_instructions(
     if rules:
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
-# TODO
-# Additional rules to follow:
-# {format_list(rules)}"""
-# 
-#     if task.config.get_vision_models:
-#         instructions += f"""
-# 
-# Rules regarding Multimodal Inputs:
-# {format_list(multimodal_rules())}"""
-# 
-#     return instructions
+    if task.config.get_vision_models:
+        rules_multimodal = multimodal_rules()
+        blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
+        blocks.append(format_section("Vision Models to choose from: ", format_enumerate([(model.model, model.description) for model in task.config.get_vision_models])))
+
     return "\n\n".join(blocks)
 
 
 def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel], dict[str, LLMConfig]]:
     models: dict[str, EmbeddingModel] = {}
-    llms: dict = {model.name: get_model(model) for model in config.models}
+    llms: dict = {model.category: get_model(model) for model in config.models}
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
@@ -255,7 +249,7 @@ def generate(
             )
         )
     else:
-        messages.append(Message.user(content=text_input + " [info] user has appended an image, use 'analyste_user_input' to retrieve its informations"))
+        messages.append(Message.user(content=text_input + " [info] user has appended an image, use 'analyze(input='USER_INPUT', ... )' to retrieve its informations"))
 
     if (
         config.force_examples

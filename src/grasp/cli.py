@@ -874,12 +874,12 @@ def run_grasp(args: argparse.Namespace) -> None:
         image_url = None
         # if getattr(args, "image_input", None):
         if args.image_input is not None:
-            if args.image_input.startswith("http"):
-                image_url = image_url_to_base64(args.image_input)
-            elif args.image_input.startswith("data:"):
-                image_url = args.image_input
+            if args.image_input[0].startswith("http"):
+                image_url = image_url_to_base64(args.image_input[0])
+            elif args.image_input[0].startswith("data:"):
+                image_url = args.image_input[0]
             else:
-                image_url = image_file_to_base64(args.image_input)
+                image_url = image_file_to_base64(args.image_input[0])
         if getattr(args, "audio_input", None):
             if not os.path.exists(args.audio_input):
                 raise FileNotFoundError(f"Audio input not found: {args.audio_input}")
