@@ -33,8 +33,8 @@ from grasp.utils import (
     format_prefixes,
     format_response,
     format_section,
-    image_url_to_base64,
 )
+from grasp.multimodal.utils import image_url_to_base64
 
 
 def system_instructions(
