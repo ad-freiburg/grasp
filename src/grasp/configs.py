@@ -135,8 +135,9 @@ class JudgeConfig(ModelConfig):
 
 
 class LLMConfig(ModelConfig):
-    name: str
+    category: str
     modality: list[Modality]
+    description: str
 
 
 class GraspConfig(BaseModel):
@@ -216,7 +217,7 @@ class GraspConfig(BaseModel):
 
     @property
     def get_default_model(self) -> LLMConfig:
-        return [m for m in self.models if m.name == "grasp"][0]
+        return [m for m in self.models if m.category == "grasp"][0]
 
     @property
     def get_vision_models(self) -> list[LLMConfig]:
