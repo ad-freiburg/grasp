@@ -248,8 +248,6 @@ def rules() -> list[str]:
         "'<NIL>' (without the apostrophes but with the angle brackets)"),
         ("Do not link coreferences that do not contain at least part of the name "
         "but **do** link entity mentions that contain at least a part of a name."),
-        ("If you realize you are stuck in a loop do something different immediately "
-        "to break the loop!"),
         "If the user specifies additional instructions follow those instructions.",
     ]
 
