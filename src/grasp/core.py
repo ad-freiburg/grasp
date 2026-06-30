@@ -153,10 +153,10 @@ def generate(
         config = deepcopy(config)
         config.tool_choice = "auto"
         logger.debug("Setting tool choice to auto for general-qa task")
-    if task_name == "cea":
+    if task_name == "cea" or task_name == "entity-linking":
         config = deepcopy(config)
         config.know_before_use = True
-        logger.debug("Enabling know-before-use for cea task")
+        logger.debug(f"Enabling know-before-use for {task_name} task")
 
     task = get_task(task_name, managers, config, past_known)
 
