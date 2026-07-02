@@ -344,13 +344,13 @@ def annotate(
     entity: str,
     state: AnnotationState,
     known: set[str],
-    know_before_use: bool = False,
+    know_before_annotate: bool = False,
 ) -> str:
     manager, _ = find_manager(managers, kg)
 
     try:
         annotation = prepare_annotation(manager, entity)
-        if know_before_use and annotation.identifier not in known:
+        if know_before_annotate and annotation.identifier not in known:
             raise FunctionCallException(
                 f"The entity {entity} cannot be used for annotation "
                 "without being known from previous function call results. "
@@ -440,6 +440,9 @@ def call_function(
     )
     assert not example_indices, "Example indices are not supported for CEA task"
 
+    cea_kwargs = config.task_kwargs.get("cea", {})
+    know_before_annotate = cea_kwargs.get("know_before_annotate", True)
+
     if fn_name == "annotate":
         return annotate(
             managers,
@@ -449,7 +452,7 @@ def call_function(
             fn_args["entity"],
             state,
             known,
-            config.know_before_use,
+            know_before_annotate,
         )
 
     elif fn_name == "delete_annotation":

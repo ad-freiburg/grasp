@@ -204,10 +204,10 @@ class AnnotationState:
 
         # trim to only show the current window
         if only_current_window:
+            added_length = len(result) - self.text.length
             result = result[
                 self.annotation_window.start : self.annotation_window.stop
-                - self.text.length
-                - 1
+                + added_length
             ]
 
         if list_entities:
@@ -414,8 +414,8 @@ def annotate(
     entity: str | None,
     state: AnnotationState,
     known: set[str],
-    know_before_use: bool = False,
-    show_state_after_annotation=True,
+    know_before_annotate: bool = False,
+    show_state_after_annotation: bool = True,
 ) -> str:
     """
     A function for the llm to call to annotate the words_to_be_annotated in the text
@@ -460,7 +460,7 @@ def annotate(
             annotation = Annotation(identifier="<NIL>", entity="<NIL>")
         else:
             annotation = prepare_annotation(manager, entity)
-            if know_before_use and annotation.identifier not in known:
+            if know_before_annotate and annotation.identifier not in known:
                 raise FunctionCallException(
                     f"The entity {entity} cannot be used for annotation "
                     "without being known from previous function call results. "
@@ -619,6 +619,7 @@ def call_function(
     )
 
     el_kwargs = config.task_kwargs.get("entity-linking", {})
+    know_before_annotate = el_kwargs.get("know_before_annotate", True)
     show_state_after_annotate = el_kwargs.get("show_state_after_annotate", True)
 
     if fn_name == "annotate":
@@ -630,7 +631,7 @@ def call_function(
             fn_args["entity"],
             state,
             known,
-            config.know_before_use,
+            know_before_annotate,
             show_state_after_annotate,
         )
 
