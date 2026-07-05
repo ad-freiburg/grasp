@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from importlib import metadata
 
+from grasp.multimodal.functions import analyze_audio
 from search_rdf.model import SentenceTransformerModel
 from termcolor import colored
 from tqdm import tqdm
@@ -62,6 +63,8 @@ from grasp.utils import (
     parse_key_value_pairs,
 )
 from grasp.multimodal.utils import (
+    audio_file_to_base64,
+    audio_url_to_base64,
     image_file_to_base64,
     image_url_to_base64,
 )
@@ -214,6 +217,7 @@ def add_image_arg(parser: argparse.ArgumentParser) -> None:
 def add_audio_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--audio-input",
+        nargs="+",
         type=str,
         default=None,
         help="Path to Audio File for loading into context"
@@ -805,7 +809,8 @@ def run_grasp(args: argparse.Namespace) -> None:
 
     notes, kg_notes = load_notes(config)
 
-    audio_caption = None
+    audio_captions = []
+    image_urls = []
 
     if args.input_field is None:
         input_field = get_task(args.task, managers, config).default_input_field
@@ -827,18 +832,17 @@ def run_grasp(args: argparse.Namespace) -> None:
             if id is None:
                 ipt["id"] = str(i)
 
-            image_url = []
             if isinstance(ipt, dict):
-                image_url = ipt.get("image_url")
+                image_urls = ipt.get("image_url")
 
             if input_field is not None and not (isinstance(ipt, dict) and "image_url" in ipt and "input" in ipt):
                 ipt = extract_field(ipt, input_field)
 
-            if image_url is not None:
+            if image_urls is not None:
                 if isinstance(ipt, dict):
-                    ipt["image_url"] = image_url
+                    ipt["image_url"] = image_urls
                 else:
-                    ipt = {"input": ipt, "image_url": image_url}
+                    ipt = {"input": ipt, "image_url": image_urls}
 
             assert ipt is not None, (f"Input not found for input {i:,}")
 
@@ -873,31 +877,38 @@ def run_grasp(args: argparse.Namespace) -> None:
         else:
             ipt = args.input
 
-        image_urls = []
         if args.image_input is not None:
             for image in args.image_input:
                 if image.startswith("http"):
-                    image_url = image_url_to_base64(image)
+                    image_b64 = image_url_to_base64(image)
                 elif image.startswith("data:"):
-                    image_url = image
+                    image_b64 = image
                 else:
-                    image_url = image_file_to_base64(image)
-                image_urls.append(image_url)
+                    image_b64 = image_file_to_base64(image)
+                image_urls.append(image_b64)
         if args.audio_input is not None:
-            if not os.path.exists(args.audio_input):
-                raise FileNotFoundError(f"Audio input not found: {args.audio_input}")
-            if not hasattr(managers[0], "clap_model") or managers[0].clap_model is None:
-                raise ValueError("No Clap Model found")
-            audio_caption = " AUDIO_CAPTION: " + ",".join(managers[0].clap_model.generate_captions([args.audio_input]))
+            for audio in args.audio_input:
+                if (config.get_audio_model):
+                    if audio.startswith("http") or audio.startswith("data:"):
+                        audio_url = audio_url_to_base64(audio)
+                    else:
+                        audio_url = audio_file_to_base64(audio)
+                    audio_captions.append(analyze_audio(audio_url, config.get_audio_model))
+                else:
+                    if not os.path.exists(audio):
+                        raise FileNotFoundError(f"Audio input not found: {audio}")
+                    if not hasattr(managers[0], "clap_model") or managers[0].clap_model is None:
+                        raise ValueError("No Clap Model found")
+                    audio_captions.append(" AUDIO_CAPTION: " + ",".join(managers[0].clap_model.generate_captions([audio])))
 
         if args.input_format == "json":
             obj = json.loads(ipt)
-            if image_url is not None:
+            if image_urls is not None:
                 obj["image_url"] = image_urls
             inputs = [obj]
         else:
-            if isinstance(ipt, str) and isinstance(audio_caption, str):
-                ipt += audio_caption
+            if isinstance(ipt, str) and isinstance(audio_captions, list) and len(audio_captions) > 0:
+                ipt += str(audio_captions)
             inputs = [{
                 "input": ipt,
                 "image_url": image_urls,

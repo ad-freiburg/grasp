@@ -94,6 +94,14 @@ def audio_url_to_base64(url: str) -> dict:
     return {"type": "input_audio", "input_audio": {"data": data, "format": format}}
 
 
+def audio_file_to_base64(filepath: str) -> dict:
+    with open(filepath, "rb") as file:
+        audio_bytes = file.read()
+        data = base64.b64encode(audio_bytes).decode("utf-8")
+        file_extention = filepath.rsplit(".", 1)[-1].lower()
+    return {"type": "input_audio", "input_audio": {"data": data, "format": file_extention}}
+
+
 def convert_base64_to_np_array(image_url: str) -> np.ndarray:
     _, b64data = image_url.split(",", 1)
     img_bytes = base64.b64decode(b64data)

@@ -211,7 +211,11 @@ class GraspConfig(BaseModel):
 
     @property
     def get_vision_models(self) -> list[LLMConfig]:
-        return [m for m in self.models if "vision" in m.modality]
+        return [m for m in self.models if "image" in m.modality]
+
+    @property
+    def get_audio_model(self) -> LLMConfig:
+        return [m for m in self.models if "audio" in m.modality][0]
 
 
 class SpeechToTextConfig(BaseModel):

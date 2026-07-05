@@ -552,14 +552,6 @@ class KgManager:
         provider = index.provider or "sentence-transformer"
         return f"{provider}/{index.model}"
 
-    # def embed_query(
-    #     self,
-    #     index: EmbeddingIndex,
-    #     query: str,
-    #     modality: Modality = Modality.TEXT,
-    # ) -> list[float]:
-    #     # return _embed_query(index, query, modality, self.embedding_models)
-    #     return []
     def embed_query(
         self,
         index: EmbeddingIndex,
