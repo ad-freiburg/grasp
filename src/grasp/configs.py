@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, conlist, model_validator
 
 class Modality(str, Enum):
     TEXT = "text"
-    VISION = "vision"
+    IMAGE = "image"
     AUDIO = "audio"
     OCR = "ocr"
 

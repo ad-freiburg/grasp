@@ -280,6 +280,8 @@ list(kg="wikidata", property="wdt:P19")""",
                             "Choice of Models used for analysis ."
                             "Available Models are given in the System Prompt. "
                             "You can choose one or more models for an analysis. "
+                            "To safe resources you should utilise as few models here as possible "
+                            "and rather use them one after another if necessary."
                         )
                     }
                 },
