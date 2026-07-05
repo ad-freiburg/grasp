@@ -7,7 +7,7 @@ model_kwargs:
   reasoning:
         effort: env(REASONING_EFFORT:null)
         summary: env(REASONING_SUMMARY:null)
-    modality: [text, vision]
+    modality: [text, image]
     category: vision
     description: "Multimodal model from Google built for strong long-context and production inference, good for vision tasks"
   - model: env(MODEL:nuextract3-llmlb)
@@ -18,9 +18,20 @@ model_kwargs:
       reasoning:
         effort: env(REASONING_EFFORT:null)
         summary: env(REASONING_SUMMARY:null)
-    modality: [text, ocr]
+    modality: [text, image]
+    category: vision
+    description: "A lightweicht OCR Model for Document analysis"
+  - model: env(MODEL:gpt-audio)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, audio]
     category: documents
-    description: "OCR model for extracting Information in Markdown format from Images"
+    description: "OpenAIs small audio model for Audio analysis"
 
 tool_choice: env(TOOL_CHOICE:auto)
 

@@ -124,9 +124,33 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
     return str(output_messages)
 
 
-def analyze_audio(audio_url: str, model: ClapCapModel) -> str:
-    caption = model.generate_captions([audio_url])
-    return "AUDIO DESCRIPTION: [" + ",".join(caption) + "]"
+def analyze_audio(audio_url: dict, model: LLMConfig) -> str:
+    model = OpenAICompletionsModel(model)
+
+    system_prompt = """You are an audio analysis engine, evaluate the following points based on the provided audio: \
+1. a brief summary, \
+2. the detected language, \
+3. the important content/key points, \
+4. the audio quality or any noticeable noises. \
+\
+Do not include any introductory or closing sentences!"""
+
+    messages = [
+        Message.system(content=system_prompt),
+        Message(
+            role="user",
+            content=[
+                audio_url,
+            ],
+        ),
+    ]
+
+    response: Response = model.call(messages, fns=[])
+    if isinstance(response.message, ResponseMessage):
+        message = response.message.content
+    else:
+        message = response.message
+    return message
 
 
 def analyze(
