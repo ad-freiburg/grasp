@@ -8,7 +8,7 @@ class Modality(str, Enum):
     TEXT = "text"
     IMAGE = "image"
     AUDIO = "audio"
-    OCR = "ocr"
+    GRASP = "grasp"
 
 
 class KgInfo(BaseModel):
@@ -135,7 +135,6 @@ class JudgeConfig(ModelConfig):
 
 
 class LLMConfig(ModelConfig):
-    category: str
     modality: list[Modality]
     description: str
 
@@ -217,7 +216,7 @@ class GraspConfig(BaseModel):
 
     @property
     def get_default_model(self) -> LLMConfig:
-        return [m for m in self.models if m.category == "grasp"][0]
+        return [m for m in self.models if "grasp" in m.modality][0]
 
     @property
     def get_vision_models(self) -> list[LLMConfig]:

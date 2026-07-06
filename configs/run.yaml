@@ -18,8 +18,7 @@ model_kwargs:
       reasoning:
         effort: env(REASONING_EFFORT:null)
         summary: env(REASONING_SUMMARY:null)
-    modality: [text, image, ocr]
-    category: vision
+    modality: [text, image]
     description: "A lightweicht OCR Model for Document analysis"
   - model: env(MODEL:gpt-audio-1.5)
     model_provider: env(MODEL_PROVIDER:openai/completions)
@@ -30,7 +29,6 @@ model_kwargs:
         effort: env(REASONING_EFFORT:null)
         summary: env(REASONING_SUMMARY:null)
     modality: [text, audio]
-    category: documents
     description: "OpenAIs small audio model for Audio analysis"
 
 tool_choice: env(TOOL_CHOICE:auto)
