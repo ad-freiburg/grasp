@@ -154,6 +154,27 @@ def generate(
     yield_output: bool = False,
     custom_model: Model | None = None,
 ) -> Generator[dict, None, dict]:
+    def media_reference_hint(num_images: int, num_audio: int) -> str:
+        details: list[str] = []
+        if num_images > 0:
+            details.append(
+                f"images USER_INPUT1..USER_INPUT{num_images} (modality='image')"
+            )
+        if num_audio > 0:
+            start = num_images + 1
+            end = num_images + num_audio
+            details.append(
+                f"audio USER_INPUT{start}..USER_INPUT{end} (modality='audio')"
+            )
+        if not details:
+            return ""
+        return (
+            " [info] user appended media files. "
+            "If you call analyze(...), USER_INPUT indices map as follows: "
+            + "; ".join(details)
+            + "."
+        )
+
     if task_name != "sparql-qa" and task_name != "general-qa":
         # disable examples for tasks other than sparql-qa and general-qa
         # to avoid errors due to missing implementations
@@ -179,15 +200,41 @@ def generate(
     )
     fns.extend(task.function_definitions())
 
-    image_url = None
-    if (isinstance(raw_input, dict)):
-        image_url = raw_input.get("image_url")
+    image_urls: list[str] = []
+    audio_inputs: list[str] = []
+
+    if isinstance(raw_input, dict):
         text_input = raw_input.get("input", "")
+
+        raw_images = raw_input.get("image_input")
+        if raw_images is None:
+            raw_images = raw_input.get("image_url")
+
+        if isinstance(raw_images, str):
+            raw_images = [raw_images]
+        if isinstance(raw_images, list):
+            image_urls = [x for x in raw_images if isinstance(x, str) and x.strip()]
+
+        raw_audio = raw_input.get("audio_input")
+        if isinstance(raw_audio, str):
+            raw_audio = [raw_audio]
+        if isinstance(raw_audio, list):
+            audio_inputs = [x for x in raw_audio if isinstance(x, str) and x.strip()]
     else:
         text_input = raw_input
 
-    if isinstance(image_url, str) and image_url.startswith("http"):
-        image_url = image_url_to_base64(image_url)
+    normalized_images: list[str] = []
+    for image in image_urls:
+        if image.startswith("http"):
+            normalized_images.append(image_url_to_base64(image))
+        else:
+            normalized_images.append(image)
+
+    image_urls = normalized_images
+    media_inputs: list[str] | None = None
+    if image_urls or audio_inputs:
+        media_inputs = [*image_urls, *audio_inputs]
+    media_hint = media_reference_hint(len(image_urls), len(audio_inputs))
 
     text_input = task.setup(text_input)
 
@@ -238,19 +285,32 @@ def generate(
     start = time.monotonic()
 
     # add user input if main model supports vision
-    if image_url:
+    if image_urls:
         if "vision" in config.get_default_model.modality:
+            text_with_hint = text_input + media_hint if media_hint else text_input
+            content = [{"type": "text", "text": text_with_hint}]
+            content.extend(
+                {"type": "image_url", "image_url": {"url": image_url}}
+                for image_url in image_urls
+            )
             messages.append(
                 Message(
                     role="user",
-                    content=[
-                        {"type": "text", "text": text_input},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
+                    content=content,
                 )
             )
         else:
-            messages.append(Message.user(content=text_input + r" [info] user has appended an images, use 'analyze(input='USER_INPUT{i}', ... )' to retrieve its informations, i ist the number of the image. Images attached:" + str(len(image_url))))
+            messages.append(
+                Message.user(
+                    content=text_input + media_hint
+                )
+            )
+    elif audio_inputs:
+        messages.append(
+            Message.user(
+                content=text_input + media_hint
+            )
+        )
     else:
         messages.append(Message.user(content=text_input))
 
@@ -397,7 +457,7 @@ def generate(
                     task.known,
                     task,
                     example_indices,
-                    image_url
+                    media_inputs,
                 )
             except Exception as e:
                 tool_call.error = str(e)

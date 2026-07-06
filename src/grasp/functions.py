@@ -760,7 +760,7 @@ def call_function(
     known: set[str],
     task: "GraspTask | None" = None,
     example_indices: dict | None = None,
-    user_input: str | None = None,
+    user_input: list[str] | None = None,
 ) -> str:
     if fn_name == "execute":
         return execute_sparql(
@@ -944,8 +944,20 @@ def call_function(
         if kg is not None:
             manager, _ = find_manager(managers, kg)
 
-        if str(fn_args["input"]).startswith("USER_INPUT"):
-            i = int(str(fn_args["input"]).lstrip("USER_INPUT"))
+        input_arg = str(fn_args["input"])
+        if input_arg.startswith("USER_INPUT"):
+            if user_input is None:
+                raise FunctionCallException("No user media input available")
+            try:
+                i = int(input_arg[len("USER_INPUT"):])
+            except ValueError as exc:
+                raise FunctionCallException(
+                    f"Invalid USER_INPUT reference: {input_arg}"
+                ) from exc
+            if i < 1 or i > len(user_input):
+                raise FunctionCallException(
+                    f"USER_INPUT index out of range: {i} (available: {len(user_input)})"
+                )
             input = user_input[i - 1]
         else:
             input = fn_args["input"]

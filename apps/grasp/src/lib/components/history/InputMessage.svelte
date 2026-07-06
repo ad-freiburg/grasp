@@ -26,6 +26,22 @@
     typeof elInput?.special_instructions === 'string'
       ? elInput.special_instructions.trim()
       : '';
+
+  $: rawInput = message?.input;
+  $: inputText =
+    typeof rawInput === 'string'
+      ? rawInput
+      : typeof rawInput?.input === 'string'
+        ? rawInput.input
+        : '';
+  $: imageCount = Array.isArray(rawInput?.image_input)
+    ? rawInput.image_input.length
+    : Array.isArray(rawInput?.image_url)
+      ? rawInput.image_url.length
+      : 0;
+  $: audioCount = Array.isArray(rawInput?.audio_input)
+    ? rawInput.audio_input.length
+    : 0;
 </script>
 
 <MessageCard title="Input" accent="var(--color-uni-green)">
@@ -43,7 +59,20 @@
       </p>
     {/if}
   {:else}
-    <MarkdownContent content={message?.input ?? ''} />
+    <MarkdownContent content={inputText} />
+  {#if imageCount > 0 || audioCount > 0}
+    <p class="input-media-summary">
+      {#if imageCount > 0}
+        {imageCount} image{imageCount === 1 ? '' : 's'}
+      {/if}
+      {#if imageCount > 0 && audioCount > 0}
+        {' · '}
+      {/if}
+      {#if audioCount > 0}
+        {audioCount} audio file{audioCount === 1 ? '' : 's'}
+      {/if}
+    </p>
+  {/if}
   {/if}
 </MessageCard>
 
@@ -77,5 +106,13 @@
     margin: var(--spacing-xs) 0 0;
     font-size: 0.85rem;
     color: var(--text-primary);
+  }
+</style>
+
+<style>
+  .input-media-summary {
+    margin: 0.55rem 0 0;
+    font-size: 0.78rem;
+    color: var(--text-subtle);
   }
 </style>

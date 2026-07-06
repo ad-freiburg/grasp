@@ -129,7 +129,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
         allow_headers=["*"],
     )
 
-    managers, models = setup(config)
+    managers, models, _ = setup(config)
 
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
     if examples_model is None:
