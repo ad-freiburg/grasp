@@ -82,17 +82,16 @@ relevant information to solve the task is recommended. \
 
 def multimodal_rules(isMultimodal: bool) -> list[str]:
     rules = [
-        "You MUST assume that you do not have direct access to image or audio content.",
         "You MAY only process non-text media through the available multimodal tools.",
         "When a user provides an image or audio file and the task depends on visual \
 or auditory evidence, you MUST use `analyze(...)` to inspect it.",
         "You MUST NOT use multimodal tools when text or structured data is sufficient.",
         "If a visually observable attribute is requested and text or structured sources \
 do not answer it, you MUST use `analyze(...)` instead of refusing.",
-        "You MUST NOT claim to see the media directly; any conclusion about the media must be based \
-only on multimodal tool output."
     ]
     if (isMultimodal):
         rules.append("You MUST use `load(...)` only when the media needs to be prepared or normalized \
 before analysis.")
+    else:
+        rules.append("You MUST assume that you do not have direct access to image or audio content.")
     return rules

@@ -103,7 +103,13 @@ def system_instructions(
     if task.config.get_vision_models:
         rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality)
         blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
-        blocks.append(format_section("Vision Models to choose from: ", format_enumerate([(model.model, model.description) for model in task.config.get_vision_models])))
+        vision_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_vision_models]
+        blocks.append(
+            format_section(
+                "Vision Models to Choose from for 'analyze()'",
+                format_enumerate(vision_model_list)
+            )
+        )
 
     return "\n\n".join(blocks)
 
