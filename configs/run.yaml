@@ -18,10 +18,10 @@ model_kwargs:
       reasoning:
         effort: env(REASONING_EFFORT:null)
         summary: env(REASONING_SUMMARY:null)
-    modality: [text, image]
+    modality: [text, image, ocr]
     category: vision
     description: "A lightweicht OCR Model for Document analysis"
-  - model: env(MODEL:gpt-audio)
+  - model: env(MODEL:gpt-audio-1.5)
     model_provider: env(MODEL_PROVIDER:openai/completions)
     model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
     model_api_key: env(OPENAI_API_KEY)
