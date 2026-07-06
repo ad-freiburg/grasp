@@ -10,7 +10,7 @@ from openai import APIConnectionError
 from universal_ml_utils.io import load_json
 from universal_ml_utils.logging import get_logger
 
-from grasp.configs import GraspConfig, LLMConfig
+from grasp.configs import GraspConfig, LLMConfig, Modality
 from grasp.examples import ExampleIndex
 from grasp.functions import call_function, kg_functions
 from grasp.manager import KgManager, format_kgs, load_kg_manager
@@ -101,16 +101,15 @@ def system_instructions(
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
     if task.config.get_vision_models:
-        rules_multimodal = multimodal_rules()
+        rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality)
         blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
         blocks.append(format_section("Vision Models to choose from: ", format_enumerate([(model.model, model.description) for model in task.config.get_vision_models])))
 
     return "\n\n".join(blocks)
 
 
-def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel], dict[str, LLMConfig]]:
+def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel]]:
     models: dict[str, EmbeddingModel] = {}
-    llms: dict = {model.category: get_model(model) for model in config.models}
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
@@ -121,7 +120,7 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
             )
         managers.append(manager)
 
-    return managers, models, llms
+    return managers, models,
 
 
 def load_notes(config: GraspConfig) -> tuple[list[str], dict[str, list[str]]]:

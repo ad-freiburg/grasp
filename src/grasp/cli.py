@@ -792,7 +792,7 @@ def run_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, models, llms = setup(config)
+    managers, models = setup(config)
 
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
     if examples_model is not None:
@@ -1112,7 +1112,7 @@ def setup_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _, _ = setup(config)
+    managers, _= setup(config)
     if not managers:
         logger.error("No KG managers available for setup")
         return
@@ -1227,7 +1227,7 @@ def shapes_setup_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SHAPES SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _, _ = setup(config)
+    managers, _ = setup(config)
     if not managers:
         logger.error("No KG managers available")
         return
@@ -1299,7 +1299,7 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SHAPES BUILD", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _, _ = setup(config)
+    managers, _ = setup(config)
     if not managers:
         logger.error("No KG managers available")
         return

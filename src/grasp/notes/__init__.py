@@ -56,7 +56,7 @@ def take_notes_from_samples(
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
-    managers, models, _ = setup(config)
+    managers, models = setup(config)
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
     if examples_model is not None:
         assert isinstance(examples_model, SentenceTransformerModel), (
@@ -214,7 +214,7 @@ def take_notes_from_outputs(
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
-    managers, _, _ = setup(config)
+    managers, _ = setup(config)
     notes, kg_notes = load_notes(config)
 
     note_taking_model = (
@@ -292,7 +292,7 @@ def take_notes_from_exploration(
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
-    managers, models, _ = setup(config)
+    managers, models = setup(config)
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
     if examples_model is not None:
         assert isinstance(examples_model, SentenceTransformerModel), (
@@ -363,7 +363,7 @@ def generate_questions(
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
-    managers, _, _ = setup(config)
+    managers, _ = setup(config)
     notes, kg_notes = load_notes(config)
 
     dump_config(config, out_dir)
