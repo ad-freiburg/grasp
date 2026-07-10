@@ -303,7 +303,7 @@ This function overwrites any previous annotation of the words.""",
                         "description": "The exact words to be annotated written exactly like in the original text.",
                     },
                     "occurrence_index": {
-                        "type": "int",
+                        "type": "integer",
                         "description": "Index of the occurrence of the words in the text.",
                     },
                     "entity": {
@@ -338,7 +338,7 @@ so always keep that in mind and adjust the occurrence_index accordingly.""",
                         "description": "The exact words whose annotation should be deleted, written exactly like in the original text.",
                     },
                     "occurrence_index": {
-                        "type": "int",
+                        "type": "integer",
                         "description": "Index of the occurrence of the words in the text.",
                     },
                 },
