@@ -250,6 +250,7 @@ def parse_args() -> argparse.Namespace:
     # run GRASP server
     server_parser = subparsers.add_parser("serve", help="Start a GRASP server")
     add_config_arg(server_parser)
+    add_load_user_input(server_parser)
 
     # run GRASP on a single input
     run_parser = subparsers.add_parser(
@@ -987,7 +988,7 @@ def run_grasp(args: argparse.Namespace) -> None:
 
 def serve_grasp(args: argparse.Namespace) -> None:
     config = ServerConfig(**load_config(args.config))
-    if (args.load_user_input):
+    if args.load_user_input:
         config.load_user_input = True
 
     serve(config, args.log_level)

@@ -243,7 +243,6 @@ class ServerConfig(GraspConfig):
     rate_limit: int | None = None
     rate_limit_window: int = 60
     speech_to_text: SpeechToTextConfig | None = None
-    load_user_input: bool = False
 
 
 class NotesConfig(GraspConfig):
