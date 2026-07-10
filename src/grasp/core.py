@@ -34,7 +34,10 @@ from grasp.utils import (
     format_response,
     format_section,
 )
-from grasp.multimodal.utils import image_url_to_base64
+from grasp.multimodal.utils import (
+    image_url_to_base64,
+    media_reference_hint,
+)
 
 
 def system_instructions(
@@ -101,7 +104,7 @@ def system_instructions(
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
     if task.config.get_vision_models:
-        rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality)
+        rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality and task.config.load_user_input)
         blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
         vision_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_vision_models]
         blocks.append(
@@ -159,26 +162,6 @@ def generate(
     yield_output: bool = False,
     custom_model: Model | None = None,
 ) -> Generator[dict, None, dict]:
-    def media_reference_hint(num_images: int, num_audio: int) -> str:
-        details: list[str] = []
-        if num_images > 0:
-            details.append(
-                f"images USER_INPUT1..USER_INPUT{num_images} (modality='image')"
-            )
-        if num_audio > 0:
-            start = num_images + 1
-            end = num_images + num_audio
-            details.append(
-                f"audio USER_INPUT{start}..USER_INPUT{end} (modality='audio')"
-            )
-        if not details:
-            return ""
-        return (
-            " [info] user appended media files. "
-            "If you call analyze(...), USER_INPUT indices map as follows: "
-            + "; ".join(details)
-            + "."
-        )
 
     if task_name != "sparql-qa" and task_name != "general-qa":
         # disable examples for tasks other than sparql-qa and general-qa
@@ -289,28 +272,30 @@ def generate(
 
     start = time.monotonic()
 
-    # add user input if main model supports vision
-    if image_urls:
-        if "vision" in config.get_default_model.modality:
-            text_with_hint = text_input + media_hint if media_hint else text_input
-            content = [{"type": "text", "text": text_with_hint}]
-            content.extend(
-                {"type": "image_url", "image_url": {"url": image_url}}
-                for image_url in image_urls
+    supports_image_input = Modality.IMAGE in config.get_default_model.modality
+
+    # add user input
+    if image_urls and config.load_user_input:
+        if not supports_image_input:
+            raise ValueError(
+                "Direct user-context loading is enabled, but the default model "
+                f"'{config.get_default_model.model}' does not support image inputs"
             )
-            messages.append(
-                Message(
-                    role="user",
-                    content=content,
-                )
+
+        media_hint = media_reference_hint(0, len(audio_inputs))
+        content = [{"type": "text", "text": text_input}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image_url}}
+            for image_url in image_urls
+        )
+        messages.append(
+            Message(
+                role="user",
+                content=content,
             )
-        else:
-            messages.append(
-                Message.user(
-                    content=text_input + media_hint
-                )
-            )
-    elif audio_inputs:
+        )
+
+    elif image_urls or audio_inputs:
         messages.append(
             Message.user(
                 content=text_input + media_hint

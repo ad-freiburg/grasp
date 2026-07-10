@@ -82,16 +82,22 @@ relevant information to solve the task is recommended. \
 
 def multimodal_rules(isMultimodal: bool) -> list[str]:
     rules = [
-        "You MAY only process non-text media through the available multimodal tools.",
-        "When a user provides an image or audio file and the task depends on visual \
-or auditory evidence, you MUST use `analyze(...)` to inspect it.",
-        "You MUST NOT use multimodal tools when text or structured data is sufficient.",
-        "If a visually observable attribute is requested and text or structured sources \
-do not answer it, you MUST use `analyze(...)` instead of refusing.",
+        "You MUST NOT use multimodal tool calls when text or structured data is sufficient.",
+        "Reuse prior inspection or analysis results, do not analyze the same media twice."
     ]
     if (isMultimodal):
-        rules.append("You MUST use `load(...)` only when the media needs to be prepared or normalized \
-before analysis.")
+        rules.append("The current conversation includes directly accessible image input.")
+        rules.append("When a current-message image is relevant, first inspect it yourself using your\
+   built-in visual understanding. Do not call any tool for this initial inspection.")
+        rules.append("Use load(...) only to retrieve media not directly accessible.")
+        rules.append("Use analyze(...) only when direct inspection is unavailable or insufficient.")
+        rules.append("Never invent input IDs, file handles, URLs, vision models, or media references.")
     else:
         rules.append("You MUST assume that you do not have direct access to image or audio content.")
+        rules.append("If a visually observable attribute is requested and text or structured sources \
+do not answer it, you MUST use `analyze(...)` instead of refusing.")
+        rules.append("When a user provides an audio or image file and the task depends on visual \
+or auditory evidence, you MUST use `analyze(...)` to inspect it.")
+        rules.append("When structured Data does not suffice for your answer and a visual or accoustic analysis could help, \
+you can use analyze() to inspect referenced data from the Database like image-urls or links to media")
     return rules

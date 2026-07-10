@@ -214,6 +214,14 @@ def add_image_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_load_user_input(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--load-user-input",
+        action="store_true",
+        help="Forces user inputs directly into grasp model context"
+    )
+
+
 def add_audio_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--audio-input",
@@ -274,6 +282,7 @@ def parse_args() -> argparse.Namespace:
     add_task_arg(run_parser)
     add_image_arg(run_parser)
     add_audio_arg(run_parser)
+    add_load_user_input(run_parser)
 
     # run GRASP on file with inputs
     file_parser = subparsers.add_parser(
@@ -334,6 +343,7 @@ def parse_args() -> argparse.Namespace:
     add_overwrite_arg(file_parser)
     add_image_arg(file_parser)
     add_audio_arg(file_parser)
+    add_load_user_input(file_parser)
 
     # run GRASP note taking
     note_parser = subparsers.add_parser(
@@ -792,6 +802,9 @@ def run_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
+    if (args.load_user_input):
+        config.load_user_input = True
+
     managers, models = setup(config)
 
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
@@ -970,6 +983,8 @@ def run_grasp(args: argparse.Namespace) -> None:
 
 def serve_grasp(args: argparse.Namespace) -> None:
     config = ServerConfig(**load_config(args.config))
+    if (args.load_user_input):
+        config.load_user_input = True
 
     serve(config, args.log_level)
 
@@ -1112,7 +1127,7 @@ def setup_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
-    managers, _= setup(config)
+    managers, _ = setup(config)
     if not managers:
         logger.error("No KG managers available for setup")
         return

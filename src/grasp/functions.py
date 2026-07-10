@@ -243,7 +243,6 @@ list(kg="wikidata", property="wdt:P19")""",
                             "The media input to analyze. "
                             "This can be a normalized data URL from load(), a public URL, "
                             "a raw base64 string, or a local file path depending on input_type."
-                            "If a user given input shall be analyzed, use USER_INPUT<i> as input"
                         ),
                     },
                     "modality": {

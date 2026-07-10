@@ -199,6 +199,7 @@ class GraspConfig(BaseModel):
     feedback: bool = False
     max_feedbacks: int = 2
     notes_only_for_feedback: bool = False
+    load_user_input: bool = False
 
     @property
     def sparql_request_timeout(self) -> tuple[float, float]:
@@ -242,6 +243,7 @@ class ServerConfig(GraspConfig):
     rate_limit: int | None = None
     rate_limit_window: int = 60
     speech_to_text: SpeechToTextConfig | None = None
+    load_user_input: bool = False
 
 
 class NotesConfig(GraspConfig):
