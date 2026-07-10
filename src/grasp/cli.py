@@ -900,13 +900,17 @@ def run_grasp(args: argparse.Namespace) -> None:
                     image_b64 = image_file_to_base64(image)
                 image_urls.append(image_b64)
         if args.audio_input is not None:
+            audio_model = next(
+                (model for model in config.models if "audio" in model.modality),
+                None,
+            )
             for audio in args.audio_input:
-                if (config.get_audio_model):
+                if audio_model is not None:
                     if audio.startswith("http") or audio.startswith("data:"):
                         audio_url = audio_url_to_base64(audio)
                     else:
                         audio_url = audio_file_to_base64(audio)
-                    audio_captions.append(analyze_audio(audio_url, config.get_audio_model))
+                    audio_captions.append(analyze_audio(audio_url, audio_model))
                 else:
                     if not os.path.exists(audio):
                         raise FileNotFoundError(f"Audio input not found: {audio}")

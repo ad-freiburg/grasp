@@ -565,11 +565,11 @@ class KgManager:
 
         if modality == Modality.TEXT:
             if isinstance(model, SentenceTransformerModel):
-                return model.embed(query)[0].tolist()
+                return model.embed([query])[0].tolist()
             elif isinstance(model, OpenClipModel):
-                return model.embed_text(query)[0].tolist()
+                return model.embed_text([query])[0].tolist()
             elif isinstance(model, ClapCapModel):
-                return model.embed_text(query)[0].tolist()
+                return model.embed_text([query])[0].tolist()
             else:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
@@ -577,9 +577,9 @@ class KgManager:
             input_type = guess_modality_type(query)
             image = load(query, modality, input_type)
             if isinstance(model, OpenClipModel):
-                return model.embed_image(image)[0].tolist()
+                return model.embed_image([image])[0].tolist()
             elif isinstance(model, HuggingFaceImageModel):
-                return model.embed_image(image)[0].tolist()
+                return model.embed([image])[0].tolist()
             else:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
@@ -587,7 +587,7 @@ class KgManager:
             input_type = guess_modality_type(query)
             audio = load(query, modality, input_type)
             if isinstance(model, ClapCapModel):
-                model.embed_audio(audio)[0].tolist()
+                return model.embed_audio([audio])[0].tolist()
             else:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
         else:

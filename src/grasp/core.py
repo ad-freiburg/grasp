@@ -124,12 +124,13 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
         manager = load_kg_manager(kg)
         models = manager.load_models(
             models,
+            embedding_model=config.embedding_model,
             clip_model=config.clip_model,
             clap_model=config.clap_model
             )
         managers.append(manager)
 
-    return managers, models,
+    return managers, models
 
 
 def load_notes(config: GraspConfig) -> tuple[list[str], dict[str, list[str]]]:
