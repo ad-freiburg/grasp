@@ -10,9 +10,9 @@ from grasp.utils import FunctionCallException
 
 
 class Modality(str, Enum):
-    IMAGE = "image",
-    AUDIO = "audio",
-    TEXT = "text",
+    IMAGE = "image"
+    AUDIO = "audio"
+    TEXT = "text"
 
 
 class ModalityTypes(str, Enum):
@@ -21,7 +21,7 @@ class ModalityTypes(str, Enum):
     FILE = "file"
 
 
-MAX_IMAGE_BYTES = 50 * 1048  # 50 KB Images at most
+MAX_IMAGE_BYTES = 50 * 1024  # 50 KB Images at most
 
 
 def image_file_to_base64(path: str) -> str:
