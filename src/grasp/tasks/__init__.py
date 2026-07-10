@@ -83,7 +83,8 @@ relevant information to solve the task is recommended. \
 def multimodal_rules(isMultimodal: bool) -> list[str]:
     rules = [
         "You MUST NOT use multimodal tool calls when text or structured data is sufficient.",
-        "Reuse prior inspection or analysis results, do not analyze the same media twice."
+        "Reuse prior inspection or analysis results, do not analyze the same media twice.",
+        "You MUST use ALL user provided inputs before canceling the task.",
     ]
     if (isMultimodal):
         rules.append("The current conversation includes directly accessible image input.")

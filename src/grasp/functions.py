@@ -201,7 +201,8 @@ list(kg="wikidata", property="wdt:P19")""",
                             "The raw media input. "
                             "For datatype 'url', provide a public HTTP(S) URL. "
                             "For datatype 'base64', provide a base64 string or data URL. "
-                            "For datatype 'file', provide a local file path."
+                            "For datatype 'file', provide a local file path. "
+                            "load() can NOT be used on USER_INPUT"
                         ),
                     },
                     "modality": {

@@ -137,22 +137,25 @@ def guess_modality_type(image_url: str) -> ModalityTypes:
 def media_reference_hint(num_images: int, num_audio: int) -> str:
     details: list[str] = []
     if num_images > 0:
-        details.append(
-            f"images USER_INPUT1..USER_INPUT{num_images} (modality='image')"
+        details.extend(
+            f"USER_INPUT{i} (modality='image')"
+            for i in range(1, num_images + 1)
         )
     if num_audio > 0:
         start = num_images + 1
         end = num_images + num_audio
-        details.append(
-            f"audio USER_INPUT{start}..USER_INPUT{end} (modality='audio')"
+        details.extend(
+            f"USER_INPUT{i} (modality='audio')"
+            for i in range(start, end)
         )
     if not details:
         return ""
     return (
         " [info] user appended media files. "
-        "If you call analyze(...), USER_INPUT indices map as follows: "
+        "If you call analyze(...), USER_INPUT<i> indices map as follows: "
         + "; ".join(details)
-        + "."
+        + ". "
+        + "Analyze ALL given USER_INPUTs before canceling the task!"
     )
 
 
