@@ -384,7 +384,7 @@ class OpenAIResponsesModel(Model):
         kwargs["model"] = config.model
         kwargs["input"] = self.prepare_input(messages)
         kwargs["max_output_tokens"] = config.max_completion_tokens
-        kwargs["store"] = True
+        kwargs["store"] = False
         kwargs["include"] = ["message.input_image.image_url"]
         if fns:
             kwargs["tools"] = [{"type": "function", **fn} for fn in fns]
