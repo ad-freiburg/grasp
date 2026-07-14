@@ -1208,19 +1208,20 @@ def execute_sparql(
     if know_before_use and known is not None:
         check_known(manager, sparql, known)
 
+    start = time.monotonic()
     try:
-        start = time.monotonic()
         result = manager.execute_sparql(
             sparql,
             request_timeout,
             read_timeout,
             sparql_result_max_rows=sparql_result_max_rows,
         )
-        end = time.monotonic()
     except Exception as e:
-        error = f"SPARQL execution failed:\n{e}"
+        diff = time.monotonic() - start
+        error = f"SPARQL execution failed in {diff:.2f}s:\n{e}"
         return ExecutionResult(sparql, error)
 
+    diff = time.monotonic() - start
     half_rows = math.ceil(max_rows / 2)
     half_columns = math.ceil(max_columns / 2)
 
@@ -1247,7 +1248,7 @@ def execute_sparql(
         half_rows,
         half_columns,
         half_columns,
-        time=end - start,
+        time=diff,
     )
     return ExecutionResult(sparql, formatted, result)
 

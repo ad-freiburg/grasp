@@ -1068,10 +1068,13 @@ def format_iri(
 
 def prepare_identifier_for_sparql(identifier: str, parser: LR1Parser) -> str:
     binding = parse_into_binding(identifier, parser)
+
     if binding is None and has_scheme(identifier):
         binding = parse_into_binding(wrap_iri(identifier), parser)
+
     if binding is None:
         return identifier
+
     return binding.sparql()
 
 

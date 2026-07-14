@@ -14,6 +14,7 @@ from grasp.tasks.exploration.structural.functions import (
 )
 from grasp.tasks.functions import find_frequent, find_frequent_function_definition
 from grasp.tasks.sparql_qa.examples import (
+    EXAMPLE_FUNCTIONS,
     call_function as call_example_function,
     functions as example_function_definitions,
 )
@@ -148,7 +149,7 @@ class StructuralExplorationTask(GraspTask):
                 self.config.sparql_read_timeout,
             )
 
-        elif fn_name in {"find_examples", "find_similar_examples"}:
+        elif fn_name in EXAMPLE_FUNCTIONS:
             return call_example_function(
                 self.config,
                 self.managers,

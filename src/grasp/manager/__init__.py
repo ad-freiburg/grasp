@@ -989,9 +989,10 @@ def format_kg(
     notes: list[str] | None = None,
     example_index: "Any | None" = None,
 ) -> str:
-    head = f"### {manager.kg}\nEndpoint: {manager.endpoint}"
+    head = f"### {manager.kg}"
     if manager.description:
         head += f"\n{manager.description}"
+    head += f"\n\nEndpoint: `{manager.endpoint}`"
 
     parts = [head]
 

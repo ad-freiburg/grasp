@@ -21,5 +21,14 @@ backtrack: env(BACKTRACK:true)
 rerank: env(RERANK:true)
 check_empty: env(CHECK_EMPTY:true)
 
+fill_order: env(FILL_ORDER:triple-wise-entities-then-properties)
+
+improve_skeletons: env(IMPROVE_SKELETONS:false)
+improve_threshold: env(IMPROVE_THRESHOLD:0.9)
+improve_rounds: env(IMPROVE_ROUNDS:1)
+improve_n: env(IMPROVE_N:4)
+
 skeleton_disable_adapter: env(SKELETON_DISABLE_ADAPTER:false)
 selection_disable_adapter: env(SELECTION_DISABLE_ADAPTER:false)
+validate_disable_adapter: env(VALIDATE_DISABLE_ADAPTER:false)
+improve_disable_adapter: env(IMPROVE_DISABLE_ADAPTER:false)

@@ -9,6 +9,7 @@ from grasp.tasks.exploration import shared_rules
 from grasp.tasks.exploration.functions import call_function as call_note_function
 from grasp.tasks.exploration.functions import note_function_definitions
 from grasp.tasks.sparql_qa.examples import (
+    EXAMPLE_FUNCTIONS,
     call_function as call_example_function,
     functions as example_function_definitions,
 )
@@ -103,7 +104,7 @@ class FunctionalExplorationTask(GraspTask):
     ) -> str:
         assert isinstance(self.config, NotesConfig)
         assert isinstance(self.state, FunctionalExplorationState)
-        if fn_name in {"find_examples", "find_similar_examples"}:
+        if fn_name in EXAMPLE_FUNCTIONS:
             return call_example_function(
                 self.config,
                 self.managers,

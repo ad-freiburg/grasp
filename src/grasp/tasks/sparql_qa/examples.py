@@ -33,6 +33,11 @@ class SparqlQaExampleIndex(ExampleIndex):
     sample_cls = SparqlQaSample
 
 
+# canonical names of the example functions; used by other tasks to route
+# dispatch to call_function below
+EXAMPLE_FUNCTIONS = {"search_example", "get_random_examples"}
+
+
 def functions(config: GraspConfig) -> list[dict]:
     example_kgs = [kg.kg for kg in config.knowledge_graphs if kg.examples is not None]
 

@@ -27,8 +27,10 @@ from universal_ml_utils.logging import get_logger
 from grasp.baselines.grisp.data import (
     IGNORE_INDEX,
     GRISPCollator,
+    GRISPMaterializedImprovementDataset,
     GRISPMaterializedSelectionDataset,
     GRISPMaterializedSkeletonDataset,
+    GRISPMaterializedValidationDataset,
     GRISPSelectionDataset,
     GRISPSkeletonDataset,
     load_samples,
@@ -188,22 +190,29 @@ def load_datasets(
     tokenizer: PreTrainedTokenizerBase,
     logger: Logger,
 ) -> tuple[Dataset, Dataset]:
-    if cfg.type == "both":
-        cfg.type = "skeleton"
-        train_skel, val_skel = load_datasets(
-            cfg,
-            tokenizer,
-            logger,
-        )
-        cfg.type = "selection"
-        train_sel, val_sel = load_datasets(
-            cfg,
-            tokenizer,
-            logger,
-        )
-        cfg.type = "both"
-        train_data = ConcatDataset([train_skel, train_sel])
-        val_data = ConcatDataset([val_skel, val_sel])
+    if cfg.type in ("both", "all"):
+        # "both" trains the two original tasks (skeleton + selection); "all"
+        # additionally trains the two bootstrapped tasks (validation +
+        # improvement), which only exist as materialized data.
+        combined = cfg.type
+        sub_types = ["skeleton", "selection"]
+        if combined == "all":
+            assert cfg.materialized, (
+                "type 'all' (validation + improvement) requires materialized data"
+            )
+            sub_types += ["validation", "improvement"]
+
+        train_parts = []
+        val_parts = []
+        for sub_type in sub_types:
+            cfg.type = sub_type
+            train_part, val_part = load_datasets(cfg, tokenizer, logger)
+            train_parts.append(train_part)
+            val_parts.append(val_part)
+
+        cfg.type = combined
+        train_data = ConcatDataset(train_parts)
+        val_data = ConcatDataset(val_parts)
         return train_data, val_data
 
     samples = load_samples(cfg.train_files, cfg.materialized)
@@ -236,6 +245,15 @@ def load_datasets(
             dataset_kwargs["shuffle_alts_p"] = cfg.shuffle_alts_p
             logger.warning("Setting num workers to 0 for online selection training")
             cfg.num_workers = 0
+
+    elif cfg.type == "validation":
+        assert cfg.materialized, "validation dataset is only available materialized"
+        dataset_cls = GRISPMaterializedValidationDataset
+
+    elif cfg.type == "improvement":
+        assert cfg.materialized, "improvement dataset is only available materialized"
+        dataset_cls = GRISPMaterializedImprovementDataset
+
     else:
         raise ValueError(f"Unknown train type: {cfg.type}")
 
@@ -330,9 +348,9 @@ class GRISPTrainer(Trainer):
     ) -> tuple[torch.Tensor, Any] | torch.Tensor:
         option_ids = inputs.pop("option_token_ids")
         option_mask = inputs.pop("option_mask")
-        target_idx = inputs.pop("target_idx")
+        target_dist = inputs.pop("target_dist")
         answer_pos = inputs.pop("answer_pos")
-        is_select = inputs.pop("is_selection")
+        is_rce = inputs.pop("is_rce")
         labels = inputs.pop("labels")
 
         outputs = model(**inputs)
@@ -342,11 +360,12 @@ class GRISPTrainer(Trainer):
         total_loss = torch.zeros((), device=logits.device, dtype=logits.dtype)
         total_n = torch.zeros((), device=logits.device, dtype=logits.dtype)
 
-        if (~is_select).any():
-            skel_logits = logits[~is_select]
-            skel_labels = labels[~is_select]
-            shift_logits = skel_logits[:, :-1].contiguous()
-            shift_labels = skel_labels[:, 1:].contiguous()
+        # next-token-prediction rows (skeleton + improvement)
+        if (~is_rce).any():
+            ntp_logits = logits[~is_rce]
+            ntp_labels = labels[~is_rce]
+            shift_logits = ntp_logits[:, :-1].contiguous()
+            shift_labels = ntp_labels[:, 1:].contiguous()
             ntp = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
@@ -357,17 +376,26 @@ class GRISPTrainer(Trainer):
             total_loss = total_loss + ntp
             total_n = total_n + n_ntp
 
-        # Drop selection rows whose answer position fell beyond the (possibly
-        # truncated) sequence; indexing them would go out of bounds.
-        sel_valid = is_select & (answer_pos >= 1) & (answer_pos < T)
+        # restricted-CE rows (selection + validation). Drop those whose answer
+        # position fell beyond the (possibly truncated) sequence; indexing them
+        # would go out of bounds.
+        sel_valid = is_rce & (answer_pos >= 1) & (answer_pos < T)
         if sel_valid.any():
             sel_rows = sel_valid.nonzero(as_tuple=True)[0]
             # logit at position t-1 predicts token at position t
             pred_pos = answer_pos[sel_rows] - 1
             ans_logits = logits[sel_rows, pred_pos]  # (M, V)
             opt_logits = ans_logits.gather(1, option_ids[sel_rows])  # (M, K)
-            opt_logits = opt_logits.masked_fill(~option_mask[sel_rows], float("-inf"))
-            sel = F.cross_entropy(opt_logits, target_idx[sel_rows], reduction="sum")
+            mask = option_mask[sel_rows]
+            opt_logits = opt_logits.masked_fill(~mask, float("-inf"))
+            # soft cross-entropy against the target distribution; one-hot rows
+            # (selection task) recover the standard restricted CE. Masked options
+            # have prob 0 in target_dist, so zero their (otherwise -inf) log-prob
+            # to avoid 0 * -inf = nan.
+            logp = F.log_softmax(opt_logits, dim=-1)
+            logp = logp.masked_fill(~mask, 0.0)
+            tgt = target_dist[sel_rows].to(logp.dtype)
+            sel = -(tgt * logp).sum()
             n_sel = torch.tensor(
                 len(sel_rows), device=logits.device, dtype=logits.dtype
             )

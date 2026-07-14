@@ -11,7 +11,17 @@ from grasp.tasks.exploration.functions import (
 from grasp.tasks.exploration.functions import (
     note_function_definitions,
 )
+from grasp.tasks.sparql_qa.examples import (
+    call_function as call_example_function,
+)
+from grasp.tasks.sparql_qa.examples import (
+    functions as example_functions,
+)
 from grasp.utils import format_kg_notes, format_notes, format_section
+
+# function names handled by the note-taking functions; everything else the
+# note-taker calls (e.g. search_example) is routed to the example functions
+NOTE_FUNCTIONS = {"add_note", "delete_note", "update_note", "show_notes", "stop"}
 
 
 def format_value(value: Any, indent: int = 0) -> str:
@@ -89,9 +99,7 @@ def format_output(
 
     if output is not None and "formatted" in output:
         fmt.append(
-            format_section(
-                f"Output after {step} steps", output["formatted"], level
-            )
+            format_section(f"Output after {step} steps", output["formatted"], level)
         )
 
     return "\n\n".join(fmt)
@@ -169,9 +177,7 @@ def note_taking_instructions(
 
         parts = []
         if ground_truths is not None:
-            parts.append(
-                format_section("Reference output", ground_truths[i], level=3)
-            )
+            parts.append(format_section("Reference output", ground_truths[i], level=3))
 
         parts.append(
             format_section(
@@ -190,7 +196,7 @@ def note_taking_instructions(
 Look at the current notes (which might be the same notes provided \
 to the agent). Then add to, delete from, or update them based on the \
 given agent traces below. Explore the knowledge graphs with the provided \
-functions where it helps you verify or refine a note.
+functions where it helps you to verify or refine a note.
 
 {fmt}"""
 
@@ -226,7 +232,11 @@ class NotesFromTracesTask(GraspTask):
         return rules()
 
     def function_definitions(self) -> list[dict]:
-        return note_function_definitions(self.managers)
+        # note-taking functions plus the example functions the agent had access
+        # to, so the note-taker can retrace and verify example retrievals
+        fns = note_function_definitions(self.managers)
+        fns.extend(example_functions(self.config))
+        return fns
 
     def call_function(
         self,
@@ -237,6 +247,16 @@ class NotesFromTracesTask(GraspTask):
     ) -> str:
         assert isinstance(self.config, NoteTakingConfig)
         assert isinstance(self.state, NotesFromTracesState)
+        if fn_name not in NOTE_FUNCTIONS:
+            # example functions (search_example / get_random_examples)
+            return call_example_function(
+                self.config,
+                self.managers,
+                fn_name,
+                fn_args,
+                known,
+                example_indices,
+            )
         return call_note_function(
             self.state.kg_notes,
             self.state.notes,

@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -12,6 +13,8 @@ class ToolCall(BaseModel):
     args: dict[str, Any]
     result: str | None = None
     error: str | None = None
+    # wall-clock time in seconds spent executing this function call
+    elapsed: float | None = None
 
 
 class Reasoning(BaseModel):
@@ -47,6 +50,8 @@ class Response(BaseModel):
     token_ids: list[int] | None = None
     token_logprobs: list[float] | None = None
     token_texts: list[str] | None = None
+    # wall-clock time in seconds spent generating this response
+    elapsed: float | None = None
     raw: Any = Field(default=None, exclude=True)
 
     @property
@@ -119,7 +124,10 @@ class Model:
         self.config = config
 
     def __call__(self, *args, **kwargs) -> Response:
-        return self.call(*args, **kwargs)
+        start = time.monotonic()
+        response = self.call(*args, **kwargs)
+        response.elapsed = time.monotonic() - start
+        return response
 
     def call(
         self,

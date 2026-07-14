@@ -208,8 +208,11 @@ def parse_args() -> argparse.Namespace:
 
     note_samples_parser = note_subparsers.add_parser(
         "samples",
-        help="Take notes for a task and one or more knowledge graphs "
-        "by running GRASP on exemplary task samples",
+        help="Take notes for a task and one or more knowledge graphs from "
+        "exemplary task samples, either by running GRASP on them and taking "
+        "notes on its traces (run_agent: true, default) or by letting the "
+        "note-taker explore the knowledge graphs directly on top of the "
+        "samples (run_agent: false)",
     )
     add_config_arg(note_samples_parser)
     note_samples_parser.add_argument(

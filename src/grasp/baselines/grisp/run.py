@@ -5,6 +5,7 @@ import random
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from logging import Logger
 from typing import Generator
 
@@ -27,13 +28,19 @@ from universal_ml_utils.ops import consume_generator, extract_field, map_generat
 
 from grasp.baselines.grisp.data import (
     ALT_LABELS,
+    RESULT_UNAVAILABLE,
+    RESULT_UNRESOLVED,
+    VALIDATION_OPTIONS,
+    FillOrder,
     OracleSkeletonUnavailable,
     OrderedAlternatives,
     Skeleton,
     count_alternatives,
     find_alternative_groups,
+    get_improvement_prompt,
     get_selection_prompt_and_options,
     get_skeleton_prompt,
+    get_validation_prompt,
     gold_sparql_to_nl_skeleton,
     ordered_alternatives_with_interleave,
 )
@@ -45,7 +52,8 @@ from grasp.baselines.grisp.utils import (
 )
 from grasp.configs import KgConfig
 from grasp.manager import KgManager, load_kg_manager
-from grasp.sparql.types import ObjType, Selection
+from grasp.sparql.metrics import f1_score
+from grasp.sparql.types import AskResult, ObjType, Selection, SelectResult
 from grasp.sparql.utils import (
     SPARQLExecuteException,
 )
@@ -170,6 +178,18 @@ def parse_args() -> argparse.Namespace:
         "gold 'sparql' field. Used to isolate IRI-selection errors.",
     )
     file_parser.add_argument(
+        "--oracle-correctness",
+        type=float,
+        default=None,
+        metavar="THRESHOLD",
+        help="Enable the oracle correctness probe with the given F1 threshold "
+        "(e.g. 0.8). Skeletons are generated normally, but the first resolved "
+        "candidate whose result reaches THRESHOLD F1 against the gold 'sparql' "
+        "field is returned (upper bound of a perfect query validator on top of "
+        "the empty check). Falls back to the first resolved candidate if none "
+        "clear the threshold. Omit to disable.",
+    )
+    file_parser.add_argument(
         "--trace",
         action="store_true",
         help="Persist every intermediate event (selections, backtracks, fails, "
@@ -225,8 +245,56 @@ class GRISPRunConfig(BaseModel):
     rerank: bool = True
     check_empty: bool = True
 
+    # order in which the natural-language placeholders of a skeleton are
+    # resolved. The model is trained with random fill orders (see
+    # grisp.data.prepare_selection), so it is order-agnostic and any of these
+    # can be selected at inference:
+    # - left-to-right / right-to-left: by document position
+    # - entities-then-properties / properties-then-entities: one object-type
+    #   group first, then the other, each in document order
+    # - triple-wise-entities-then-properties: triple by triple (document order),
+    #   entities before properties within each triple
+    # - random: a fixed random permutation per skeleton
+    # non-left-to-right orders let the constraint filter see resolved neighbours
+    # on both sides of the current placeholder.
+    fill_order: FillOrder = "triple-wise-entities-then-properties"
+
+    # learned skeleton improvement (task 4) with query validation (task 3).
+    # When improve_skeletons is enabled, each generated skeleton is resolved
+    # and, if fully resolved, scored by the validator; the skeleton (partial or
+    # fully resolved) is then improved in place up to improve_rounds times per
+    # skeleton, and the best-scoring fully-resolved candidate overall is
+    # returned. improve_threshold controls early-exit: if set, the first
+    # candidate with P(valid) >= improve_threshold is accepted immediately;
+    # set it to null/None to disable early-exit and always run every skeleton
+    # through all rounds, returning the best-scoring candidate.
+    improve_skeletons: bool = False
+    improve_threshold: float | None = 0.9
+    improve_rounds: int = 1
+    improve_n: int = 4
+
     skeleton_disable_adapter: bool = False
     selection_disable_adapter: bool = False
+    # TODO: for later, we would need to support specifying dedicated
+    # validation and improvement models as well
+    validate_disable_adapter: bool = False
+    improve_disable_adapter: bool = False
+
+
+@dataclass
+class SelectionOutcome:
+    # sparql is set only when the skeleton fully resolved; otherwise the
+    # skeleton is partial. selections holds the *deepest* set of selections
+    # reached (not the eroded state left after backtracking), so the
+    # improvement model gets meaningful evidence even for partial skeletons.
+    # resolved is the query rendered at that deepest point (with any unresolved
+    # placeholders left as natural language); for a fully resolved skeleton it
+    # equals sparql.
+    # (The failure reason is already emitted as a "fail" event for tracing, so
+    # it is not duplicated here.)
+    sparql: str | None
+    selections: list[Selection] = field(default_factory=list)
+    resolved: str = ""
 
 
 class GRISPModel:
@@ -243,17 +311,16 @@ class GRISPModel:
             yield self.model
 
 
-def generate_skeletons(
+def generate_skeletons_from_prompt(
     model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
     cfg: GRISPRunConfig,
-    question: str,
-    manager: KgManager,
+    input: list[dict],
     parser: LR1Parser,
     logger: Logger,
+    n: int,
+    top_k: int,
 ) -> list[Skeleton]:
-    input = get_skeleton_prompt(manager.kg, question)
-
     with model.get() as m:
         device = next(m.parameters()).device
         enc = tokenizer.apply_chat_template(
@@ -271,7 +338,7 @@ def generate_skeletons(
         outputs = m.generate(  # type: ignore
             **enc,
             generation_config=GenerationConfig(
-                num_beams=cfg.skeleton_n,
+                num_beams=n,
                 temperature=cfg.temperature,
                 top_p=cfg.top_p,
                 top_k=cfg.top_k,
@@ -280,7 +347,7 @@ def generate_skeletons(
                 do_sample=cfg.do_sample,
                 max_new_tokens=512,
                 renormalize_logits=True,
-                num_return_sequences=cfg.skeleton_n,
+                num_return_sequences=n,
                 return_dict_in_generate=True,
                 output_scores=True,
             ),
@@ -293,7 +360,7 @@ def generate_skeletons(
         decoded_token_ids = token_ids[prompt_length:]
         decoded = tokenizer.decode(decoded_token_ids, skip_special_tokens=True)
 
-        if cfg.skeleton_n > 1:
+        if n > 1:
             score = outputs["sequences_scores"][i].item()
             logger.debug(f"Generated skeleton with score={score:.5f}:\n{decoded}")
         else:
@@ -304,7 +371,7 @@ def generate_skeletons(
             continue
 
         try:
-            skeleton = Skeleton.parse(decoded, parser)  # type: ignore
+            skeleton = Skeleton.parse(decoded, parser, cfg.fill_order)  # type: ignore
         except Exception as e:
             logger.warning(f"Failed to parse skeleton, skipping: {e}")
             continue
@@ -314,10 +381,66 @@ def generate_skeletons(
 
     # only take top k skeletons, others are just for logging
     logger.debug(
-        f"Generated {len(skeletons)} valid unique skeletons, "
-        f"taking top {cfg.skeleton_top_k}"
+        f"Generated {len(skeletons)} valid unique skeletons, taking top {top_k}"
     )
-    return skeletons[: cfg.skeleton_top_k]
+    return skeletons[:top_k]
+
+
+def generate_skeletons(
+    model: GRISPModel,
+    tokenizer: PreTrainedTokenizerBase,
+    cfg: GRISPRunConfig,
+    question: str,
+    manager: KgManager,
+    parser: LR1Parser,
+    logger: Logger,
+) -> list[Skeleton]:
+    input = get_skeleton_prompt(manager.kg, question)
+    return generate_skeletons_from_prompt(
+        model,
+        tokenizer,
+        cfg,
+        input,
+        parser,
+        logger,
+        n=cfg.skeleton_n,
+        top_k=cfg.skeleton_top_k,
+    )
+
+
+def generate_improved_skeletons(
+    model: GRISPModel,
+    tokenizer: PreTrainedTokenizerBase,
+    cfg: GRISPRunConfig,
+    question: str,
+    bad_skeleton: str,
+    manager: KgManager,
+    parser: LR1Parser,
+    logger: Logger,
+    sparql: str | None = None,
+    selections: str | None = None,
+    result: str | None = None,
+) -> list[Skeleton]:
+    input = get_improvement_prompt(
+        manager.kg,
+        question,
+        bad_skeleton,
+        sparql,
+        selections,
+        result,
+    )
+    # the per-skeleton loop refines one skeleton at a time, so keep only the
+    # single best rewrite
+    return generate_skeletons_from_prompt(
+        model,
+        tokenizer,
+        cfg,
+        input,
+        parser,
+        logger,
+        n=cfg.improve_n,
+        top_k=1,
+    )
 
 
 def rerank_alternatives(
@@ -398,6 +521,54 @@ def rerank_alternatives(
     ]
 
 
+def validate_query(
+    model: GRISPModel,
+    tokenizer: PreTrainedTokenizerBase,
+    manager: KgManager,
+    question: str,
+    sparql: str,
+    selections: str | None,
+    result: str | None,
+    logger: Logger,
+) -> float:
+    # learned query validation (task 3): return P(valid), the softmax mass on
+    # the VALID option over the two single-token options.
+    prompt = get_validation_prompt(
+        manager.kg,
+        question,
+        sparql,
+        selections,
+        result,
+    )
+    enc = tokenizer.apply_chat_template(
+        prompt,
+        add_generation_prompt=True,
+        return_dict=True,
+        enable_thinking=False,
+    )
+    input_ids = enc["input_ids"]  # type: ignore
+    logger.debug(f"Validating query:\n{tokenizer.decode(input_ids)}")  # type: ignore
+
+    with model.get() as m:
+        device = next(m.parameters()).device
+        ids = torch.tensor(input_ids, dtype=torch.long, device=device)
+        option_ids = []
+        for option in VALIDATION_OPTIONS:
+            option_token_ids = tokenizer.encode(option, add_special_tokens=False)
+            assert len(option_token_ids) == 1, "Validation option must be single token"
+            option_ids.append(option_token_ids[0])
+        option_ids = torch.tensor(option_ids, dtype=torch.long, device=device)
+
+        with torch.inference_mode():
+            logits = m(ids.unsqueeze(0)).logits
+
+    logits = logits[0, -1][option_ids]
+    scores = torch.softmax(logits, dim=-1)
+    p_valid = scores[0].item()
+    logger.debug(f"Validation P(valid)={p_valid:.2%}")
+    return p_valid
+
+
 def is_api_failure(exception: Exception) -> bool:
     exc_msg = str(exception).lower()
     is_timeout = isinstance(exception, TimeoutError) or "timeout" in exc_msg
@@ -405,7 +576,7 @@ def is_api_failure(exception: Exception) -> bool:
     return is_timeout or is_server_fail
 
 
-def select_iris_left_to_right(
+def select_iris(
     skeleton: Skeleton,
     model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -413,10 +584,18 @@ def select_iris_left_to_right(
     question: str,
     manager: KgManager,
     logger: Logger,
-) -> Generator[dict, None, str | None]:
+) -> Generator[dict, None, SelectionOutcome]:
     start = time.monotonic()
     # init empty memo
     memo: dict[str, OrderedAlternatives] = {}
+
+    # deepest set of selections reached; preserved across backtracking so a
+    # partial (unresolved) skeleton still carries the items it managed to fill.
+    # deepest_query is that deepest state rendered as a (partial) query: the
+    # skeleton with the selected IRIs substituted in (no prefix declarations,
+    # since skeletons carry none).
+    deepest: list[Selection] = []
+    deepest_query: str = skeleton.materialize_partial()
 
     supports_variants = {
         obj_type: manager.get_normalizer(obj_type.index_name).supports_variants
@@ -427,7 +606,7 @@ def select_iris_left_to_right(
         if time.monotonic() - start > cfg.selection_max_time:
             yield {"type": "fail", "reason": "timeout"}
             logger.debug("Selection process timed out, abandoning skeleton")
-            return None
+            return SelectionOutcome(None, deepest, deepest_query)
 
         if skeleton.done:
             if not cfg.check_empty:
@@ -461,7 +640,7 @@ def select_iris_left_to_right(
             if skeleton.replaced == 0 or not cfg.backtrack:
                 yield {"type": "fail", "reason": "validation_failed"}
                 logger.debug("Final SPARQL query is empty, abandoning skeleton")
-                return None
+                return SelectionOutcome(None, deepest, deepest_query)
 
             logger.debug(
                 "Final SPARQL query is empty, backtracking to previous placeholder"
@@ -546,7 +725,7 @@ def select_iris_left_to_right(
                     "No valid alternatives left for the first placeholder, abandoning skeleton"
                 )
                 yield {"type": "fail", "reason": "no_alternatives"}
-                return None
+                return SelectionOutcome(None, deepest, deepest_query)
 
             elif not cfg.backtrack:
                 logger.debug(
@@ -554,7 +733,7 @@ def select_iris_left_to_right(
                     "abandoning skeleton due to backtracking disabled"
                 )
                 yield {"type": "fail", "reason": "no_alternatives"}
-                return None
+                return SelectionOutcome(None, deepest, deepest_query)
 
             logger.debug(
                 "No valid alternatives left for the current placeholder, backtracking"
@@ -599,6 +778,9 @@ def select_iris_left_to_right(
             obj_type=obj_type,
         )
         skeleton.add_selection(selection, manager)
+        if skeleton.replaced > len(deepest):
+            deepest = list(skeleton.selections)
+            deepest_query = skeleton.materialize_partial()
         logger.debug(
             f"Adding the following alternative at placholder {skeleton.replaced}/{skeleton.total}:\n"
             f"{alternative.get_selection_string(include_variants=show_variants)} "
@@ -611,9 +793,12 @@ def select_iris_left_to_right(
             "variant": variant,
         }
 
-    # convert back to sparql and fix prefixes
-    sparql = skeleton.materialize()
-    return manager.fix_prefixes(sparql)
+    # the executable query needs prefix declarations added back via
+    # fix_prefixes; the display copy (resolved) is the raw materialized skeleton,
+    # which already carries no prefix declarations
+    materialized = skeleton.materialize()
+    sparql = manager.fix_prefixes(materialized)
+    return SelectionOutcome(sparql, list(skeleton.selections), materialized)
 
 
 def generate(
@@ -628,16 +813,107 @@ def generate(
     select_tokenizer: PreTrainedTokenizerBase | None = None,
     yield_output: bool = False,
     gold_sparql: str | None = None,
+    oracle_skeleton: bool = False,
+    oracle_correctness_threshold: float | None = None,
 ) -> Generator[dict, None, dict]:
     sparql = None
     error = None
     start = time.monotonic()
 
+    # both oracle modes consume the same gold query (the sample's 'sparql'
+    # field) and are mutually exclusive:
+    # - oracle_skeleton: derive the skeleton from the gold query (isolate
+    #   selection errors)
+    # - oracle_correctness_threshold (not None): generate skeletons normally,
+    #   but return the first resolved candidate whose result reaches this F1
+    #   threshold against the gold query (upper bound of a perfect validator on
+    #   top of the empty check)
+    use_oracle_skeleton = oracle_skeleton
+    use_oracle_correctness = oracle_correctness_threshold is not None
+    assert not (use_oracle_skeleton and use_oracle_correctness), (
+        "oracle skeleton and oracle correctness cannot be combined"
+    )
+    assert not (
+        (use_oracle_skeleton or use_oracle_correctness) and gold_sparql is None
+    ), "oracle modes require a gold_sparql"
+
+    # learned skeleton improvement (task 4) and its query validation (task 3)
+    # only apply when generating from scratch, not under either oracle mode.
+    use_improve = (
+        cfg.improve_skeletons and not use_oracle_skeleton and not use_oracle_correctness
+    )
+    validate_model = select_model or model
+    validate_tokenizer = select_tokenizer or tokenizer
+
+    def execute_and_format(query: str) -> dict:
+        result, selections = prepare_sparql_result(
+            query,
+            manager.kg,
+            [manager],
+            max_rows=10,
+            max_columns=10,
+            # same as for autocompletion and check
+            request_timeout=(3.5, 6.0),
+            read_timeout=3.0,
+        )
+        # result.result is None when execution failed (timeout / backend down /
+        # parse error). Feed the validator and improvement model a stable
+        # "unavailable" marker in that case so a transient failure is not read
+        # as a wrong query; keep the raw formatted text in "formatted" for the
+        # human-facing output and debugging.
+        # prepare_sparql_result returns parse-derived selections even when
+        # execution fails, so the validator/improvement model still sees the
+        # resolved items when there is no result.
+        preview = result.formatted if result.result is not None else RESULT_UNAVAILABLE
+        return {
+            "sparql": result.sparql,
+            "selections": manager.format_selections(selections),
+            "result": preview,
+            "formatted": format_sparql_result(manager, result, selections),
+        }
+
+    # best candidate seen so far (by validator score); used to pick the final
+    # answer when no candidate clears the acceptance threshold.
+    best: dict | None = None
+
+    # gold result for the oracle correctness probe, executed once up front with
+    # the same timeouts used elsewhere in the loop. None if unavailable (the
+    # probe then cannot score and falls back to baseline selection).
+    gold_result: SelectResult | AskResult | None = None
+    if use_oracle_correctness:
+        try:
+            assert gold_sparql is not None
+            gold_result = manager.execute_sparql(
+                gold_sparql,
+                request_timeout=(3.5, 6.0),
+                read_timeout=3.0,
+            )
+        except Exception as e:
+            logger.warning(f"Oracle correctness: failed to execute gold query:\n{e}")
+            gold_result = None
+
+    def oracle_f1(query: str) -> float:
+        # F1 of a resolved candidate query's result against the gold result,
+        # mirroring the offline evaluation metric
+        if gold_result is None:
+            return 0.0
+        try:
+            pred_result = manager.execute_sparql(
+                query,
+                request_timeout=(3.5, 6.0),
+                read_timeout=3.0,
+            )
+        except Exception as e:
+            logger.debug(f"Oracle correctness: candidate failed to execute:\n{e}")
+            return 0.0
+        return f1_score(pred_result, gold_result)
+
     try:
-        if gold_sparql is not None:
+        if use_oracle_skeleton:
             logger.debug("Using oracle skeleton from gold SPARQL")
+            assert gold_sparql is not None
             nl = gold_sparql_to_nl_skeleton(gold_sparql, manager)
-            skeletons = [Skeleton.parse(nl, parser)]
+            skeletons = [Skeleton.parse(nl, parser, cfg.fill_order)]
         else:
             skeletons = generate_skeletons(
                 model,
@@ -654,29 +930,176 @@ def generate(
             "skeletons": [skeleton.nl_sparql for skeleton in skeletons],
         }
 
-        for i, skeleton in enumerate(skeletons):
-            selections = select_iris_left_to_right(
-                skeleton,
-                select_model or model,
-                select_tokenizer or tokenizer,
-                cfg,
-                question,
-                manager,
-                logger,
-            )
+        accept = cfg.improve_threshold
+        rounds = cfg.improve_rounds if use_improve else 0
+        seen_skeletons = {skeleton.nl_sparql for skeleton in skeletons}
+        idx = 0
 
-            sparql = yield from map_generator(
+        def resolve(
+            skeleton: Skeleton, idx: int
+        ) -> Generator[dict, None, "SelectionOutcome"]:
+            outcome = yield from map_generator(
                 lambda selection: {
                     "type": "selection",
-                    "skeleton": i,
+                    "skeleton": idx,
                     "selection": selection,
                 },
-                selections,
+                select_iris(
+                    skeleton,
+                    select_model or model,
+                    select_tokenizer or tokenizer,
+                    cfg,
+                    question,
+                    manager,
+                    logger,
+                ),
             )
+            return outcome
 
-            # take first fully assigned skeleton as final answer
-            if sparql is not None:
-                break
+        if use_oracle_correctness:
+            # resolve every skeleton and return the first whose result reaches
+            # the F1 threshold against the gold query. If none clear it, fall
+            # back to the first fully-resolved skeleton (baseline behavior), so
+            # the eval delta isolates the gain from picking a correct skeleton
+            # when one exists among the candidates.
+            assert oracle_correctness_threshold is not None
+            first_resolved: str | None = None
+            for skeleton in skeletons:
+                cur_idx = idx
+                idx += 1
+                outcome = yield from resolve(skeleton, cur_idx)
+                if outcome.sparql is None:
+                    continue
+                if first_resolved is None:
+                    first_resolved = outcome.sparql
+                f1 = oracle_f1(outcome.sparql)
+                yield {
+                    "type": "oracle_correctness",
+                    "skeleton": cur_idx,
+                    "f1": f1,
+                    "result": (
+                        "passed" if f1 >= oracle_correctness_threshold else "failed"
+                    ),
+                }
+                if f1 >= oracle_correctness_threshold:
+                    logger.debug(f"Oracle correctness: accepting candidate F1={f1:.2%}")
+                    sparql = outcome.sparql
+                    break
+            if sparql is None:
+                sparql = first_resolved
+        elif not use_improve:
+            # original behavior: take the first fully resolved skeleton
+            for skeleton in skeletons:
+                cur_idx = idx
+                idx += 1
+                outcome = yield from resolve(skeleton, cur_idx)
+                if outcome.sparql is not None:
+                    sparql = outcome.sparql
+                    break
+        else:
+            # per-skeleton: resolve, validate (if fully resolved), then improve
+            # the skeleton in place up to `rounds` times. Partial skeletons skip
+            # validation and are improved directly using their deepest partial
+            # selections as evidence.
+            #
+            # The validator always scores resolved candidates so the final answer
+            # can be picked as the best-scoring one. `accept` (improve_threshold)
+            # only controls the early-exit: when set, the first candidate clearing
+            # it is returned immediately; when None, every skeleton is improved
+            # through all rounds and the best-scoring candidate overall is returned.
+            for skeleton in skeletons:
+                current = skeleton
+                for r in range(rounds + 1):
+                    cur_idx = idx
+                    idx += 1
+                    outcome = yield from resolve(current, cur_idx)
+
+                    if outcome.sparql is not None:
+                        cand_out = execute_and_format(outcome.sparql)
+                        score = validate_query(
+                            validate_model,
+                            validate_tokenizer,
+                            manager,
+                            question,
+                            cand_out["sparql"],
+                            cand_out["selections"],
+                            cand_out["result"],
+                            logger,
+                        )
+                        yield {
+                            "type": "validation",
+                            "skeleton": cur_idx,
+                            "score": score,
+                            "result": (
+                                "passed"
+                                if accept is not None and score >= accept
+                                else "failed"
+                            ),
+                        }
+                        if best is None or score > best["score"]:
+                            best = {
+                                "sparql": outcome.sparql,
+                                "score": score,
+                                "out": cand_out,
+                            }
+                        if accept is not None and score >= accept:
+                            logger.debug(
+                                f"Accepting candidate with P(valid)={score:.2%}"
+                            )
+                            sparql = outcome.sparql
+                            break
+                        evidence_sparql = cand_out["sparql"]
+                        evidence_selections = cand_out["selections"]
+                        evidence_result = cand_out["result"]
+                    else:
+                        # partial skeleton: no executable query to validate, show
+                        # the partially resolved query and its deepest selections
+                        evidence_sparql = outcome.resolved
+                        evidence_selections = manager.format_selections(
+                            outcome.selections
+                        )
+                        evidence_result = RESULT_UNRESOLVED
+
+                    # improve this skeleton in place (unless out of rounds)
+                    if r >= rounds:
+                        break
+                    improved = generate_improved_skeletons(
+                        model,
+                        tokenizer,
+                        cfg,
+                        question,
+                        current.nl_sparql,
+                        manager,
+                        parser,
+                        logger,
+                        sparql=evidence_sparql,
+                        selections=evidence_selections,
+                        result=evidence_result,
+                    )
+                    improved = [
+                        s for s in improved if s.nl_sparql not in seen_skeletons
+                    ]
+                    if not improved:
+                        break
+                    seen_skeletons.update(s.nl_sparql for s in improved)
+                    current = improved[0]
+                    yield {
+                        "type": "improvement",
+                        "skeleton": cur_idx,
+                        "skeletons": [s.nl_sparql for s in improved],
+                    }
+
+                if sparql is not None:
+                    break
+
+            # no candidate accepted via early-exit (or early-exit disabled in
+            # improve-only mode); fall back to the best-scoring fully-resolved
+            # candidate seen across all skeletons
+            if sparql is None and best is not None:
+                sparql = best["sparql"]
+                logger.debug(
+                    f"Using best-scoring candidate P(valid)={best['score']:.2%}"
+                )
 
     except OracleSkeletonUnavailable as e:
         logger.warning(f"Skipping sample, oracle skeleton unavailable: {e}")
@@ -700,20 +1123,16 @@ def generate(
         "formatted": "No SPARQL query generated or found",
     }
     if sparql is not None:
-        result, selections = prepare_sparql_result(
-            sparql,
-            manager.kg,
-            [manager],
-            max_rows=10,
-            max_columns=10,
-            # same as for autocompletion and check
-            request_timeout=(3.5, 6.0),
-            read_timeout=3.0,
-        )
-        out["sparql"] = result.sparql
-        out["selections"] = manager.format_selections(selections)
-        out["result"] = result.formatted
-        out["formatted"] = format_sparql_result(manager, result, selections)
+        # reuse the already-executed result for the chosen candidate if available
+        # (only validated candidates carry a precomputed "out")
+        if (
+            best is not None
+            and best.get("out") is not None
+            and best["sparql"] == sparql
+        ):
+            out.update(best["out"])
+        else:
+            out.update(execute_and_format(sparql))
 
     end = time.monotonic()
     output = {
@@ -782,8 +1201,8 @@ def main(args: argparse.Namespace) -> None:
 
     train_cfg_path = os.path.join(args.run_directory, "config.yaml")
     train_cfg = GRISPTrainConfig(**load_config(train_cfg_path))
-    assert train_cfg.type in ["skeleton", "both"], (
-        "Main run should either be of type 'skeleton' or 'both'"
+    assert train_cfg.type in ["skeleton", "both", "all"], (
+        "Main run should be of type 'skeleton', 'both', or 'all'"
     )
 
     run_cfg = GRISPRunConfig(**load_config(args.config))
@@ -889,17 +1308,23 @@ def main(args: argparse.Namespace) -> None:
             args.input_field = "question"  # overwrite
 
     oracle_skeleton = run_on_file and args.oracle_skeleton
+    oracle_correctness_threshold = args.oracle_correctness if run_on_file else None
+    oracle_correctness = oracle_correctness_threshold is not None
+    assert not (oracle_skeleton and oracle_correctness), (
+        "--oracle-skeleton and --oracle-correctness cannot be combined"
+    )
     trace = run_on_file and args.trace
 
     for i, ipt in enumerate(inputs):
         id = extract_field(ipt, "id") or "unknown"
 
         gold_sparql = None
-        if oracle_skeleton:
+        if oracle_skeleton or oracle_correctness:
             gold_sparql = extract_field(ipt, "sparql")
             assert gold_sparql is not None, (
-                f"--oracle-skeleton requires a 'sparql' field on every sample, "
-                f"missing on input {i:,} (id={id})"
+                f"--oracle-{'skeleton' if oracle_skeleton else 'correctness'} "
+                f"requires a 'sparql' field on every sample, missing on input "
+                f"{i:,} (id={id})"
             )
 
         ipt = extract_field(ipt, args.input_field)
@@ -926,6 +1351,8 @@ def main(args: argparse.Namespace) -> None:
             selection_model,
             selection_tokenizer,
             gold_sparql=gold_sparql,
+            oracle_skeleton=oracle_skeleton,
+            oracle_correctness_threshold=oracle_correctness_threshold,
         )
         if trace:
             events: list[dict] = []

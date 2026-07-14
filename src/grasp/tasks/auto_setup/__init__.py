@@ -153,7 +153,7 @@ class AutoSetupTask(GraspTask):
 
         return f"""\
 You are a knowledge graph setup assistant. Your task is to explore \
-the {manager.kg} knowledge graph and come up with or improve the setup \
+the "{manager.kg}" knowledge graph and come up with or improve the setup \
 - an index SPARQL query, an info SPARQL query, and a description - \
 of the {name} index.
 

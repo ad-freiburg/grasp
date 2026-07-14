@@ -115,6 +115,9 @@ class GraspConfig(ModelConfig):
 
     # interaction parameters
     max_steps: int = 100
+    # how many times the model is allowed to repeat the same response
+    # (loop) before we give up; each repetition counts as one loop
+    max_loops: int = 1
 
     # example parameters
     num_examples: int = 3
@@ -186,6 +189,10 @@ class NotesFromSamplesConfig(NoteTakingConfig):
     samples_per_round: int = 1
     samples_per_file: int | None = None
     ignore_ground_truth: bool = False
+    # if True (default), run the task agent on each sample and take notes on its
+    # trace; if False, give the note-taker only the samples (input + reference)
+    # and let it explore the knowledge graphs itself on top of them
+    run_agent: bool = True
 
 
 class NotesFromOutputsConfig(NoteTakingConfig):

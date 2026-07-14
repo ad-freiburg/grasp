@@ -432,7 +432,7 @@ def emit_pseudo_shex(
             parts.append(f"{omitted:,} omitted (cap)")
         if filtered:
             parts.append(f"{filtered:,} filtered (low coverage)")
-        lines.append(f"  # ... {', '.join(parts)}")
+        lines.append(f"  ... {', '.join(parts)}")
 
     lines.append("}")
 

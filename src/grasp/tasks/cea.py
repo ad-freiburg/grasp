@@ -319,6 +319,10 @@ def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
     )
     info = infos.get(identifier, {})
 
+    # format normalized identifier again, so always
+    # prefixed form is shown if available
+    entity = manager.format_iri(identifier)
+    # extract fields from info dict
     label = info.get("label")
     aliases = info.get("alias", [])
     infos = info.get("info", [])

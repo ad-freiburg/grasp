@@ -29,6 +29,7 @@ from grasp.tasks.exploration import (
     FunctionalExplorationState,
     StructuralExplorationState,
 )
+from grasp.tasks.notes_from_samples import NotesFromSamplesState
 from grasp.tasks.notes_from_traces import NotesFromTracesState
 from grasp.tasks.question_generation import QuestionGenerationState
 from grasp.tasks.sparql_qa.examples import SparqlQaSample
@@ -104,44 +105,75 @@ def take_notes_from_samples(
         sequence.extend(random.sample(all_samples, len(all_samples)))
         epoch += 1
 
+    # when not running the agent, the note-taker gets the underlying task's
+    # instructions so it knows what "solving" a sample means
+    task_instructions = (
+        None
+        if config.run_agent
+        else get_task(task, managers, config).system_information()
+    )
+
     for r in trange(config.num_rounds, desc="Taking notes from samples"):
         samples = sequence[r * n_per_round : (r + 1) * n_per_round]
-
-        outputs = []
-        for kg, sample in tqdm(samples, desc="Running GRASP on samples", leave=False):
-            manager, _ = find_manager(managers, kg)
-
-            output = consume_generator(
-                generate(
-                    task,
-                    sample.input(),
-                    config,
-                    [manager],
-                    kg_notes,
-                    notes,
-                    example_indices=example_indices,
-                    logger=agent_logger,
-                )
-            )
-            outputs.append(output)
 
         if config.ignore_ground_truth:
             ground_truths = None
         else:
             ground_truths = prepare_ground_truths(samples, managers, config)
 
-        state = NotesFromTracesState(
-            notes=notes,
-            kg_notes=kg_notes,
-            outputs=outputs,
-            ground_truths=ground_truths,
-        )
+        if config.run_agent:
+            outputs = []
+            for kg, sample in tqdm(
+                samples, desc="Running GRASP on samples", leave=False
+            ):
+                manager, _ = find_manager(managers, kg)
+
+                output = consume_generator(
+                    generate(
+                        task,
+                        sample.input(),
+                        config,
+                        [manager],
+                        kg_notes,
+                        notes,
+                        example_indices=example_indices,
+                        logger=agent_logger,
+                    )
+                )
+                outputs.append(output)
+
+            state: NotesFromTracesState = NotesFromTracesState(
+                notes=notes,
+                kg_notes=kg_notes,
+                outputs=outputs,
+                ground_truths=ground_truths,
+            )
+            note_task = "notes-from-traces"
+        else:
+            outputs = []
+            state = NotesFromSamplesState(
+                notes=notes,
+                kg_notes=kg_notes,
+                samples=[
+                    {
+                        "kg": kg,
+                        "input": sample.input(),
+                        "reference": None
+                        if ground_truths is None
+                        else ground_truths[i],
+                    }
+                    for i, (kg, sample) in enumerate(samples)
+                ],
+                task_instructions=task_instructions,
+            )
+            note_task = "notes-from-samples"
+
         # rebind so the note-taking functions mutate the same objects we dump below
         notes, kg_notes = state.notes, state.kg_notes
 
         output = consume_generator(
             generate(
-                "notes-from-traces",
+                note_task,
                 state,
                 config,
                 managers,

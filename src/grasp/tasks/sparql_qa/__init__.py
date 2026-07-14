@@ -5,13 +5,12 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from grasp.configs import GraspConfig
-from grasp.functions import find_manager
+from grasp.functions import check_known, find_manager
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message, ToolCall
 from grasp.model.base import ResponseMessage
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (
-    SparqlQaExampleIndex,
     SparqlQaSample,
 )
 from grasp.tasks.sparql_qa.examples import (
@@ -21,7 +20,12 @@ from grasp.tasks.sparql_qa.examples import (
     functions as example_functions,
 )
 from grasp.tasks.utils import prepare_sparql_result
-from grasp.utils import format_enumerate, format_notes, format_section
+from grasp.utils import (
+    FunctionCallException,
+    format_enumerate,
+    format_notes,
+    format_section,
+)
 
 
 def system_information() -> str:
@@ -138,31 +142,6 @@ the SPARQL query needs to be executed",
     fns.extend(example_functions(config))
 
     return fns
-
-
-def call_function(
-    config: GraspConfig,
-    managers: list[KgManager],
-    fn_name: str,
-    fn_args: dict,
-    known: set[str],
-    example_indices: dict[str, SparqlQaExampleIndex] | None = None,
-) -> str:
-    if fn_name == "answer":
-        return "Stopping"
-
-    elif fn_name == "cancel":
-        return "Stopping"
-
-    else:
-        return call_example_function(
-            config,
-            managers,
-            fn_name,
-            fn_args,
-            known,
-            example_indices,
-        )
 
 
 class AnswerModel(BaseModel):
@@ -506,6 +485,11 @@ def feedback_instructions(questions: list[str], output: dict) -> str:
 class SparqlQaTask(GraspTask, FeedbackTask):
     name = "sparql-qa"
 
+    # set to True when a stopping call (answer/cancel) was rejected because it
+    # used IRIs that are not yet known from the trace; keeps the task from
+    # stopping so the model gets another round to verify them
+    answer_rejected: bool = False
+
     def system_information(self) -> str:
         return system_information()
 
@@ -522,17 +506,57 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         known: set[str],
         example_indices: dict | None,
     ) -> str:
-        return call_function(
-            self.config,
-            self.managers,
-            fn_name,
-            fn_args,
-            known,
-            example_indices=example_indices,
-        )
+        if fn_name != "answer" and fn_name != "cancel":
+            return call_example_function(
+                self.config,
+                self.managers,
+                fn_name,
+                fn_args,
+                known,
+                example_indices,
+            )
+
+        # fresh attempt to stop; assume it is accepted unless the
+        # know-before-answer check below rejects it
+        self.answer_rejected = False
+        task_kwargs = self.config.task_kwargs.get("sparql-qa", {})
+        know_before_answer = task_kwargs.get("know_before_answer", True)
+        result = "Stopping"
+
+        if not know_before_answer:
+            # no need to check for known IRIs; accept the answer/cancel call
+            return result
+
+        # locate the final query to verify: the answer's query, or a
+        # cancel's best attempt (a concrete {sparql, kg} object)
+        if fn_name == "answer":
+            kg = fn_args.get("kg")
+            sparql = fn_args.get("sparql")
+        else:
+            best_attempt = fn_args.get("best_attempt")
+            if not best_attempt:
+                return result
+
+            assert isinstance(best_attempt, dict)
+            kg = best_attempt.get("kg")
+            sparql = best_attempt.get("sparql")
+
+        assert kg is not None and sparql is not None, "kg and sparql must be provided"
+
+        manager, _ = find_manager(self.managers, kg)
+        try:
+            # all non-common-prefix IRIs must be known from the trace
+            check_known(manager, sparql, known)
+        except FunctionCallException:
+            # do not stop; force another round so the model can
+            # verify or replace the unknown IRIs
+            self.answer_rejected = True
+            raise
+
+        return result
 
     def done(self, fn_name: str) -> bool:
-        return fn_name in {"answer", "cancel"}
+        return fn_name in {"answer", "cancel"} and not self.answer_rejected
 
     def output(self, messages: list[Message]) -> dict | None:
         return output(

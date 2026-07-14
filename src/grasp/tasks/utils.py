@@ -1,5 +1,3 @@
-from typing import Any
-
 from grasp.functions import (
     ExecutionResult,
     execute_sparql,
@@ -24,7 +22,18 @@ def prepare_sparql_result(
     sparql_result_max_rows: int | None = None,
 ) -> tuple[ExecutionResult, list[Selection]]:
     manager, _ = find_manager(managers, kg)
+
+    # selections are parse-derived (no execution needed), so compute them first
+    # and return them even when execution fails. This way callers still see the
+    # resolved items of a query whose execution timed out or whose backend was
+    # unavailable.
     selections = []
+    try:
+        selections = selections_from_sparql(sparql, manager)
+        if known is not None:
+            update_known_from_selections(known, selections, manager)
+    except Exception:
+        pass
 
     try:
         result = execute_sparql(
@@ -43,13 +52,6 @@ def prepare_sparql_result(
             sparql=sparql,
             formatted=f"Error executing SPARQL query over {kg}:\n{str(e)}",
         ), selections
-
-    try:
-        selections = selections_from_sparql(sparql, manager)
-        if known is not None:
-            update_known_from_selections(known, selections, manager)
-    except Exception:
-        pass
 
     return result, selections
 

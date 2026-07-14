@@ -165,7 +165,7 @@ class TestAssembleProfile:
         assert shex == (
             "http://ex.org/C {\n"
             "  http://ex.org/common IRI ;\n"
-            "  # ... 1 filtered (low coverage)\n"
+            "  ... 1 filtered (low coverage)\n"
             "}"
         )
 
@@ -186,7 +186,7 @@ class TestAssembleProfile:
         )
         shex = emit_pseudo_shex(profile, manager, shape_config)
 
-        assert "# ... 2 omitted (cap)" in shex
+        assert "... 2 omitted (cap)" in shex
         assert "filtered" not in shex
 
     def test_cap_and_coverage_filter(self):
@@ -210,7 +210,7 @@ class TestAssembleProfile:
         )
         shex = emit_pseudo_shex(profile, manager, shape_config)
 
-        assert "# ... 1 omitted (cap), 1 filtered (low coverage)" in shex
+        assert "... 1 omitted (cap), 1 filtered (low coverage)" in shex
 
     def test_empty_freq_map(self):
         manager = make_manager()
