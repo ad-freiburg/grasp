@@ -6,24 +6,60 @@
 
   export let message;
 
-  const flattened = flattenFunctionArgs(message?.args ?? {});
-  const argChips = [];
+  const COLLAPSED_TOOL_NAMES = new Set(['analyze', 'load']);
+  const PRIMARY_INPUT_KEYS = ['input', 'user_input', 'url', 'uri', 'query', 'text', 'prompt'];
+
+  let showExtraArgs = false;
   let sparql = null;
 
-  for (const entry of flattened) {
-    if (entry.key === 'sparql') {
-      sparql = entry.value;
-      continue;
+  $: toolName = typeof message?.name === 'string' ? message.name : '';
+  $: shouldCollapseArgs = COLLAPSED_TOOL_NAMES.has(toolName);
+  $: flattened = flattenFunctionArgs(message?.args ?? {});
+
+  let argChips = [];
+  $: {
+    sparql = null;
+    argChips = [];
+    for (const [index, entry] of flattened.entries()) {
+      if (entry.key === 'sparql') {
+        sparql = entry.value;
+        continue;
+      }
+      argChips.push({
+        id: `${entry.key}-${index}`,
+        key: entry.key,
+        value: coerceArgValue(entry.value)
+      });
     }
-    const formattedValue = coerceArgValue(entry.value);
-    argChips.push({
-      key: entry.key,
-      value: formattedValue,
-      truncated: formattedValue.length > 128
-    });
+  }
+
+  $: primaryArgChipId = shouldCollapseArgs ? pickPrimaryArgChipId(argChips) : null;
+  $: primaryArgChip =
+    shouldCollapseArgs && primaryArgChipId
+      ? argChips.find((chip) => chip.id === primaryArgChipId) ?? null
+      : null;
+  $: hiddenArgChips =
+    shouldCollapseArgs && primaryArgChip
+      ? argChips.filter((chip) => chip.id !== primaryArgChip.id)
+      : shouldCollapseArgs
+        ? [...argChips]
+        : [];
+  $: if (!shouldCollapseArgs) {
+    showExtraArgs = false;
   }
 
   const qleverLink = null;
+
+  function pickPrimaryArgChipId(chips) {
+    if (!Array.isArray(chips) || chips.length === 0) return null;
+    for (const preferredKey of PRIMARY_INPUT_KEYS) {
+      const match = chips.find(
+        (chip) => chip.key === preferredKey || chip.key.endsWith(`.${preferredKey}`)
+      );
+      if (match) return match.id;
+    }
+    return chips[0].id;
+  }
 
   function coerceArgValue(value) {
     if (value === null || value === undefined) {
@@ -57,21 +93,52 @@
           <span class="function-chip__value">{message.name}</span>
         </span>
       {/if}
-      {#each argChips as chip (chip.key)}
-        <span class="arg-chip" title={`${chip.key}: ${chip.value}`}>
-          <span class="arg-chip__key">{chip.key}</span>
-          <span
-            class="arg-chip__value"
-            class:arg-chip__value--truncated={chip.truncated}
-            data-full={chip.value}
-          >
-            {chip.value}
+
+      {#if shouldCollapseArgs}
+        {#if primaryArgChip}
+          <span class="arg-chip" title={`${primaryArgChip.key}: ${primaryArgChip.value}`}>
+            <span class="arg-chip__key">{primaryArgChip.key}</span>
+            <span class="arg-chip__value">{primaryArgChip.value}</span>
           </span>
+        {/if}
+
+        {#if hiddenArgChips.length > 0}
+          <button
+            type="button"
+            class="arg-toggle"
+            on:click={() => (showExtraArgs = !showExtraArgs)}
+            aria-expanded={showExtraArgs}
+            aria-label={showExtraArgs ? 'Show fewer attributes' : 'Show more attributes'}
+            title={showExtraArgs ? 'Show fewer attributes' : 'Show more attributes'}
+          >
+            {#if showExtraArgs}
+              ▲
+            {:else}
+              ▼
+            {/if}
+          </button>
+        {/if}
+      {:else}
+        {#each argChips as chip (chip.id)}
+          <span class="arg-chip" title={`${chip.key}: ${chip.value}`}>
+            <span class="arg-chip__key">{chip.key}</span>
+            <span class="arg-chip__value">{chip.value}</span>
+          </span>
+        {/each}
+      {/if}
+    </div>
+  </svelte:fragment>
+
+  {#if shouldCollapseArgs && showExtraArgs && hiddenArgChips.length > 0}
+    <div class="arg-details" aria-label="Additional function arguments">
+      {#each hiddenArgChips as chip (chip.id)}
+        <span class="arg-chip arg-chip--linebreak" title={`${chip.key}: ${chip.value}`}>
+          <span class="arg-chip__key">{chip.key}</span>
+          <span class="arg-chip__value">{chip.value}</span>
         </span>
       {/each}
     </div>
-
-  </svelte:fragment>
+  {/if}
 
   {#if sparql}
     <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
@@ -108,45 +175,77 @@
 
   .arg-chip {
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--spacing-xs);
     padding: 0.25rem 0.65rem;
     border-radius: var(--radius-sm);
     background: #fff;
     border: 1px solid rgba(190, 170, 60, 0.6);
     font-size: 0.75rem;
-    max-width: clamp(240px, 40vw, 560px);
-    position: relative;
+    max-width: min(100%, 560px);
+    min-width: 0;
   }
 
   .arg-chip__key {
     font-weight: 700;
     color: var(--color-uni-yellow);
+    flex: 0 0 auto;
   }
 
   .arg-chip__value {
     color: var(--text-primary);
-    display: inline-block;
-    max-width: 128ch;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .arg-toggle {
+    appearance: none;
+    border: 1px solid rgba(190, 170, 60, 0.5);
+    background: rgba(190, 170, 60, 0.08);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    text-transform: lowercase;
+  }
+
+  .arg-toggle:hover {
+    background: rgba(190, 170, 60, 0.16);
+  }
+
+  .arg-details {
+    margin-top: var(--spacing-xs);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-xs);
+  }
+
+  .arg-chip--linebreak {
+    display: inline-flex;
+    width: auto;
+    max-width: 100%;
+  }
+
+  .arg-chip--linebreak .arg-chip__value {
     white-space: nowrap;
     overflow: hidden;
-    position: relative;
+    text-overflow: ellipsis;
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
-  .arg-chip__value::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 3ch;
-    pointer-events: none;
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 1));
-    display: none;
+  .arg-chip--linebreak .arg-chip__key {
+    white-space: nowrap;
   }
 
-  .arg-chip__value--truncated::after {
-    display: block;
+  @media (max-width: 720px) {
+    .arg-chip--linebreak {
+      max-width: min(100%, 420px);
+    }
   }
-
 </style>
