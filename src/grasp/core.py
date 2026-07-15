@@ -179,6 +179,8 @@ def generate(
     # save the raw input, in case an image is attached
     raw_input = input
 
+    enable_load = Modality.IMAGE in config.get_default_model.modality and config.load_user_input
+
     # setup functions (after setup so tasks can configure based on input)
     fns = kg_functions(
         managers,
@@ -186,6 +188,7 @@ def generate(
         config.list_k,
         config.search_k,
         config.search_max_pages,
+        enable_load=enable_load,
     )
     fns.extend(task.function_definitions())
 

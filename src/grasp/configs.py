@@ -207,15 +207,20 @@ class GraspConfig(BaseModel):
 
     @property
     def get_default_model(self) -> LLMConfig:
-        return [m for m in self.models if "grasp" in m.modality][0]
+        grasp_models = [m for m in self.models if "grasp" in m.modality]
+        if not grasp_models:
+            raise ValueError(
+                "No GRASP model configured. Please add a model with modality including 'grasp'."
+            )
+        return grasp_models[0]
 
     @property
     def get_vision_models(self) -> list[LLMConfig]:
         return [m for m in self.models if "image" in m.modality]
 
     @property
-    def get_audio_model(self) -> LLMConfig:
-        return [m for m in self.models if "audio" in m.modality][0]
+    def get_audio_models(self) -> list[LLMConfig]:
+        return [m for m in self.models if "audio" in m.modality]
 
 
 class SpeechToTextConfig(BaseModel):

@@ -3,8 +3,8 @@ from search_rdf.model import (
     HuggingFaceImageModel,
     OpenClipModel,
     SentenceTransformerModel,
-    ClapCapModel,
 )
+from grasp.multimodal.ClapCapModel import ClapCapModel
 from grasp.multimodal.functions import (
     load,
     Modality,
