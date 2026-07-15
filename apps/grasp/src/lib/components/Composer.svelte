@@ -31,9 +31,7 @@
   let fileInputEl;
   let uploadButtonEl;
   let urlModalInputEl;
-  let imageInputEl;
-  let audioInputEl;
-  let pdfInputEl;
+  let mediaInputEl;
   let isMobile = false;
   let previousValue = '';
   let isCeaTask = false;
@@ -76,6 +74,7 @@
   let audioAttachments = [];
   let pdfPageAttachments = [];
   let mediaCounter = 0;
+  let isDragOver = false;
 
   const INACTIVITY_MESSAGE_PREFIX = 'connection closed due to inactivity';
 
@@ -574,25 +573,14 @@
     audioAttachments = [];
     pdfPageAttachments = [];
     isConvertingPdf = false;
+    isDragOver = false;
     mediaError = '';
-    clearMediaInput(imageInputEl);
-    clearMediaInput(audioInputEl);
-    clearMediaInput(pdfInputEl);
+    clearMediaInput(mediaInputEl);
   }
 
-  function openImageDialog() {
+  function openMediaDialog() {
     if (isCeaTask || disabled || isRunning || isCancelling || isConvertingPdf) return;
-    imageInputEl?.click();
-  }
-
-  function openAudioDialog() {
-    if (isCeaTask || disabled || isRunning || isCancelling || isConvertingPdf) return;
-    audioInputEl?.click();
-  }
-
-  function openPdfDialog() {
-    if (isCeaTask || disabled || isRunning || isCancelling || isConvertingPdf) return;
-    pdfInputEl?.click();
+    mediaInputEl?.click();
   }
 
   function removeImageAttachment(id) {
@@ -605,7 +593,7 @@
 
   function clearPdfAttachments() {
     pdfPageAttachments = [];
-    clearMediaInput(pdfInputEl);
+    clearMediaInput(mediaInputEl);
   }
 
   function removePdfPageAttachment(id) {
@@ -708,18 +696,21 @@
     return pdfjs;
   }
 
-  async function handleImageUpload(event) {
-    const files = Array.from(event.target.files ?? []);
-    clearMediaInput(event.target);
-    if (!files.length) return;
-    clearMediaError();
+  function classifyMediaFile(file) {
+    const fileType = typeof file?.type === 'string' ? file.type.toLowerCase() : '';
+    const fileName = typeof file?.name === 'string' ? file.name.toLowerCase() : '';
+    if (fileType.startsWith('image/')) return 'image';
+    if (fileType === 'application/pdf' || /\.pdf$/i.test(fileName)) return 'pdf';
+    if (fileType.startsWith('audio/')) return 'audio';
+    if (/\.(mp3|wav|ogg|webm|m4a|flac)$/i.test(fileName)) return 'audio';
+    return 'unsupported';
+  }
 
-    try {
-      const next = [];
-      for (const file of files) {
-        if (!file.type.startsWith('image/')) {
-          throw new Error(`Unsupported image type for ${file.name}.`);
-        }
+  async function appendImageFiles(files) {
+    const next = [];
+    const warnings = [];
+    for (const file of files) {
+      try {
         const dataUrl = await fileToDataUrl(file);
         if (getDataUrlByteSize(dataUrl) > MAX_IMAGE_BYTES) {
           throw new Error(
@@ -732,26 +723,21 @@
           type: file.type,
           dataUrl
         });
+      } catch (error) {
+        warnings.push(error?.message ?? `Failed to load ${file.name}.`);
       }
-      imageAttachments = [...imageAttachments, ...next];
-    } catch (error) {
-      mediaError = error?.message ?? 'Failed to load images.';
     }
+    if (next.length > 0) {
+      imageAttachments = [...imageAttachments, ...next];
+    }
+    return warnings;
   }
 
-  async function handleAudioUpload(event) {
-    const files = Array.from(event.target.files ?? []);
-    clearMediaInput(event.target);
-    if (!files.length) return;
-    clearMediaError();
-
-    try {
-      const next = [];
-      for (const file of files) {
-        const isAudio = file.type.startsWith('audio/') || /\.(mp3|wav|ogg|webm|m4a|flac)$/i.test(file.name);
-        if (!isAudio) {
-          throw new Error(`Unsupported audio type for ${file.name}.`);
-        }
+  async function appendAudioFiles(files) {
+    const next = [];
+    const warnings = [];
+    for (const file of files) {
+      try {
         const dataUrl = await fileToDataUrl(file);
         next.push({
           id: createMediaId('audio'),
@@ -759,50 +745,156 @@
           type: file.type || 'audio/*',
           dataUrl
         });
+      } catch (error) {
+        warnings.push(error?.message ?? `Failed to load ${file.name}.`);
       }
-      audioAttachments = [...audioAttachments, ...next];
-    } catch (error) {
-      mediaError = error?.message ?? 'Failed to load audio files.';
     }
+    if (next.length > 0) {
+      audioAttachments = [...audioAttachments, ...next];
+    }
+    return warnings;
   }
 
-  async function handlePdfUpload(event) {
-    const [file] = event.target.files ?? [];
-    clearMediaInput(event.target);
-    if (!file) return;
-    clearMediaError();
-
-    if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
-      mediaError = 'Unsupported file type. Please upload a PDF file.';
-      return;
-    }
+  async function appendPdfFiles(files) {
+    if (!files.length) return [];
+    const warnings = [];
+    const pages = [];
+    let selectedCount = selectedPdfPageCount;
 
     isConvertingPdf = true;
     try {
       const pdfjs = await loadPdfModule();
-      const data = await file.arrayBuffer();
-      const loadingTask = pdfjs.getDocument({ data });
-      const pdf = await loadingTask.promise;
-      const pages = [];
-      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-        const page = await pdf.getPage(pageNumber);
-        const rendered = await renderPdfPageToJpeg(page);
-        pages.push({
-          id: createMediaId('pdf-page'),
-          fileName: file.name,
-          name: `${file.name} page ${pageNumber}`,
-          pageNumber,
-          selected: pageNumber <= MAX_SELECTED_PDF_PAGES,
-          ...rendered
-        });
+      for (const file of files) {
+        try {
+          const data = await file.arrayBuffer();
+          const loadingTask = pdfjs.getDocument({ data });
+          const pdf = await loadingTask.promise;
+          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+            const page = await pdf.getPage(pageNumber);
+            const rendered = await renderPdfPageToJpeg(page);
+            const canSelect = selectedCount < MAX_SELECTED_PDF_PAGES;
+            pages.push({
+              id: createMediaId('pdf-page'),
+              fileName: file.name,
+              name: `${file.name} page ${pageNumber}`,
+              pageNumber,
+              selected: canSelect,
+              ...rendered
+            });
+            if (canSelect) {
+              selectedCount += 1;
+            }
+          }
+        } catch (error) {
+          warnings.push(error?.message ?? `Failed to convert ${file.name}.`);
+        }
       }
-      pdfPageAttachments = pages;
-    } catch (error) {
-      mediaError = error?.message ?? 'Failed to convert PDF pages.';
-      pdfPageAttachments = [];
+      if (pages.length > 0) {
+        pdfPageAttachments = [...pdfPageAttachments, ...pages];
+      }
     } finally {
       isConvertingPdf = false;
     }
+
+    return warnings;
+  }
+
+  async function processMediaFiles(fileLikeList) {
+    const files = Array.from(fileLikeList ?? []);
+    if (!files.length) return;
+    clearMediaError();
+
+    const images = [];
+    const audio = [];
+    const pdfs = [];
+    const unsupported = [];
+
+    for (const file of files) {
+      const kind = classifyMediaFile(file);
+      if (kind === 'image') {
+        images.push(file);
+      } else if (kind === 'audio') {
+        audio.push(file);
+      } else if (kind === 'pdf') {
+        pdfs.push(file);
+      } else {
+        unsupported.push(file.name || 'unnamed file');
+      }
+    }
+
+    const warnings = [];
+    if (unsupported.length > 0) {
+      warnings.push(
+        `Unsupported media type discarded: ${unsupported.join(', ')}.`
+      );
+    }
+
+    warnings.push(...(await appendImageFiles(images)));
+    warnings.push(...(await appendAudioFiles(audio)));
+    warnings.push(...(await appendPdfFiles(pdfs)));
+
+    mediaError = warnings.filter(Boolean).join(' ');
+  }
+
+  async function handleMediaInputChange(event) {
+    const files = Array.from(event.target.files ?? []);
+    clearMediaInput(event.target);
+    if (!files.length) return;
+    await processMediaFiles(files);
+  }
+
+  function isMediaInputBlocked() {
+    return isCeaTask || disabled || isRunning || isCancelling || isConvertingPdf;
+  }
+
+  function handleMediaDragEnter(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    if (isMediaInputBlocked()) return;
+    isDragOver = true;
+  }
+
+  function handleMediaDragOver(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    if (isMediaInputBlocked()) return;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  }
+
+  function handleMediaDragLeave(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && event.currentTarget?.contains?.(nextTarget)) {
+      return;
+    }
+    isDragOver = false;
+  }
+
+  async function handleMediaDrop(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    isDragOver = false;
+    if (isMediaInputBlocked()) return;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (!files.length) return;
+    await processMediaFiles(files);
+  }
+
+  async function handleMediaPaste(event) {
+    if (isMediaInputBlocked()) return;
+    const clipboardData = event.clipboardData;
+    if (!clipboardData) return;
+    const fromItems = Array.from(clipboardData.items ?? [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    const files = fromItems.length > 0 ? fromItems : Array.from(clipboardData.files ?? []);
+    if (!files.length) return;
+    event.preventDefault();
+    await processMediaFiles(files);
   }
 
   onDestroy(() => {
@@ -1496,72 +1588,52 @@
         </div>
       {:else}
         <div class="composer__multimodal-fieldset">
-          <textarea
-            id="composer-input"
-            class="composer__input"
-            placeholder={inputPlaceholder}
-            bind:value
-            bind:this={textareaEl}
-            rows="1"
-            on:keydown={onKeydown}
-            on:input={autoResize}
-          ></textarea>
+          <div
+            class="composer__multimodal-input-row"
+            class:composer__multimodal-input-row--drag-over={isDragOver}
+            role="group"
+            aria-label="Message input with media attachments"
+            on:dragenter={handleMediaDragEnter}
+            on:dragover={handleMediaDragOver}
+            on:dragleave={handleMediaDragLeave}
+            on:drop={handleMediaDrop}
+          >
+            <button
+              type="button"
+              class="composer__media-plus"
+              on:click={openMediaDialog}
+              disabled={disabled || isRunning || isCancelling || isConvertingPdf}
+              aria-label="Attach media"
+              title="Attach media"
+            >
+              +
+            </button>
+            <textarea
+              id="composer-input"
+              class="composer__input"
+              placeholder={inputPlaceholder}
+              bind:value
+              bind:this={textareaEl}
+              rows="1"
+              on:keydown={onKeydown}
+              on:input={autoResize}
+              on:paste={handleMediaPaste}
+            ></textarea>
+          </div>
           <input
             class="composer__file-input"
             type="file"
-            accept="image/*"
+            accept="image/*,audio/*,application/pdf,.pdf,.mp3,.wav,.ogg,.webm,.m4a,.flac"
             multiple
-            bind:this={imageInputEl}
-            on:change={handleImageUpload}
+            bind:this={mediaInputEl}
+            on:change={handleMediaInputChange}
             disabled={disabled || isRunning || isCancelling || isConvertingPdf}
           />
-          <input
-            class="composer__file-input"
-            type="file"
-            accept="audio/*,.mp3,.wav,.ogg,.webm,.m4a,.flac"
-            multiple
-            bind:this={audioInputEl}
-            on:change={handleAudioUpload}
-            disabled={disabled || isRunning || isCancelling || isConvertingPdf}
-          />
-          <input
-            class="composer__file-input"
-            type="file"
-            accept="application/pdf,.pdf"
-            bind:this={pdfInputEl}
-            on:change={handlePdfUpload}
-            disabled={disabled || isRunning || isCancelling || isConvertingPdf}
-          />
-          <div class="composer__media-controls">
-            <button
-              type="button"
-              class="composer__upload-trigger"
-              on:click={openImageDialog}
-              disabled={disabled || isRunning || isCancelling || isConvertingPdf}
-            >
-              Add image
-            </button>
-            <button
-              type="button"
-              class="composer__upload-trigger"
-              on:click={openAudioDialog}
-              disabled={disabled || isRunning || isCancelling || isConvertingPdf}
-            >
-              Add audio
-            </button>
-            <button
-              type="button"
-              class="composer__upload-trigger"
-              on:click={openPdfDialog}
-              disabled={disabled || isRunning || isCancelling || isConvertingPdf}
-            >
-              {#if isConvertingPdf}
-                Converting PDF...
-              {:else}
-                Add PDF
-              {/if}
-            </button>
-            {#if hasMediaAttachments || pdfPageAttachments.length > 0}
+          {#if isConvertingPdf}
+            <p class="composer__media-status">Converting PDF pages...</p>
+          {/if}
+          {#if hasMediaAttachments || pdfPageAttachments.length > 0}
+            <div class="composer__media-toolbar">
               <button
                 type="button"
                 class="composer__upload-trigger"
@@ -1570,8 +1642,8 @@
               >
                 Clear media
               </button>
-            {/if}
-          </div>
+            </div>
+          {/if}
 
           {#if imageAttachments.length > 0}
             <div class="composer__media-section">
@@ -1941,8 +2013,8 @@
     resize: none;
     min-height: 2.5rem;
     max-height: 10rem;
-    border-radius: var(--radius-sm);
-    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: calc(var(--radius-sm) - 2px);
+    border: none;
     padding: var(--spacing-sm) var(--spacing-md);
     font: inherit;
     line-height: 1.4;
@@ -1957,10 +2029,63 @@
     gap: var(--spacing-xs);
   }
 
-  .composer__media-controls {
+  .composer__multimodal-input-row {
     display: flex;
-    flex-wrap: wrap;
+    align-items: flex-end;
     gap: var(--spacing-xs);
+    border: 1px solid rgba(52, 74, 154, 0.25);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    padding: 6px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+
+  .composer__multimodal-input-row--drag-over {
+    border-color: var(--color-uni-blue);
+    box-shadow: 0 0 0 2px rgba(52, 74, 154, 0.18);
+    background: rgba(52, 74, 154, 0.03);
+  }
+
+  .composer__media-plus {
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(52, 74, 154, 0.28);
+    background: var(--surface-base);
+    color: var(--color-uni-blue);
+    font: inherit;
+    font-size: 1.2rem;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+
+  .composer__media-plus:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 12px rgba(52, 74, 154, 0.16);
+  }
+
+  .composer__media-plus:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .composer__media-toolbar {
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .composer__media-status {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-subtle);
   }
 
   .composer__media-section {
