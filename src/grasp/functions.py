@@ -42,7 +42,6 @@ from grasp.multimodal.functions import (
     load,
     Modality,
 )
-from grasp.multimodal.utils import guess_modality_type
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -74,6 +73,7 @@ def kg_functions(
     list_k: int,
     search_k: int,
     search_max_pages: int,
+    enable_load: bool = False
 ) -> list[dict]:
     assert fn_set in [
         "base",
@@ -184,50 +184,6 @@ list(kg="wikidata", property="wdt:P19")""",
             },
             "strict": True,
         }, {
-            "name": "load",
-            "description": (
-                "Load and normalize multimodal input for downstream analysis. "
-                "Supported modalities are image and audio. "
-                "Supported datatypes are url, base64, and file. "
-                "Use this tool when visual or acoustic inspection of the original media "
-                "is required. The function returns a normalized payload suitable for analyze()."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": (
-                            "The raw media input. "
-                            "For datatype 'url', provide a public HTTP(S) URL. "
-                            "For datatype 'base64', provide a base64 string or data URL. "
-                            "For datatype 'file', provide a local file path. "
-                            "load() can NOT be used on USER_INPUT"
-                        ),
-                    },
-                    "modality": {
-                        "type": "string",
-                        "enum": ["image", "audio"],
-                        "description": (
-                            "The modality of the input. "
-                            "Use 'image' for visual media and 'audio' for acoustic media."
-                        ),
-                    },
-                    "datatype": {
-                        "type": "string",
-                        "enum": ["url", "base64", "file"],
-                        "description": (
-                            "The storage or transport format of the provided input. "
-                            "Use 'url' for remote resources, 'base64' for encoded media, "
-                            "and 'file' for local file paths."
-                        ),
-                    },
-                },
-                "required": ["input", "modality", "datatype"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        }, {
             "name": "analyze",
             "description": (
                 "Analyze multimodal input. Supported modalities are image and audio. "
@@ -291,6 +247,45 @@ list(kg="wikidata", property="wdt:P19")""",
             "strict": True,
         }
     ]
+
+    if enable_load:
+        fns.append(
+            {
+                "name": "load",
+                "description": (
+                    "Load and normalize multimodal input for downstream analysis. "
+                    "Supported modalities are image and audio. "
+                    "Use this tool when visual or acoustic inspection of the original media "
+                    "is required. The function returns a normalized payload suitable for analyze()."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": (
+                                "The raw media input. "
+                                "For datatype 'url', provide a public HTTP(S) URL. "
+                                "For datatype 'base64', provide a base64 string or data URL. "
+                                "For datatype 'file', provide a local file path. "
+                                "load() can NOT be used on USER_INPUT"
+                            ),
+                        },
+                        "modality": {
+                            "type": "string",
+                            "enum": ["image", "audio"],
+                            "description": (
+                                "The modality of the input. "
+                                "Use 'image' for visual media and 'audio' for acoustic media."
+                            ),
+                        },
+                    },
+                    "required": ["input", "modality"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+        )
 
     if fn_set == "base":
         return fns
@@ -927,50 +922,22 @@ def call_function(
         return json.dumps(load(
             fn_args["input"],
             fn_args["modality"],
-            fn_args["datatype"],
+            user_input=user_input
         ))
 
     elif fn_name == "analyze":
-        kg = fn_args["kg"]
         manager = None
-
-        model_choice = fn_args["models"]
-        if not model_choice:
-            raise FunctionCallException("no model choice given for analysis")
-
-        vision_models = config.get_vision_models
-        models = [model for model in vision_models if model.model in model_choice]
-
+        kg = fn_args["kg"]
         if kg is not None:
             manager, _ = find_manager(managers, kg)
-
-        input_arg = str(fn_args["input"])
-        if input_arg.startswith("USER_INPUT"):
-            if user_input is None:
-                raise FunctionCallException("No user media input available")
-            try:
-                i = int(input_arg[len("USER_INPUT"):])
-            except ValueError as exc:
-                raise FunctionCallException(
-                    f"Invalid USER_INPUT reference: {input_arg}"
-                ) from exc
-            if i < 1 or i > len(user_input):
-                raise FunctionCallException(
-                    f"USER_INPUT index out of range: {i} (available: {len(user_input)})"
-                )
-            input = user_input[i - 1]
-        else:
-            input = fn_args["input"]
-
-        modality_type = guess_modality_type(input)
-
         return analyze(
-            input=input,
+            input=fn_args["input"],
             modality=fn_args["modality"],
-            input_type=modality_type,
+            models=fn_args["models"],
+            config=config,
             manager=manager,
-            models=models,
             prompt=fn_args["prompt"],
+            user_input=user_input,
         )
 
     elif fn_name in {"search_shape", "get_shape"}:

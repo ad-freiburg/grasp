@@ -122,12 +122,12 @@ def resize_image(bytes: bytes, content_type: str) -> str:
     return f"data:{content_type};base64,{data}"
 
 
-def guess_modality_type(image_url: str) -> ModalityTypes:
+def guess_modality_type(input: str) -> ModalityTypes:
     # Guess data_type
     input_type: ModalityTypes
-    if image_url.startswith("http"):
+    if input.startswith("http"):
         input_type = ModalityTypes.URL
-    elif image_url.startswith("data:"):
+    elif input.startswith("data:"):
         input_type = ModalityTypes.BASE64
     else:
         input_type = ModalityTypes.FILE
@@ -157,6 +157,25 @@ def media_reference_hint(num_images: int, num_audio: int) -> str:
         + ". "
         + "Analyze ALL given USER_INPUTs before canceling the task!"
     )
+
+
+def extract_user_input(input: str, user_input: list[str]) -> str:
+    if input.startswith("USER_INPUT"):
+        if user_input is None:
+            raise FunctionCallException("No user media input available")
+        try:
+            index = int(input[len("USER_INPUT"):])
+        except ValueError as exc:
+            raise FunctionCallException(
+                f"Invalid USER_INPUT reference: {input}"
+            ) from exc
+        if index < 1 or index > len(user_input):
+            raise FunctionCallException(
+                f"USER_INPUT index out of range: {index} (available: {len(user_input)})"
+            )
+        return user_input[index - 1]
+    else:
+        return input
 
 
 _AUDIO_FORMAT_MAP = {

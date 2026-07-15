@@ -1,42 +1,48 @@
 import os
 import numpy as np
 
-from grasp.configs import LLMConfig
+from grasp.configs import GraspConfig, LLMConfig
 from grasp.manager import KgManager
+from grasp.model import get_model
 from grasp.model.openai import OpenAICompletionsModel
 from grasp.model.base import Message, Response, ResponseMessage
+from grasp.utils import FunctionCallException
 
 from grasp.multimodal.utils import (
+    audio_file_to_base64,
     guess_modality_type,
     image_file_to_base64,
     image_url_to_base64,
     audio_url_to_base64,
     audio_base64_to_file,
     convert_base64_to_np_array,
+    extract_user_input,
     ModalityTypes,
     Modality,
 )
-from search_rdf.model.embedding import (
-    OpenClipModel,
-    ClapCapModel,
-)
+from search_rdf.model.embedding import OpenClipModel
 
 
-def load(input: str, modality: str, datatype: str) -> dict:
+def load(input: str, modality: str, user_input: list[str]) -> dict:
+    input = extract_user_input(input, user_input)
+    modality_type = guess_modality_type(input)
+
     if modality == Modality.IMAGE:
-        if datatype == ModalityTypes.BASE64:
+        if modality_type == ModalityTypes.BASE64:
             return {"type": "image_url", "image_url": {"url": input}}
-        elif datatype == ModalityTypes.URL:
+        elif modality_type == ModalityTypes.URL:
             data = image_url_to_base64(input)
             return {"type": "image_url", "image_url": {"url": data}}
-        elif datatype == ModalityTypes.FILE:
+        elif modality_type == ModalityTypes.FILE:
             data = image_file_to_base64(input)
             return {"type": "image_url", "image_url": {"url": data}}
     elif modality == Modality.AUDIO:
-        if datatype == ModalityTypes.BASE64:
+        if modality_type == ModalityTypes.BASE64:
             return {"type": "input_audio", "input_audio": {"data": input, "format": "wav"}}
-        elif datatype == ModalityTypes.URL:
+        elif modality_type == ModalityTypes.URL:
             return audio_url_to_base64(input)
+        elif modality_type == ModalityTypes.FILE:
+            return audio_file_to_base64(input)
     else:
         raise ValueError(f"Could not load input of type: {modality}")
     return {}
@@ -79,7 +85,7 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
     output_messages = {}
 
     for vision_config in vision_configs:
-        model = OpenAICompletionsModel(vision_config)
+        model = get_model(vision_config)
 
         system_prompt = (
             "Answer with only valid JSON. "
@@ -125,7 +131,7 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
 
 
 def analyze_audio(audio_url: dict, model: LLMConfig) -> str:
-    model = OpenAICompletionsModel(model)
+    model = get_model(model)
 
     system_prompt = """You are an audio analysis engine, evaluate the following points based on the provided audio: \
 1. a brief summary, \
@@ -153,51 +159,80 @@ Do not include any introductory or closing sentences!"""
     return message
 
 
+def caption_audio(input: str, input_type: ModalityTypes, manager: KgManager) -> str:
+    if manager.clap_model is None:
+        raise FunctionCallException("clap_model is required for audio analysis")
+
+    temp_file = None
+
+    try:
+        if input_type == ModalityTypes.FILE:
+            file_path = input
+        elif input_type == ModalityTypes.URL:
+            audio = audio_url_to_base64(input)
+            format = audio["input_audio"]["format"]
+            data = audio["input_audio"]["data"]
+            file_path = audio_base64_to_file(data, format)
+            temp_file = file_path
+        elif input_type == ModalityTypes.BASE64:
+            file_path = audio_base64_to_file(input)
+            temp_file = file_path
+        else:
+            raise FunctionCallException(
+                f"Unsupported input_type for audio: {input_type}"
+            )
+
+        output = manager.clap_model.generate_captions([file_path])
+        return "AUDIO DESCRIPTION: [" + ",".join(output) + "]"
+
+    finally:
+        if temp_file is not None and os.path.exists(temp_file):
+            os.remove(temp_file)
+
+
 def analyze(
     input: str,
     modality: Modality,
-    input_type: ModalityTypes,
-    manager: KgManager,
-    models: list[LLMConfig],
+    models: list[str],
+    config: GraspConfig,
+    manager: KgManager | None,
     prompt: str | None = None,
+    user_input: list[str] | None = None,
 ) -> str:
+    if not models:
+        raise FunctionCallException("no model choice given for analysis")
+
+    input = extract_user_input(input, user_input)
+
+    data_type = guess_modality_type(input)
 
     if modality == Modality.IMAGE:
         if prompt is None or not prompt.strip():
-            raise ValueError("prompt is required for image analysis")
+            raise FunctionCallException("prompt is required for image analysis")
 
-        data_type = guess_modality_type(input)
-        image_payload = load(input, modality, data_type)
+        selected_models = [
+            model
+            for model in config.get_vision_models
+            if model.model in models
+        ]
+        if not selected_models:
+            raise FunctionCallException(
+                "No configured vision model matches the requested models"
+            )
+
+        image_payload = load(input, modality, user_input)
         image_url = image_payload["image_url"]["url"]
 
-        return analyze_image(image_url, prompt, models)
+        return analyze_image(image_url, prompt, selected_models)
 
     if modality == Modality.AUDIO:
-        if manager.clap_model is None:
-            raise ValueError("clap_model is required for audio analysis")
+        audio_models = config.get_audio_models
+        if audio_models:
+            audio_url = load(input, modality, user_input)
+            return analyze_audio(audio_url, audio_models[0])  # only use the first audio model
 
-        temp_file = None
+        if manager is None:
+            raise FunctionCallException("kg is required for audio analysis")
+        return caption_audio(input, data_type, manager)
 
-        try:
-            if input_type == ModalityTypes.FILE:
-                file_path = input
-            elif input_type == ModalityTypes.URL:
-                audio = audio_url_to_base64(input)
-                format = audio["input_audio"]["format"]
-                data = audio["input_audio"]["data"]
-                file_path = audio_base64_to_file(data, format)
-                temp_file = file_path
-            elif input_type == ModalityTypes.BASE64:
-                file_path = audio_base64_to_file(input)
-                temp_file = file_path
-            else:
-                raise ValueError(f"Unsupported input_type for audio: {input_type}")
-
-            output = manager.clap_model.generate_captions([file_path])
-            return "AUDIO DESCRIPTION: [" + ",".join(output) + "]"
-
-        finally:
-            if temp_file is not None and os.path.exists(temp_file):
-                os.remove(temp_file)
-
-    raise ValueError(f"Unsupported modality for analyze(): {modality}")
+    raise FunctionCallException(f"Unsupported modality for analyze(): {modality}")

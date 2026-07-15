@@ -86,6 +86,7 @@ def multimodal_rules(isMultimodal: bool) -> list[str]:
         "You MUST NOT use multimodal tool calls when text or structured data is sufficient.",
         "Reuse prior inspection or analysis results, do not analyze the same media twice.",
         "You MUST use ALL user provided inputs before canceling the task.",
+        "When the Answer can not be provided by structured text data alone, try to use images or other data queried from the KG"
     ]
     if config.show_limits:
         rules.append(
@@ -99,7 +100,7 @@ result so far. Once a limit is reached, you get one last step to finish."
         rules.append("When a current-message image is relevant, first inspect it yourself using your\
    built-in visual understanding. Do not call any tool for this initial inspection.")
         rules.append("Use load(...) only to retrieve media not directly accessible.")
-        rules.append("Use analyze(...) only when direct inspection is unavailable or insufficient.")
+        rules.append("Use analyze(...) only audio inputs.")
         rules.append("Never invent input IDs, file handles, URLs, vision models, or media references.")
     else:
         rules.append("You MUST assume that you do not have direct access to image or audio content.")
