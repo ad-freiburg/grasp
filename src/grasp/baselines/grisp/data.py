@@ -22,7 +22,12 @@ from grasp.configs import KgConfig, KgInfo
 from grasp.manager import KgManager, load_kg_manager
 from grasp.sparql.item import Item, extract_sparql_items
 from grasp.sparql.types import Alternative, ObjType, Position, Selection
-from grasp.sparql.utils import find_all, infer_position_from_prefix, query_type
+from grasp.sparql.utils import (
+    find_all,
+    infer_position_from_prefix,
+    query_type,
+    replace_unresolved_placeholders,
+)
 from grasp.tasks.sparql_qa.examples import SparqlQaSample
 from grasp.utils import format_list, get_available_knowledge_graphs
 
@@ -583,21 +588,24 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
 
 def find_alternative_groups(
     manager: KgManager,
-    prefix: str,
+    sparql: str,
     queries: dict[ObjType, tuple[str, str | None]],
     top_k: int,
     logger: Logger,
     skip_constraint: bool = False,
     max_candidates: int | None = None,
 ) -> AlternativeGroups:
+    # prefix left of the current placeholder, with any unresolved placeholders
+    # turned into variables so it parses
+    prefix = replace_unresolved_placeholders(sparql.split(BOR, 1)[0])
     sparql_query_type = query_type(prefix, manager.sparql_parser, is_prefix=True)
     constraint_sparql = None
 
     try:
         if not skip_constraint and sparql_query_type == "select":
-            logger.debug(f"Deriving constraint query from SPARQL prefix:\n{prefix}")
-            constraint_sparql, position = manager.derive_constraint_query_from_prefix(
-                prefix,
+            logger.debug(f"Deriving constraint query from SPARQL:\n{sparql}")
+            constraint_sparql, position = manager.derive_constraint_query_from_sparql(
+                sparql,
                 limit=None if max_candidates is None else max_candidates + 1,
             )
             logger.debug(f"Derived constraint SPARQL:\n{constraint_sparql}")
@@ -609,7 +617,7 @@ def find_alternative_groups(
             f"'{sparql_query_type}', '{position.value}'"
         )
     except Exception as e:
-        logger.debug(f"Error analyzing SPARQL prefix: {e}")
+        logger.debug(f"Error analyzing SPARQL:\n{e}")
         # full search across both indices as fallback
         position = None
 
@@ -1336,7 +1344,7 @@ def prepare_selection(
         selection_logger = get_logger("GRISP SELECTION PREP")
         alternative_groups = find_alternative_groups(
             manager,
-            info.prefix,
+            info.sparql,
             queries,
             k,
             logger=selection_logger,

@@ -652,24 +652,25 @@ def select_iris(
         info = skeleton.prepare_for_selection()
         queries = info.build_queries(supports_variants)
 
-        # set alternatives for current placeholder
-        if info.prefix not in memo:
+        # keyed on the full query, not just the prefix, since the constraint now
+        # depends on resolved neighbours on both sides of the current placeholder
+        if info.sparql not in memo:
             alternative_groups = find_alternative_groups(
                 manager,
-                info.prefix,
+                info.sparql,
                 queries,
                 cfg.selection_top_k,
                 logger,
                 skip_constraint=not cfg.constrain,
                 max_candidates=MAX_IRIS,
             )
-            memo[info.prefix] = ordered_alternatives_with_interleave(
+            memo[info.sparql] = ordered_alternatives_with_interleave(
                 alternative_groups,
                 queries,
                 interleave=not cfg.rerank,
             )
 
-        alternatives = memo[info.prefix]
+        alternatives = memo[info.sparql]
         ranking = None
 
         if cfg.rerank:
@@ -717,7 +718,7 @@ def select_iris(
                 ranked_alts.append(alternatives[index])
 
             alternatives = ranked_alts
-            memo[info.prefix] = alternatives
+            memo[info.sparql] = alternatives
 
         if len(alternatives) == 0:
             if skeleton.replaced == 0:
@@ -745,7 +746,7 @@ def select_iris(
         # just try out next alternative in order
         alternative, obj_type, variant = alternatives[0]
         alternatives = alternatives[1:]
-        memo[info.prefix] = alternatives
+        memo[info.sparql] = alternatives
         if not alternative.variants:
             # just to be sure to have no parsing errors
             variant = None

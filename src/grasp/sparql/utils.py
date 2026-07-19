@@ -1,3 +1,4 @@
+import re
 import time
 import uuid
 from copy import deepcopy
@@ -347,6 +348,11 @@ def normalize(sparql: str, parser: LR1Parser, is_prefix: bool = False) -> str:
     return parse_to_string(parse) + rest
 
 
+def random_var() -> str:
+    # a unique SPARQL variable, e.g. "?a1b2..."
+    return f"?{uuid.uuid4().hex}"
+
+
 def complete_prefix(
     prefix: str,
     parser: LR1Parser,
@@ -390,10 +396,10 @@ def complete_prefix(
         return s
 
     for i, position in enumerate(Position):
-        vars = [uuid.uuid4().hex for _ in range(3 - i)]
-        current_var = f"?{vars[0]}"
+        vars = [random_var() for _ in range(3 - i)]
+        current_var = vars[0]
 
-        full_query = prefix.strip() + " " + " ".join(f"?{v}" for v in vars)
+        full_query = prefix.strip() + " " + " ".join(vars)
         full_query = close_brackets(full_query)
 
         # check if query is valid now
@@ -428,7 +434,15 @@ def infer_position_from_prefix(prefix: str, parser: LR1Parser) -> Position:
     return position
 
 
-def find_connected_top_level_triple_nodes(parse: dict, select_var: str) -> list[dict]:
+def find_connected_top_level_triple_nodes(
+    parse: dict,
+    select_var: str,
+    iri_only: bool = False,
+) -> list[dict]:
+    # triples connected to select_var via shared variables. With iri_only, keep
+    # only triples on a path from select_var to a triple carrying an IRI; this
+    # drops all-variable branches that add cost but no constraint, while keeping
+    # all-variable triples that merely connect select_var to a resolved one.
     triple_blocks = list(
         find_all(
             parse,
@@ -454,18 +468,45 @@ def find_connected_top_level_triple_nodes(parse: dict, select_var: str) -> list[
     if select_var not in set().union(*triple_var_sets):
         return []
 
-    keep = set()
+    # connected component of select_var
+    component = set()
     reachable_vars = {select_var}
     changed = True
     while changed:
         changed = False
         for i, var_set in enumerate(triple_var_sets):
-            if i in keep or not reachable_vars.intersection(var_set):
+            if i in component or not reachable_vars.intersection(var_set):
                 continue
 
-            keep.add(i)
+            component.add(i)
             reachable_vars.update(var_set)
             changed = True
+
+    if not iri_only:
+        return [triple_blocks[i] for i in sorted(component)]
+
+    # BFS from the select_var triples over the component, tracking parents, then
+    # keep each IRI/select_var triple and the triples linking it back to a source
+    sources = {i for i in component if select_var in triple_var_sets[i]}
+    terminals = sources | {
+        i for i in component if find(triple_blocks[i], "iri") is not None
+    }
+    parent: dict[int, int | None] = {i: None for i in sources}
+    queue = list(sources)
+    while queue:
+        i = queue.pop(0)
+        for j in component:
+            if j in parent or not triple_var_sets[i].intersection(triple_var_sets[j]):
+                continue
+            parent[j] = i
+            queue.append(j)
+
+    keep = set()
+    for terminal in terminals:
+        node: int | None = terminal
+        while node is not None and node not in keep:
+            keep.add(node)
+            node = parent[node]
 
     return [triple_blocks[i] for i in sorted(keep)]
 
@@ -477,29 +518,53 @@ def find_connected_top_level_triples(parse: dict, select_var: str) -> list[str]:
     ]
 
 
-def derive_constraint_query_from_prefix(
-    prefix: str,
+# the placeholder currently being resolved (<rep>...</rep>) and other still
+# unresolved placeholders (<iri>...</iri>) in a partially resolved query
+CURRENT_PLACEHOLDER = re.compile(r"<rep>.*?</rep>", re.DOTALL)
+UNRESOLVED_PLACEHOLDER = re.compile(r"<iri>.*?</iri>", re.DOTALL)
+
+
+def replace_unresolved_placeholders(sparql: str) -> str:
+    # swap each unresolved placeholder for a fresh variable so the query parses
+    # and it adds no constraint
+    return UNRESOLVED_PLACEHOLDER.sub(lambda _: random_var(), sparql)
+
+
+def derive_constraint_query_from_sparql(
+    sparql: str,
     parser: LR1Parser,
     limit: int | None = None,
 ) -> tuple[str | None, Position]:
-    parse, position, select_var = complete_prefix(prefix, parser)
+    # derive a constraint query from a partially resolved query. The current
+    # placeholder becomes the selected variable; resolved neighbours on both
+    # sides constrain it, unresolved ones do not.
+    match = CURRENT_PLACEHOLDER.search(sparql)
+    if match is None:
+        raise SPARQLException("no current placeholder in query", sparql)
 
-    triple_nodes = find_connected_top_level_triple_nodes(parse, select_var)
+    # position depends only on the left context
+    prefix = replace_unresolved_placeholders(sparql[: match.start()])
+    _, position, _ = complete_prefix(prefix, parser)
 
-    if not triple_nodes:
-        return None, position
-
-    if len(triple_nodes) == 1 and var_only_triple(triple_nodes[0]):
-        return None, position
-
-    triple_blocks = [parse_to_string(node) for node in triple_nodes]
-    final_query = (
-        f"SELECT DISTINCT {select_var} WHERE {{ " + " . ".join(triple_blocks) + " }"
+    select_var = random_var()
+    full = replace_unresolved_placeholders(
+        sparql[: match.start()] + select_var + sparql[match.end() :]
     )
-    if limit is not None:
-        final_query += f" LIMIT {limit}"
+    parse = parser.parse(full)
 
-    return final_query, position
+    triple_nodes = find_connected_top_level_triple_nodes(
+        parse, select_var, iri_only=True
+    )
+    if not triple_nodes or (
+        len(triple_nodes) == 1 and var_only_triple(triple_nodes[0])
+    ):
+        return None, position
+
+    triples = " . ".join(parse_to_string(node) for node in triple_nodes)
+    query = f"SELECT DISTINCT {select_var} WHERE {{ {triples} }}"
+    if limit is not None:
+        query += f" LIMIT {limit}"
+    return query, position
 
 
 def query_type(sparql: str, parser: LR1Parser, is_prefix: bool = False) -> str | None:
@@ -551,13 +616,13 @@ def ask_to_select(
 
         # triple block does not have a var
         # introduce one in VALUES clause and replace iri with var
-        var = uuid.uuid4().hex
+        var = random_var()
         triple["children"].append(
             {
                 "name": "ValuesClause",
                 "children": [
                     {"name": "VALUES", "value": "VALUES"},
-                    {"name": "Var", "value": f"?{var}"},
+                    {"name": "Var", "value": var},
                     {"name": "{", "value": "{"},
                     deepcopy(iri),
                     {"name": "}", "value": "}"},
@@ -566,7 +631,7 @@ def ask_to_select(
         )
         iri.pop("children")
         iri["name"] = "Var"
-        iri["value"] = f"?{var}"
+        iri["value"] = var
 
     # ask query has a var, convert to select
     ask_query["name"] = "SelectQuery"
@@ -807,7 +872,7 @@ class SPARQLExecuteException(SPARQLException):
         return self.status_code is not None and int(self.status_code / 100) == 5
 
 
-def _stream_with_timeout(
+def stream_with_timeout(
     sparql: str,
     response: requests.Response,
     seconds: float | None = None,
@@ -916,7 +981,7 @@ def execute(
 
             response.raise_for_status()
 
-            res = _stream_with_timeout(
+            res = stream_with_timeout(
                 sparql,
                 response,
                 read_timeout,

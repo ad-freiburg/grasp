@@ -53,17 +53,26 @@ export const TASKS = Object.freeze([
       'Answer questions by retrieving relevant information from knowledge graphs.'
   },
   {
+    id: 'sparql-to-question',
+    name: 'SPARQL to Question',
+    tooltip: 'Convert a SPARQL query into a natural language question.'
+  },
+  {
+    id: 'entity-linking',
+    name: 'Entity Linking',
+    tooltip:
+      'Annotate entity mentions in a text with corresponding knowledge graph entities.'
+  },
+  {
     id: 'cea',
     name: 'Cell Entity Annotation',
     tooltip:
       'Upload a CSV table to annotate each cell with corresponding knowledge graph entities.'
-  },
-  {
-    id: 'sparql-to-question',
-    name: 'SPARQL to Question',
-    tooltip: 'Convert a SPARQL query into a natural language question.'
   }
 ]);
+
+// tasks that take natural language input and thus support speech-to-text
+export const STT_TASKS = Object.freeze(['sparql-qa', 'general-qa', 'entity-linking']);
 
 export const QLEVER_HOSTS = Object.freeze([
   'qlever.cs.uni-freiburg.de',

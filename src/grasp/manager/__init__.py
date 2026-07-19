@@ -56,7 +56,7 @@ from grasp.sparql.utils import (
     REQUEST_TIMEOUT,
     SPARQLException,
     ask_to_select,
-    derive_constraint_query_from_prefix,
+    derive_constraint_query_from_sparql,
     execute,
     find_longest_prefix,
     fix_prefixes,
@@ -821,13 +821,13 @@ class KgManager:
 
         return info
 
-    def derive_constraint_query_from_prefix(
+    def derive_constraint_query_from_sparql(
         self,
-        prefix: str,
+        sparql: str,
         limit: int | None = None,
     ) -> tuple[str | None, Position]:
-        return derive_constraint_query_from_prefix(
-            prefix,
+        return derive_constraint_query_from_sparql(
+            sparql,
             self.sparql_parser,
             limit,
         )

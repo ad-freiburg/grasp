@@ -2,7 +2,7 @@
   import { createEventDispatcher, onDestroy, onMount, tick } from 'svelte';
   import SelectionBar from './SelectionBar.svelte';
   import { parseCsvTable } from '../utils/csv.js';
-  import { transcribeEndpoint } from '../constants.js';
+  import { STT_TASKS, transcribeEndpoint } from '../constants.js';
 
   export let value = '';
   export let disabled = false;
@@ -16,6 +16,7 @@
   export let errorMessage = '';
   export let onReload = null;
   export let initialCeaPayload = null;
+  export let initialElPayload = null;
   export let sttEnabled = false;
   const dispatch = createEventDispatcher();
 
@@ -27,7 +28,6 @@
   let fileInputEl;
   let uploadButtonEl;
   let urlModalInputEl;
-  let cachedLineHeight = 0;
   let isMobile = false;
   let previousValue = '';
   let isCeaTask = false;
@@ -48,6 +48,15 @@
   let ceaPreviousSelectedRows = [];
   let appliedInitialCeaRef = null;
 
+  let isElTask = false;
+  let elText = '';
+  let elLastText = '';
+  let elWindow = null;
+  let elSpecialInstructions = '';
+  let elTextareaEl;
+  let elBackdropEl;
+  let appliedInitialElRef = null;
+
   let isRecording = false;
   let isTranscribing = false;
   let sttError = '';
@@ -59,6 +68,7 @@
   const INACTIVITY_MESSAGE_PREFIX = 'connection closed due to inactivity';
 
   $: isCeaTask = task === 'cea';
+  $: isElTask = task === 'entity-linking';
   $: inputPlaceholder = task === 'sparql-to-question' ? 'Enter a SPARQL query...' : 'Ask a question...';
   $: trimmed = value.trim();
   $: canReload = typeof onReload === 'function';
@@ -87,6 +97,14 @@
       !isRunning &&
       !isCancelling &&
       !isParsingFile
+    : isElTask
+      ? normalizedElText.trim().length > 0 &&
+        !disabled &&
+        connected &&
+        !isRunning &&
+        !isCancelling &&
+        !isRecording &&
+        !isTranscribing
       : trimmed.length > 0 &&
       !disabled &&
       connected &&
@@ -94,13 +112,14 @@
       !isCancelling &&
       !isRecording &&
       !isTranscribing;
+  $: isSttTask = STT_TASKS.includes(task);
   $: canRecord = sttEnabled &&
-    !isCeaTask &&
+    isSttTask &&
     !disabled &&
     !isRunning &&
     !isCancelling &&
     !isTranscribing;
-  $: showMicControls = sttEnabled && !isCeaTask;
+  $: showMicControls = sttEnabled && isSttTask;
   $: canCancel = connected && isRunning && !isCancelling && !disabled;
   $: showCancel = isRunning || isCancelling;
   $: showClear = hasHistory && !isRunning && !isCancelling;
@@ -131,6 +150,15 @@
     appliedInitialCeaRef = null;
   }
 
+  $: if (isElTask) {
+    if (initialElPayload && initialElPayload !== appliedInitialElRef) {
+      applyInitialEl(initialElPayload);
+      appliedInitialElRef = initialElPayload;
+    }
+  } else if (appliedInitialElRef) {
+    appliedInitialElRef = null;
+  }
+
   $: if (lastTask !== task) {
     if (lastTask === 'cea') {
       clearCeaSelection({ preservePrevious: true });
@@ -138,7 +166,27 @@
     lastTask = task;
   }
 
+  // normalize like the backend does, so that the char offsets we compute on the
+  // preview match the offsets the backend reports in its predictions
+  $: normalizedElText = normalizeElText(elText);
+  $: if (elText !== elLastText) {
+    elLastText = elText;
+    elWindow = null;
+  }
+  $: elWindowActive =
+    isElTask &&
+    elWindow !== null &&
+    (elWindow.from > 0 || elWindow.to < elText.length);
+  $: elWindowLabel = elWindowActive
+    ? `Annotating only the highlighted part (characters ${elWindow.from}–${elWindow.to}), the rest is used as context.`
+    : 'Annotating the whole text. Select a part of it above to only annotate that window.';
+
   $: value, autoResize();
+  $: if (isElTask) {
+    elText;
+    elTextareaEl;
+    elAutoResize();
+  }
   $: if (!isCeaTask && textareaEl && value === '' && previousValue !== '') {
     focusInput();
   }
@@ -155,6 +203,15 @@
 
   function submit() {
     if (!canSubmit) return;
+    if (isElTask) {
+      const payload = buildElPayload();
+      if (!payload) return;
+      dispatch('submit', { kind: 'entity-linking', payload });
+      // keep the text so that another window of it can be annotated next,
+      // but clear the used window selection
+      elWindow = null;
+      return;
+    }
     if (isCeaTask) {
       const payload = buildCeaPayload();
       if (!payload) return;
@@ -191,11 +248,14 @@
     if (isCeaTask) {
       clearCeaSelection();
     }
+    if (isElTask) {
+      clearElState();
+    }
     focusInput();
   }
 
   function onKeydown(event) {
-    if (isCeaTask) {
+    if (isCeaTask || isElTask) {
       return;
     }
     if (event.key !== 'Enter') {
@@ -228,31 +288,37 @@
     dispatch('kgchange', event.detail);
   }
 
-  function autoResize() {
-    if (!textareaEl) return;
-    const style = getComputedStyle(textareaEl);
-    if (!cachedLineHeight) {
-      cachedLineHeight = parseFloat(style.lineHeight) || 20;
-    }
+  function resizeTextarea(el, content, maxLines = 5) {
+    if (!el) return;
+    const style = getComputedStyle(el);
+    const lineHeight = parseFloat(style.lineHeight) || 20;
     const padding =
       parseFloat(style.paddingTop || '0') + parseFloat(style.paddingBottom || '0');
     const minHeightFromStyle = parseFloat(style.minHeight || '0') || 0;
-    const singleLineHeight = cachedLineHeight + padding;
+    const singleLineHeight = lineHeight + padding;
     const minHeight = Math.max(singleLineHeight, minHeightFromStyle);
-    const maxHeight = cachedLineHeight * 5 + padding;
-    const trimmedValue = typeof value === 'string' ? value.trim() : '';
-    textareaEl.style.height = 'auto';
-    const contentHeight = textareaEl.scrollHeight;
+    const maxHeight = lineHeight * maxLines + padding;
+    const trimmedContent = typeof content === 'string' ? content.trim() : '';
+    el.style.height = 'auto';
+    const contentHeight = el.scrollHeight;
 
-    if (!trimmedValue) {
-      textareaEl.style.height = `${minHeight}px`;
-      textareaEl.style.overflowY = 'hidden';
+    if (!trimmedContent) {
+      el.style.height = `${minHeight}px`;
+      el.style.overflowY = 'hidden';
       return;
     }
 
     const target = Math.min(Math.max(contentHeight, minHeight), maxHeight);
-    textareaEl.style.height = `${target}px`;
-    textareaEl.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+    el.style.height = `${target}px`;
+    el.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+  }
+
+  function autoResize() {
+    resizeTextarea(textareaEl, value);
+  }
+
+  function elAutoResize() {
+    resizeTextarea(elTextareaEl, elText);
   }
 
   function detectDevice() {
@@ -270,6 +336,10 @@
       if (uploadButtonEl && !disableFileInput) {
         uploadButtonEl.focus();
       }
+      return;
+    }
+    if (isElTask) {
+      elTextareaEl?.focus();
       return;
     }
     if (!textareaEl) return;
@@ -425,10 +495,19 @@
       const data = await response.json();
       const text = typeof data?.text === 'string' ? data.text.trim() : '';
       if (text) {
-        const current = typeof value === 'string' ? value : '';
-        value = current && !/\s$/.test(current) ? `${current} ${text}` : `${current}${text}`;
-        await tick();
-        autoResize();
+        if (isElTask) {
+          const current = typeof elText === 'string' ? elText : '';
+          elText = current && !/\s$/.test(current)
+            ? `${current} ${text}`
+            : `${current}${text}`;
+          await tick();
+          elAutoResize();
+        } else {
+          const current = typeof value === 'string' ? value : '';
+          value = current && !/\s$/.test(current) ? `${current} ${text}` : `${current}${text}`;
+          await tick();
+          autoResize();
+        }
       }
     } catch (error) {
       console.warn('Transcription failed', error);
@@ -612,6 +691,93 @@
       ? [...ceaPreviousSelectedRows]
       : [];
     ceaError = '';
+  }
+
+  function normalizeElText(value) {
+    if (typeof value !== 'string') return '';
+    let normalized = value;
+    try {
+      normalized = normalized.normalize('NFC');
+    } catch (error) {
+      console.warn('Failed to NFC-normalize text', error);
+    }
+    return normalized.replace(/[‘’]/g, "'");
+  }
+
+  function applyInitialEl(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    if (typeof payload.data !== 'string' || !payload.data) return;
+    elText = payload.data;
+    // keep elLastText in sync so the reactive window reset does not fire
+    elLastText = elText;
+    // restored data was normalized on submit, so raw and normalized
+    // offsets are identical here
+    const length = elText.length;
+    const from = payload.annotate_from;
+    const to = payload.annotate_up_to;
+    if (
+      Number.isInteger(from) &&
+      Number.isInteger(to) &&
+      from >= 0 &&
+      to > from &&
+      to <= length
+    ) {
+      elWindow = { from, to };
+    } else {
+      elWindow = null;
+    }
+    elSpecialInstructions =
+      typeof payload.special_instructions === 'string'
+        ? payload.special_instructions
+        : '';
+  }
+
+  function clearElState() {
+    elText = '';
+    elLastText = '';
+    elWindow = null;
+    elSpecialInstructions = '';
+  }
+
+  function handleElSelect() {
+    if (!elTextareaEl || disabled || isRunning || isCancelling) return;
+    const start = elTextareaEl.selectionStart;
+    const end = elTextareaEl.selectionEnd;
+    if (!Number.isInteger(start) || !Number.isInteger(end)) return;
+    if (end <= start) return;
+    elWindow = { from: start, to: end };
+  }
+
+  function clearElWindow() {
+    elWindow = null;
+  }
+
+  function syncElScroll() {
+    if (elBackdropEl && elTextareaEl) {
+      elBackdropEl.scrollTop = elTextareaEl.scrollTop;
+    }
+  }
+
+  function buildElPayload() {
+    const data = normalizedElText;
+    if (!data.trim()) return null;
+    const payload = { data };
+    if (elWindowActive) {
+      // elWindow offsets refer to the raw text; convert them to offsets into
+      // the normalized text that is actually submitted
+      const from = normalizeElText(elText.slice(0, elWindow.from)).length;
+      const to =
+        from + normalizeElText(elText.slice(elWindow.from, elWindow.to)).length;
+      if (from < data.length && to > from) {
+        payload.annotate_from = from;
+        payload.annotate_up_to = Math.min(to, data.length);
+      }
+    }
+    const instructions = elSpecialInstructions.trim();
+    if (instructions) {
+      payload.special_instructions = instructions;
+    }
+    return payload;
   }
 
   async function handleFileChange(event) {
@@ -992,6 +1158,55 @@
             </div>
           {/if}
         </div>
+      {:else if isElTask}
+        <div class="composer__el-fieldset">
+          <div class="composer__el-input-wrap">
+            <div
+              class="composer__el-backdrop"
+              bind:this={elBackdropEl}
+              aria-hidden="true"
+            >{#if elWindowActive}{elText.slice(0, elWindow.from)}<mark class="composer__el-window">{elText.slice(elWindow.from, elWindow.to)}</mark>{elText.slice(elWindow.to)}{:else}{elText}{/if}{'\n'}</div>
+            <textarea
+              id="composer-el-input"
+              class="composer__el-input"
+              placeholder="Enter or paste the text to annotate..."
+              bind:value={elText}
+              bind:this={elTextareaEl}
+              rows="1"
+              on:input={elAutoResize}
+              on:select={handleElSelect}
+              on:scroll={syncElScroll}
+              disabled={disabled || isRunning || isCancelling}
+            ></textarea>
+          </div>
+          {#if elText.trim()}
+            <div class="composer__el-window-bar">
+              <p class="composer__el-window-status">{elWindowLabel}</p>
+              {#if elWindowActive}
+                <button
+                  type="button"
+                  class="composer__preview-button"
+                  on:click={clearElWindow}
+                  disabled={disabled || isRunning || isCancelling}
+                >
+                  Annotate whole text
+                </button>
+              {/if}
+            </div>
+            <label class="composer__el-instructions">
+              <span class="composer__el-instructions-label">
+                Special instructions (optional)
+              </span>
+              <input
+                type="text"
+                class="composer__el-instructions-input"
+                placeholder="e.g. only annotate persons and locations"
+                bind:value={elSpecialInstructions}
+                disabled={disabled || isRunning || isCancelling}
+              />
+            </label>
+          {/if}
+        </div>
       {:else}
         <textarea
           id="composer-input"
@@ -1302,6 +1517,110 @@
 
   .composer__input:focus {
     outline: none;
+  }
+
+  .composer__el-fieldset {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    min-width: 0;
+  }
+
+  .composer__el-input-wrap {
+    position: relative;
+    width: 100%;
+    background: #fff;
+    border-radius: var(--radius-sm);
+  }
+
+  /* renders the same text as the textarea (which sits on top of it with a
+     transparent background) to visualize the selected annotation window */
+  .composer__el-backdrop {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font: inherit;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    color: transparent;
+  }
+
+  .composer__el-input {
+    position: relative;
+    display: block;
+    width: 100%;
+    resize: none;
+    min-height: 2.5rem;
+    max-height: 10rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    padding: var(--spacing-sm) var(--spacing-md);
+    font: inherit;
+    line-height: 1.4;
+    color: var(--text-primary);
+    background: transparent;
+    caret-color: var(--color-uni-blue);
+  }
+
+  .composer__el-input:focus {
+    outline: none;
+    border-color: rgba(52, 74, 154, 0.4);
+  }
+
+  .composer__el-input:disabled {
+    opacity: 0.6;
+  }
+
+  .composer__el-window {
+    background: rgba(52, 74, 154, 0.22);
+    color: transparent;
+    border-radius: 2px;
+  }
+
+  .composer__el-window-bar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--spacing-xs);
+  }
+
+  .composer__el-window-status {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-subtle);
+  }
+
+  .composer__el-instructions {
+    display: grid;
+    gap: 4px;
+  }
+
+  .composer__el-instructions-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-subtle);
+  }
+
+  .composer__el-instructions-input {
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: var(--radius-sm);
+    padding: 0.45rem 0.6rem;
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    background: #fff;
+  }
+
+  .composer__el-instructions-input:focus {
+    outline: none;
+    border-color: rgba(52, 74, 154, 0.4);
   }
 
   .composer__upload-fieldset {

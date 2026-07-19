@@ -1,6 +1,7 @@
 <script>
   import { tick } from 'svelte';
   import MessageCard from './MessageCard.svelte';
+  import EntityLinkingAnnotations from './EntityLinkingAnnotations.svelte';
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
   import { prettyJson } from '../../utils/formatters.js';
@@ -48,6 +49,20 @@ const ceaInputTable =
 const ceaAnnotations =
   task === 'cea' && Array.isArray(output?.annotations)
     ? output.annotations.filter(
+        (item) => item && typeof item === 'object' && !Array.isArray(item)
+      )
+    : [];
+const elFormatted = task === 'entity-linking' ? output?.formatted ?? '' : '';
+const elInput =
+  task === 'entity-linking' &&
+  message?.elInput &&
+  typeof message.elInput === 'object' &&
+  typeof message.elInput.data === 'string'
+    ? message.elInput
+    : null;
+const elPredictions =
+  task === 'entity-linking' && Array.isArray(output?.predictions)
+    ? output.predictions.filter(
         (item) => item && typeof item === 'object' && !Array.isArray(item)
       )
     : [];
@@ -293,6 +308,19 @@ function deriveQleverLink() {
     {/if}
 
     {#if !ceaFormatted && ceaAnnotations.length === 0}
+      <p class="placeholder">No annotations returned.</p>
+    {/if}
+  {:else if task === 'entity-linking'}
+    {#if elInput}
+      <EntityLinkingAnnotations
+        text={elInput.data}
+        annotateFrom={elInput.annotate_from ?? null}
+        annotateUpTo={elInput.annotate_up_to ?? null}
+        predictions={elPredictions}
+      />
+    {:else if elFormatted}
+      <MarkdownContent content={elFormatted} />
+    {:else}
       <p class="placeholder">No annotations returned.</p>
     {/if}
   {:else}

@@ -2,12 +2,13 @@ import json
 
 import pytest
 
+from grasp.sparql.types import Position
 from grasp.sparql.utils import (
     SPARQLException,
     SPARQLExecuteException,
-    _stream_with_timeout,
+    stream_with_timeout,
     complete_prefix,
-    derive_constraint_query_from_prefix,
+    derive_constraint_query_from_sparql,
     find,
     find_connected_top_level_triples,
     fix_prefixes,
@@ -51,9 +52,10 @@ def _parse(sparql: str) -> dict:
     return SPARQL_PARSER.parse(sparql)
 
 
-def _prefix_from_marked_query(sparql: str) -> str:
-    assert "<CUR>" in sparql, "Expected <CUR> marker in test query"
-    return sparql.split("<CUR>", 1)[0]
+def _derive(query: str, **kwargs):
+    # the placeholder being resolved is marked <rep>...</rep>
+    assert "<rep>" in query, "Expected <rep> marker in test query"
+    return derive_constraint_query_from_sparql(query, SPARQL_PARSER, **kwargs)
 
 
 class TestStreamWithTimeout:
@@ -69,7 +71,7 @@ class TestStreamWithTimeout:
         }
         response = _FakeResponse(data)
 
-        result = _stream_with_timeout("SELECT ?x WHERE { ?x ?p ?o }", response)  # type: ignore
+        result = stream_with_timeout("SELECT ?x WHERE { ?x ?p ?o }", response)  # type: ignore
 
         assert result == data
         assert response.closed
@@ -87,7 +89,7 @@ class TestStreamWithTimeout:
         response = _FakeResponse(data)
 
         with pytest.raises(SPARQLExecuteException, match="exceeded 1 rows"):
-            _stream_with_timeout(
+            stream_with_timeout(
                 "SELECT ?x WHERE { ?x ?p ?o }",
                 response,  # type: ignore
                 sparql_result_max_rows=1,
@@ -98,7 +100,7 @@ class TestStreamWithTimeout:
         data = {"head": {}, "boolean": True}
         response = _FakeResponse(data)
 
-        result = _stream_with_timeout("ASK { ?x ?p ?o }", response)  # type: ignore
+        result = stream_with_timeout("ASK { ?x ?p ?o }", response)  # type: ignore
 
         assert result == {"boolean": True}
         assert response.closed
@@ -346,17 +348,16 @@ class TestCompletePrefix:
             )
 
 
-class TestDeriveConstraintQueryFromPrefix:
+class TestDeriveConstraintQueryFromSparql:
     def test_keeps_only_connected_component(self):
         query = (
             "SELECT ?b WHERE { "
             "?a <http://example.org/p1> ?b . "
-            "?b <http://example.org/p2> <CUR> "
+            "?b <http://example.org/p2> <rep>x</rep> "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -368,13 +369,12 @@ class TestDeriveConstraintQueryFromPrefix:
             "SELECT ?b WHERE { "
             "?x <http://example.org/p3> ?y . "
             "?a <http://example.org/p1> ?b . "
-            "?b <http://example.org/p2> <CUR> . "
+            "?b <http://example.org/p2> <rep>x</rep> . "
             "?z <http://example.org/p4> ?w "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -387,12 +387,11 @@ class TestDeriveConstraintQueryFromPrefix:
             "SELECT ?b WHERE { "
             "?a <http://example.org/p1> ?b . "
             "?b <http://example.org/p2> ?c . "
-            "?c <http://example.org/p3> <CUR> "
+            "?c <http://example.org/p3> <rep>x</rep> "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -400,24 +399,20 @@ class TestDeriveConstraintQueryFromPrefix:
         assert "?c <http://example.org/p3>" in result
 
     def test_raises_when_placeholder_is_not_in_a_triple(self):
-        query = (
-            "SELECT ?z WHERE { ?a <http://example.org/p1> ?z . FILTER(?z != <CUR>) }"
-        )
+        query = "SELECT ?z WHERE { ?a <http://example.org/p1> ?z . FILTER(?z != <rep>x</rep>) }"
 
-        prefix = _prefix_from_marked_query(query)
         with pytest.raises(SPARQLException):
-            derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+            _derive(query)
 
     def test_ignores_triples_inside_optional(self):
         query = (
             "SELECT ?a WHERE { "
             "OPTIONAL { ?a <http://example.org/p2> ?c } . "
-            "?a <http://example.org/p1> <CUR> "
+            "?a <http://example.org/p1> <rep>x</rep> "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1>" in result
@@ -427,12 +422,11 @@ class TestDeriveConstraintQueryFromPrefix:
         query = (
             "SELECT ?a WHERE { "
             "{ ?a <http://example.org/p2> ?b } UNION { ?a <http://example.org/p3> ?c } . "
-            "?a <http://example.org/p1> <CUR> "
+            "?a <http://example.org/p1> <rep>x</rep> "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1>" in result
@@ -444,12 +438,11 @@ class TestDeriveConstraintQueryFromPrefix:
             "SELECT ?a WHERE { "
             "?a <http://example.org/p1> ?b . "
             "MINUS { ?b <http://example.org/p2> ?c } . "
-            "?b <http://example.org/p3> <CUR> "
+            "?b <http://example.org/p3> <rep>x</rep> "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -457,37 +450,166 @@ class TestDeriveConstraintQueryFromPrefix:
         assert "http://example.org/p2" not in result
 
     def test_returns_none_for_single_all_variable_triple(self):
-        query = "SELECT ?x WHERE { ?s ?p <CUR> }"
-        prefix = _prefix_from_marked_query(query)
-        # ?s ?p is two vars — but object position is the cursor, so triple is ?s ?p ?cursor
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        # ?s ?p ?current — all variables, so no constraint
+        query = "SELECT ?x WHERE { ?s ?p <rep>x</rep> }"
+        result, _ = _derive(query)
         assert result is None
 
     def test_returns_constraint_for_single_triple_with_iri_predicate(self):
-        query = "SELECT ?x WHERE { ?s <http://example.org/p1> <CUR> }"
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        query = "SELECT ?x WHERE { ?s <http://example.org/p1> <rep>x</rep> }"
+        result, _ = _derive(query)
         assert result is not None
         assert "<http://example.org/p1>" in result
 
-    def test_returns_constraint_for_two_all_variable_triples(self):
-        query = "SELECT ?x WHERE { ?a ?b ?x . ?x ?c <CUR> }"
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
-        assert result is not None
-        assert "?a ?b ?x" in result
+    def test_returns_none_for_all_variable_triples(self):
+        # nothing resolved anywhere, so there is nothing to constrain on
+        query = "SELECT ?x WHERE { ?a ?b ?x . ?x ?c <rep>x</rep> }"
+        result, _ = _derive(query)
+        assert result is None
 
     def test_returns_none_constraint_inside_optional(self):
         query = (
             "SELECT ?a WHERE { "
             "?a <http://example.org/p1> ?b . "
-            "OPTIONAL { ?b <http://example.org/p2> <CUR> } "
+            "OPTIONAL { ?b <http://example.org/p2> <rep>x</rep> } "
             "}"
         )
 
-        prefix = _prefix_from_marked_query(query)
-        result, _ = derive_constraint_query_from_prefix(prefix, SPARQL_PARSER)
+        result, _ = _derive(query)
         assert result is None
+
+    # the following need the full query, not a bare prefix: resolved neighbours
+    # to the right of the placeholder, and unresolved placeholders elsewhere.
+
+    def test_uses_resolved_right_neighbour(self):
+        # object is a resolved entity to the right of the property placeholder
+        query = "SELECT ?x WHERE { ?x <rep>x</rep> <http://example.org/o> }"
+        result, position = _derive(query)
+        assert result is not None
+        assert position == Position.PROPERTY
+        assert "<http://example.org/o>" in result
+
+    def test_uses_resolved_neighbours_on_both_sides(self):
+        query = (
+            "SELECT ?x WHERE { "
+            "<http://example.org/s> <http://example.org/p1> ?x . "
+            "?x <rep>x</rep> <http://example.org/o> "
+            "}"
+        )
+        result, position = _derive(query)
+        assert result is not None
+        assert position == Position.PROPERTY
+        assert "<http://example.org/s> <http://example.org/p1> ?x" in result
+        assert "<http://example.org/o>" in result
+
+    def test_unresolved_placeholder_neighbour_is_ignored(self):
+        # unresolved object placeholder becomes a variable, no crash
+        query = (
+            "SELECT ?x WHERE { <http://example.org/s> <rep>x</rep> <iri>entity</iri> }"
+        )
+        result, position = _derive(query)
+        assert result is not None
+        assert position == Position.PROPERTY
+        assert "<http://example.org/s>" in result
+        assert "<iri>" not in result
+
+    def test_unresolved_placeholder_in_filter_does_not_break_constraint(self):
+        # freebase WQSP pattern: topic entity repeated in a FILTER, still
+        # unresolved while a property is resolved
+        query = (
+            "SELECT DISTINCT ?x WHERE { "
+            "FILTER(?x != <iri>Jackie Robinson</iri>) "
+            "<http://example.org/s> <rep>x</rep> ?y "
+            "}"
+        )
+        result, position = _derive(query)
+        assert result is not None
+        assert position == Position.PROPERTY
+        assert "<http://example.org/s>" in result
+        assert "<iri>" not in result
+
+    def test_multiple_unresolved_placeholders_get_distinct_vars(self):
+        # two unresolved placeholders must not collapse into one variable
+        query = (
+            "SELECT ?x WHERE { "
+            "<iri>entity a</iri> <http://example.org/p1> ?x . "
+            "?x <rep>x</rep> <iri>entity b</iri> "
+            "}"
+        )
+        result, position = _derive(query)
+        assert result is not None
+        assert position == Position.PROPERTY
+        assert "<iri>" not in result
+
+    def test_raises_when_no_current_placeholder(self):
+        query = "SELECT ?x WHERE { ?x <http://example.org/p1> ?o }"
+        with pytest.raises(SPARQLException):
+            derive_constraint_query_from_sparql(query, SPARQL_PARSER)
+
+    # pruning of all-variable padding triples (iri_only)
+
+    def test_drops_all_variable_padding_triple(self):
+        # freebase CVT case: resolving the first property; the second hop is
+        # still unresolved, so its (all-variable) triple must be dropped
+        query = (
+            "SELECT ?x WHERE { "
+            "<http://example.org/s> <rep>x</rep> ?y . "
+            "?y <iri>second hop</iri> ?x "
+            "}"
+        )
+        result, _ = _derive(query)
+        assert result is not None
+        assert "<http://example.org/s>" in result
+        # only the cursor's own triple survives, no second hop
+        assert " . " not in result
+        assert "?x" not in result
+
+    def test_keeps_resolved_second_hop(self):
+        # both hops carry IRIs (subject and a resolved neighbour), so the full
+        # two-hop constraint is kept
+        query = (
+            "SELECT ?x WHERE { "
+            "<http://example.org/s> <http://example.org/p1> ?y . "
+            "?y <rep>x</rep> <http://example.org/o> "
+            "}"
+        )
+        result, _ = _derive(query)
+        assert result is not None
+        assert "<http://example.org/s> <http://example.org/p1> ?y" in result
+        assert "<http://example.org/o>" in result
+
+    def test_keeps_all_variable_triple_connecting_two_resolved(self):
+        # the middle triple is all-variable but links the cursor to a resolved
+        # triple, so it (and the resolved triple) must be kept
+        query = (
+            "SELECT ?x WHERE { "
+            "<http://example.org/s> <rep>x</rep> ?y . "
+            "?y <iri>mid</iri> ?z . "
+            "?z <http://example.org/p3> <http://example.org/o> "
+            "}"
+        )
+        result, _ = _derive(query)
+        assert result is not None
+        assert "<http://example.org/s>" in result
+        # the connecting triple and the far resolved triple are both kept
+        assert "?y" in result and "?z" in result
+        assert "<http://example.org/o>" in result
+
+    def test_drops_dangling_branch_but_keeps_connector(self):
+        # ?y -> ?z -> <o> is a real (connected) constraint and is kept; the
+        # ?y -> ?w branch dangles into nothing and is dropped
+        query = (
+            "SELECT ?x WHERE { "
+            "<http://example.org/s> <rep>x</rep> ?y . "
+            "?y <iri>mid</iri> ?z . "
+            "?z <http://example.org/p3> <http://example.org/o> . "
+            "?y <iri>dangling</iri> ?w "
+            "}"
+        )
+        result, _ = _derive(query)
+        assert result is not None
+        assert "<http://example.org/o>" in result
+        assert "?w" not in result
 
 
 class TestParseToStringWithWhitespace:

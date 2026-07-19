@@ -94,6 +94,10 @@ let running = false;
   let urlSelectedKgs = initialKgSeed.length ? [...initialKgSeed] : null;
   let urlSelectedTask = initialTaskSeed;
   let pendingUrlReset = false;
+  let pendingTaskSwitch = null;
+
+  $: pendingTaskSwitchName =
+    TASKS.find((t) => t.id === pendingTaskSwitch)?.name ?? pendingTaskSwitch;
 
   $: hasHistory = histories.length > 0;
   $: knowledgeGraphList = Array.from(knowledgeGraphs.entries()).map(
@@ -109,6 +113,8 @@ let running = false;
     connectionStatus === 'error' ||
     connectionStatus === 'disconnected';
   $: ceaInitialPayload = task === 'cea' ? getLastCeaInput() : null;
+  $: elInitialPayload = task === 'entity-linking' ? getLastElInput() : null;
+  const PAYLOAD_INPUT_TASKS = new Set(['cea', 'entity-linking']);
   onMount(async () => {
     await initialize();
     await measureComposerOnce();
@@ -184,7 +190,7 @@ let running = false;
           parsedInput &&
           typeof parsedInput === 'object' &&
           typeof parsedInput.task === 'string';
-        if (isValidRecord && parsedInput.task === 'cea') {
+        if (isValidRecord && PAYLOAD_INPUT_TASKS.has(parsedInput.task)) {
           lastInputRecord = parsedInput;
         } else {
           sessionStore.removeItem(SESSION_STORAGE_KEYS.lastInput);
@@ -270,6 +276,20 @@ let running = false;
       typeof lastInputRecord.value === 'object'
     ) {
       return cloneCeaTable(lastInputRecord.value) ?? lastInputRecord.value;
+    }
+    return null;
+  }
+
+  function getLastElInput() {
+    if (!lastInputRecord || lastInputRecord.task !== 'entity-linking') {
+      return null;
+    }
+    if (
+      lastInputRecord.value &&
+      typeof lastInputRecord.value === 'object' &&
+      typeof lastInputRecord.value.data === 'string'
+    ) {
+      return cloneLastInputValue(lastInputRecord.value) ?? lastInputRecord.value;
     }
     return null;
   }
@@ -424,6 +444,21 @@ let running = false;
           enrichedPayload = { ...payload, ceaInputTable: ceaInput };
         }
       }
+      if (payload.type === 'output' && payload.task === 'entity-linking') {
+        const elInput = getLastElInput();
+        if (elInput) {
+          enrichedPayload = { ...enrichedPayload, elInput };
+        }
+      }
+      // the raw input message for entity linking contains the full prompt
+      // scaffolding; attach the submitted payload so it can be rendered
+      // as the plain text with the annotation window highlighted
+      if (payload.type === 'input' && task === 'entity-linking') {
+        const elInput = getLastElInput();
+        if (elInput) {
+          enrichedPayload = { ...enrichedPayload, elInput };
+        }
+      }
       if (payload.type === 'output') {
         enrichedPayload =
           enrichedPayload === payload
@@ -503,6 +538,10 @@ let running = false;
       const detail = event.detail;
       if (!detail || detail.kind !== 'cea' || !detail.payload) return;
       payloadInput = detail.payload;
+    } else if (task === 'entity-linking') {
+      const detail = event.detail;
+      if (!detail || detail.kind !== 'entity-linking' || !detail.payload) return;
+      payloadInput = detail.payload;
     } else {
       const question = typeof event.detail === 'string' ? event.detail : '';
       const trimmedQuestion = question.trim();
@@ -559,8 +598,42 @@ let running = false;
   function handleTaskChange(event) {
     const nextTask = event.detail;
     if (!nextTask || task === nextTask) return;
+    // switching tasks mid-conversation would send the follow-up with the
+    // previous task's context (past messages and system prompt), so ask
+    // for confirmation and clear the conversation first
+    if (hasHistory || past) {
+      pendingTaskSwitch = nextTask;
+      return;
+    }
+    applyTaskChange(nextTask);
+  }
+
+  function applyTaskChange(nextTask) {
     task = nextTask;
     persistTask(task);
+  }
+
+  function confirmTaskSwitch() {
+    const nextTask = pendingTaskSwitch;
+    pendingTaskSwitch = null;
+    if (!nextTask) return;
+    composerValue = '';
+    updateStatusMessage('');
+    clearHistory('full');
+    replaceUrlWithRoot();
+    applyTaskChange(nextTask);
+  }
+
+  function cancelTaskSwitch() {
+    pendingTaskSwitch = null;
+  }
+
+  function handleTaskSwitchKeydown(event) {
+    if (pendingTaskSwitch === null) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelTaskSwitch();
+    }
   }
 
   function handleKnowledgeGraphChange(event) {
@@ -629,7 +702,7 @@ let running = false;
   function persistLastInput(record) {
     const sessionStore = getSessionStorage();
     if (!sessionStore) return;
-    if (!record || record.task !== 'cea') {
+    if (!record || !PAYLOAD_INPUT_TASKS.has(record.task)) {
       sessionStore.removeItem(SESSION_STORAGE_KEYS.lastInput);
       return;
     }
@@ -722,8 +795,8 @@ let running = false;
       : [];
     const shareInput =
       lastInputRecord &&
-      lastInputRecord.task === 'cea' &&
-      task === 'cea'
+      PAYLOAD_INPUT_TASKS.has(lastInputRecord.task) &&
+      lastInputRecord.task === task
         ? cloneLastInputValue(lastInputRecord.value)
         : null;
     return {
@@ -846,10 +919,10 @@ let running = false;
       if (sharedLastInput !== undefined) {
         const targetTask =
           typeof payload.task === 'string' ? payload.task : task;
-        if (sharedLastInput == null || targetTask !== 'cea') {
+        if (sharedLastInput == null || !PAYLOAD_INPUT_TASKS.has(targetTask)) {
           sessionStore?.removeItem(SESSION_STORAGE_KEYS.lastInput);
           lastInputRecord = null;
-        } else if (targetTask === 'cea') {
+        } else {
           const record = {
             task: targetTask,
             value: sharedLastInput
@@ -960,6 +1033,8 @@ let running = false;
 
 </script>
 
+<svelte:window on:keydown={handleTaskSwitchKeydown} />
+
 <section class="app-shell">
   <AppFooter />
 
@@ -997,12 +1072,55 @@ let running = false;
           on:taskchange={handleTaskChange}
           on:kgchange={handleKnowledgeGraphChange}
           initialCeaPayload={ceaInitialPayload}
+          initialElPayload={elInitialPayload}
           {sttEnabled}
         />
       </div>
     </main>
   </div>
 </section>
+
+{#if pendingTaskSwitch !== null}
+  <div
+    class="task-switch-backdrop"
+    role="presentation"
+    on:pointerdown={cancelTaskSwitch}
+  >
+    <div
+      class="task-switch-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="task-switch-title"
+      aria-describedby="task-switch-description"
+      on:pointerdown|stopPropagation
+      tabindex="-1"
+    >
+      <h2 class="task-switch-modal__title" id="task-switch-title">
+        Switch to {pendingTaskSwitchName}?
+      </h2>
+      <p class="task-switch-modal__description" id="task-switch-description">
+        Switching the task clears the current conversation and its context.
+        Follow-up inputs will start from scratch.
+      </p>
+      <div class="task-switch-modal__actions">
+        <button
+          type="button"
+          class="task-switch-modal__button task-switch-modal__button--secondary"
+          on:click={cancelTaskSwitch}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="task-switch-modal__button task-switch-modal__button--primary"
+          on:click={confirmTaskSwitch}
+        >
+          Switch and clear
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .app-shell {
@@ -1050,6 +1168,75 @@ let running = false;
 
   .composer-wrapper {
     width: 100%;
+  }
+
+  .task-switch-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--spacing-lg);
+    background: rgba(5, 17, 51, 0.45);
+    z-index: 1000;
+  }
+
+  .task-switch-modal {
+    background: #fff;
+    border-radius: var(--radius-md);
+    box-shadow: 0 20px 40px rgba(5, 17, 51, 0.2);
+    max-width: 26rem;
+    width: 100%;
+    outline: none;
+    display: grid;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xl);
+  }
+
+  .task-switch-modal__title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--color-uni-blue);
+  }
+
+  .task-switch-modal__description {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--text-subtle);
+  }
+
+  .task-switch-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-xs);
+  }
+
+  .task-switch-modal__button {
+    padding: 0.45rem 1rem;
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    font: inherit;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+
+  .task-switch-modal__button--secondary {
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    background: #fff;
+    color: var(--text-primary);
+  }
+
+  .task-switch-modal__button--primary {
+    border: none;
+    background: var(--color-uni-blue);
+    color: #fff;
+  }
+
+  .task-switch-modal__button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 16px rgba(52, 74, 154, 0.15);
   }
 
   .composer-wrapper--sticky {

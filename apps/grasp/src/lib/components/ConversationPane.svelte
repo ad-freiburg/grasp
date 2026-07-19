@@ -142,17 +142,29 @@
       } else if (toolName === 'annotate') {
         const row = args.row;
         const col = args.column;
-        status = row !== undefined && col !== undefined
-          ? `Annotating cell (${row}, ${col})...`
-          : 'Annotating cell...';
+        const words = args.words_to_be_annotated;
+        if (typeof words === 'string' && words) {
+          status = `Annotating "${words}"...`;
+        } else {
+          status = row !== undefined && col !== undefined
+            ? `Annotating cell (${row}, ${col})...`
+            : 'Annotating...';
+        }
       } else if (toolName === 'delete_annotation') {
         const row = args.row;
         const col = args.column;
-        status = row !== undefined && col !== undefined
-          ? `Deleting annotation from (${row}, ${col})...`
-          : 'Deleting annotation...';
-      } else if (toolName === 'show_annotations') {
+        const words = args.words_to_be_annotated;
+        if (typeof words === 'string' && words) {
+          status = `Deleting annotation of "${words}"...`;
+        } else {
+          status = row !== undefined && col !== undefined
+            ? `Deleting annotation from (${row}, ${col})...`
+            : 'Deleting annotation...';
+        }
+      } else if (toolName === 'show_annotations' || toolName === 'show_current_annotations') {
         status = 'Showing annotations...';
+      } else if (toolName === 'finalize') {
+        status = 'Finalizing annotations...';
       } else if (toolName === 'stop') {
         status = 'Finalizing annotations...';
       } else if (toolName === 'answer') {
