@@ -60,9 +60,15 @@ class Correspondence(BaseModel):
     relation: Relation = Relation.EQUIVALENCE
 
 
+class PotentialCorrespondences(BaseModel):
+    source_entity: Entity
+    candidates: list[Entity]
+
+
 class AlignmentTaskInput(BaseModel):
-    source_data: list[Entity]
-    incoming_matches: list[Correspondence] = []
+    unmatched_entities: list[Entity] = []
+    potential_correspondences: list[PotentialCorrespondences] = []
+    input_alignment: list[Correspondence] = []
 
     source_kg: str
     target_kg: str
@@ -349,18 +355,27 @@ def call_function(
 
 
 def input_instructions(task_input: AlignmentTaskInput, state: AlignmentState) -> str:
-    instructions = f"""\
+    instructions = ""
+    if task_input.unmatched_entities is not None:
+        instructions += f"""\
 Align the following entities from the source ontology {task_input.source_kg} \
 with entities from the target ontology {task_input.target_kg}:
-
 """
-    if task_input.description:
-        instructions += f"Context: {task_input.description}\n\n"
+        if task_input.description:
+            instructions += f"Context: {task_input.description}\n\n"
 
-    for entity in task_input.source_data:
-        instructions += f"- {entity.format()}\n"
+        for entity in task_input.unmatched_entities:
+            instructions += f"- {entity.format()}\n"
 
-    # instructions += f"first entity to match: {task_input.source_data[0].format()}"
+    if task_input.potential_correspondences is not None:
+        instructions += f"""\
+You are given a list of potential correspondences found by simple string matching. \
+Verify them and set the correspondences using the built-in functions for pairs you truely \
+find to represent an equivalnce. Remeber the injectivity rule.
+"""
+        for corr in task_input.potential_correspondences:
+            instructions += f"- source entity: {corr.source_entity.format()}; potential matches: "
+            instructions += "; ".join((c.format() for c in corr.candidates)) + "\n"
 
     return instructions
 
@@ -373,7 +388,7 @@ def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AlignmentStat
 
     state = AlignmentState()
     state.task_input = task_input
-    for correspondence in state.task_input.incoming_matches:
+    for correspondence in state.task_input.input_alignment:
         state.add_1_to_1_correspondence(correspondence)
 
     instructions = input_instructions(task_input, state)
