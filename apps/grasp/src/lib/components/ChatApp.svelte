@@ -17,8 +17,15 @@
 
   // Read route parameters from the query string (set by nginx redirects).
   // e.g. ?share=abc123, ?kgs=wikidata+gptkb, ?task=sparql-qa
+  //
+  // The shorthand path form takes a single '+'-separated segment that may mix
+  // KG names and one task id in any order, e.g. /wikidata+freebase+sparql-qa
+  // or /entity-linking+wikidata or just /cea. A token that is both a task id
+  // and the name of an available KG is resolved as a KG once the KG list is
+  // known (see resolvePathTaskAmbiguity).
   function readQueryParams() {
-    if (typeof window === 'undefined') return { loadId: null, kgs: [], task: null };
+    if (typeof window === 'undefined')
+      return { loadId: null, kgs: [], task: null, ambiguousTask: null };
     const params = new URLSearchParams(window.location.search);
     // Check query param first (?share=abc123), then path (/share/abc123).
     const shareMatch = window.location.pathname.match(/\/share\/([^/]+)\/?$/);
@@ -29,17 +36,31 @@
     let kgs = rawKgs
       ? rawKgs.split(',').map(s => decodeURIComponent(s.trim())).filter(Boolean)
       : [];
+    let pathTask = null;
     if (kgs.length === 0 && document.querySelector('meta[name="grasp-kg-path"]')) {
       const lastSegment = window.location.pathname.replace(/\/+$/, '').split('/').pop();
       if (lastSegment) {
-        kgs = lastSegment.split('+').map(s => decodeURIComponent(s.trim())).filter(Boolean);
+        const tokens = lastSegment
+          .split('+')
+          .map(s => decodeURIComponent(s.trim()))
+          .filter(Boolean);
+        // The first token naming a task selects the task; the rest are KGs.
+        const taskIndex = tokens.findIndex(isValidTaskId);
+        if (taskIndex >= 0) {
+          pathTask = tokens[taskIndex];
+          tokens.splice(taskIndex, 1);
+        }
+        kgs = tokens;
       }
     }
     const taskParam = params.get('task')?.trim() || null;
+    // An explicit ?task= wins over a path token and is never ambiguous.
+    const task = isValidTaskId(taskParam) ? taskParam : pathTask;
     return {
       loadId: shareId,
       kgs,
-      task: isValidTaskId(taskParam) ? taskParam : null
+      task,
+      ambiguousTask: task === pathTask ? pathTask : null
     };
   }
 
@@ -60,6 +81,10 @@ const SESSION_STORAGE_KEYS = {
   lastOutput: STORAGE_KEYS.lastOutput,
   lastInput: STORAGE_KEYS.lastInput
 };
+
+// Read before anything persists over it, so an ambiguous path token that turns
+// out to be a KG can fall back to the task the user last used.
+const storedTaskAtStartup = readStoredTask();
 
 function getSessionStorage() {
   if (typeof window === 'undefined') return null;
@@ -93,6 +118,9 @@ let running = false;
   let lastInputRecord = null;
   let urlSelectedKgs = initialKgSeed.length ? [...initialKgSeed] : null;
   let urlSelectedTask = initialTaskSeed;
+  // Path token read as a task id that could also be a KG name; resolved once
+  // the available KGs are known.
+  let ambiguousPathTask = queryParams.ambiguousTask;
   let pendingUrlReset = false;
   let pendingTaskSwitch = null;
 
@@ -199,8 +227,35 @@ let running = false;
     } catch (error) {
       console.warn('Failed to restore persisted data', error);
     } finally {
-      applyUrlStateOverrides();
+      // URL selections are applied later, in loadKnowledgeGraphs, where the
+      // available KG names are known (see resolvePathTaskAmbiguity).
       persistCurrentSelections();
+    }
+  }
+
+  // A path token like /cea is read as a task id, but a KG of that name must win
+  // so the shorthand never silently swallows a KG. Called with the KG list.
+  function resolvePathTaskAmbiguity(available) {
+    if (!ambiguousPathTask) return;
+    const token = ambiguousPathTask;
+    ambiguousPathTask = null;
+    if (!available.includes(token)) return;
+    urlSelectedTask = null;
+    urlSelectedKgs = sanitizeInitialKgs([...(urlSelectedKgs ?? []), token]);
+    // restorePersistence skipped the stored task because the URL looked like it
+    // provided one; restore it now that we know it did not.
+    task = storedTaskAtStartup || TASKS[0].id;
+    persistTask(task);
+  }
+
+  function readStoredTask() {
+    if (typeof window === 'undefined') return null;
+    try {
+      const storedTask = window.localStorage.getItem(STORAGE_KEYS.task);
+      return isValidTaskId(storedTask) ? storedTask : null;
+    } catch (error) {
+      console.warn('Failed to read persisted task', error);
+      return null;
     }
   }
 
@@ -316,6 +371,9 @@ let running = false;
         throw new Error('No knowledge graphs available.');
       }
 
+      resolvePathTaskAmbiguity(available);
+      applyUrlStateOverrides();
+
       const next = new Map();
       for (const kg of available) {
         const selected = persistedSelectedKgs.includes(kg);
@@ -337,6 +395,10 @@ let running = false;
       knowledgeGraphs = next;
       persistSelectedKgs(selectedList);
     } catch (error) {
+      // Still honour the URL selections when the KG list is unavailable; an
+      // ambiguous path token then stays a task, as there is no KG to prefer.
+      resolvePathTaskAmbiguity([]);
+      applyUrlStateOverrides();
       throw decorateError(error, 'Failed to load knowledge graphs.');
     }
   }
