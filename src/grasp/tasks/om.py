@@ -2,6 +2,7 @@ import random
 from typing import Any
 from enum import StrEnum
 
+import requests
 from pydantic import BaseModel
 from universal_ml_utils.table import generate_table
 
@@ -9,6 +10,8 @@ from grasp.configs import GraspConfig
 from grasp.functions import find_manager
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
+from grasp.sparql.types import AskResult
+from grasp.sparql.utils import prepare_identifier_for_sparql
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import FunctionCallException, format_list, format_notes
 from grasp.tasks.cea import prepare_annotation, Annotation
@@ -63,6 +66,11 @@ class Correspondence(BaseModel):
 class PotentialCorrespondences(BaseModel):
     source_entity: Entity
     candidates: list[Entity]
+
+
+class LogMapValidationResult(BaseModel):
+    valid: bool
+    message: str
 
 
 class AlignmentTaskInput(BaseModel):
@@ -256,6 +264,67 @@ def rules() -> list[str]:
     ]
 
 
+def check_alignment_with_logmap(state: AlignmentState, server_url: str) -> str | None:
+    """
+    Sends the current, deduplicated alignment to the LogMap server for a
+    consistency/conflict check. Returns feedback text to surface to the LLM if
+    the check failed or could not be performed, or None if it passed cleanly.
+    """
+    unique_correspondences = list({id(c): c for c in state.correspondences.values()}.values())
+
+    try:
+        response = requests.post(
+            f"{server_url}/validate",
+            json=[c.model_dump() for c in unique_correspondences],
+            timeout=30,
+        )
+        response.raise_for_status()
+    except requests.RequestException as e:
+        return f"LogMap check could not be performed: {e}"
+
+    result = LogMapValidationResult(**response.json())
+    if not result.valid:
+        return f"LogMap check failed: {result.message}"
+
+    else:
+        return result.message
+
+
+def entity_exists_in_kg(manager: KgManager, iri: str) -> bool:
+    # subject and object position cover classes/instances; predicate position
+    # is needed too since a property may appear only there (e.g. used in
+    # triples without a separate rdf:type owl:ObjectProperty/DatatypeProperty
+    # declaration triple of its own)
+    wrapped = prepare_identifier_for_sparql(iri, manager.iri_literal_parser)
+    sparql = (
+        f"ASK {{ {{ {wrapped} ?p ?o }} UNION {{ ?s ?p {wrapped} }} "
+        f"UNION {{ ?s {wrapped} ?o }} }}"
+    )
+    result = manager.execute_sparql(sparql)
+    assert isinstance(result, AskResult)
+    return result.boolean
+
+
+def ensure_known(manager: KgManager, iri: str, known: set[str]) -> None:
+    """
+    Fast path: skip the SPARQL round-trip if the IRI was already surfaced by
+    an earlier function call result during this conversation. Otherwise fall
+    back to an actual live existence check against the KG, and only report
+    the IRI as invalid to the LLM once that check has genuinely failed.
+    """
+    if iri in known:
+        return
+
+    if entity_exists_in_kg(manager, iri):
+        known.add(iri)
+        return
+
+    raise FunctionCallException(
+        f"The entity {iri} does not seem to exist in the knowledge graph. "
+        "Double check the IRI."
+    )
+
+
 # TODO: Refactor to eliminate code duplicates to `annotate`-method from cea.py
 def add_1_to_1_correspondence(
         managers: list[KgManager],
@@ -266,7 +335,8 @@ def add_1_to_1_correspondence(
         state: AlignmentState,
         known: set[str],
         know_before_use: bool = True,
-        overwrite: bool = False
+        overwrite: bool = False,
+        logmap_server_url: str | None = None,
         ) -> str:
 
     try:
@@ -276,6 +346,10 @@ def add_1_to_1_correspondence(
         entity_object_target = Entity.from_annotation_object(prepare_annotation(manager_target, entity_target))
         full_iri_source = entity_object_source.identifier
         full_iri_target = entity_object_target.identifier
+
+        if know_before_use:
+            ensure_known(manager_source, full_iri_source, known)
+            ensure_known(manager_target, full_iri_target, known)
 
         if not overwrite:
             existing_source_corr = state.get_correspondence(full_iri_source)
@@ -296,7 +370,14 @@ def add_1_to_1_correspondence(
 
         correspondence = Correspondence(entity_source=entity_object_source, entity_target=entity_object_target)
         state.add_1_to_1_correspondence(correspondence)
-        return f"Aligned {entity_source} from {kg_source} with {entity_target} from {kg_target}"
+        message = f"Aligned {entity_source} from {kg_source} with {entity_target} from {kg_target}."
+
+        if logmap_server_url is not None:
+            feedback = check_alignment_with_logmap(state, logmap_server_url)
+            if feedback is not None:
+                message += f"\n{feedback}"
+
+        return message
 
     except ValueError as e:
         raise FunctionCallException(str(e)) from e
@@ -336,9 +417,13 @@ def call_function(
         overwrite = fn_args.get("overwrite", False)
 
         ent1, ent2 = fn_args["source_entity"], fn_args["target_entity"]
+        om_kwargs = config.task_kwargs.get("om", {})
+        logmap_server_url = om_kwargs.get("logmap_server_url")
+        know_before_use = om_kwargs.get("know_before_use", True)
 
         return add_1_to_1_correspondence(
-            managers, kg1, kg2, ent1, ent2, state, known, config.know_before_use, overwrite
+            managers, kg1, kg2, ent1, ent2, state, known,
+            know_before_use, overwrite, logmap_server_url,
         )
 
     elif fn_name == "delete_correspondence":
@@ -356,7 +441,7 @@ def call_function(
 
 def input_instructions(task_input: AlignmentTaskInput, state: AlignmentState) -> str:
     instructions = ""
-    if task_input.unmatched_entities is not None:
+    if len(task_input.unmatched_entities) != 0:
         instructions += f"""\
 Align the following entities from the source ontology {task_input.source_kg} \
 with entities from the target ontology {task_input.target_kg}:
@@ -367,7 +452,7 @@ with entities from the target ontology {task_input.target_kg}:
         for entity in task_input.unmatched_entities:
             instructions += f"- {entity.format()}\n"
 
-    if task_input.potential_correspondences is not None:
+    if len(task_input.potential_correspondences) != 0:
         instructions += f"""\
 You are given a list of potential correspondences found by simple string matching. \
 Verify them and set the correspondences using the built-in functions for pairs you truely \

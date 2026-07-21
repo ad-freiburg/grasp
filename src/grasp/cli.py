@@ -1239,7 +1239,7 @@ def om_pretask_grasp(args: argparse.Namespace) -> None:
     source_manager, _ = find_manager(managers, args.source_kg)
     target_manager, _ = find_manager(managers, args.target_kg)
 
-    om_pretask(source_manager, target_manager, args.output_file)
+    om_pretask(source_manager, target_manager, args.output_file, config)
 
 
 def main():

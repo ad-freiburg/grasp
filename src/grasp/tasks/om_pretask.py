@@ -215,11 +215,14 @@ def write_jsonl_input(
     return output_file
 
 
-def om_pretask(source_manager: KgManager, target_manager: KgManager, output_file: Path):
+def om_pretask(source_manager: KgManager, target_manager: KgManager, output_file: Path, config: GraspConfig):
     source_entities = retrieve_all_entities(source_manager)
     target_entities = retrieve_all_entities(target_manager)
 
     matches, unmatched = perform_string_matching(source_entities, target_entities)
+
+    batch_size = config.task_kwargs.get("om_pretask", {}).get("batch_size")
+    limit = config.task_kwargs.get("om_pretask", {}).get("limit")
 
     write_jsonl_input(
         matches,
@@ -227,4 +230,6 @@ def om_pretask(source_manager: KgManager, target_manager: KgManager, output_file
         source_manager.kg,
         target_manager.kg,
         output_file,
+        (batch_size if batch_size else 1),
+        limit
     )
