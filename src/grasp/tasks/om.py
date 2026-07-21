@@ -6,8 +6,8 @@ import requests
 from pydantic import BaseModel
 from universal_ml_utils.table import generate_table
 
-from grasp.configs import GraspConfig
-from grasp.functions import find_manager
+from grasp.configs import GraspConfig, ShapeConfig
+from grasp.functions import find_manager, update_known_from_shape_iris, SHAPE_CAVEAT
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
 from grasp.sparql.types import AskResult
@@ -15,7 +15,7 @@ from grasp.sparql.utils import prepare_identifier_for_sparql
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import FunctionCallException, format_list, format_notes
 from grasp.tasks.cea import prepare_annotation, Annotation
-
+from grasp.build.shapes import collect_iris, compute_shape, emit_pseudo_shex
 
 # TODO: If we keep this design, the class hierarchy should
 # obviously be refactored...
@@ -325,6 +325,50 @@ def ensure_known(manager: KgManager, iri: str, known: set[str]) -> None:
     )
 
 
+def get_entity_shape_text(
+    manager: KgManager,
+    iri: str,
+    known: set[str] | None = None,
+) -> str | None:
+    """
+    Look up (or compute on the fly) the shape for the given, already-expanded
+    IRI, rendered as pseudo-SHEx text. Returns None if no shape is available
+    for it (e.g. the entity is a property/instance rather than a class, or no
+    shape index/patterns exist for this KG at all). If `known` is given, IRIs
+    referenced by the shape are added to it, same as when a shape is surfaced
+    via the interactive get_shape/search_shape functions.
+    """
+    if manager.shapes is None:
+        return None
+
+    shapes = manager.shapes
+    shape_config = manager.shape_config or ShapeConfig()
+
+    sample = shapes.index.get_by_iri(iri) if shapes.index is not None else None
+    if sample is not None:
+        profile = sample.profile
+    elif shapes.instance_pattern is not None or shapes.schema_pattern is not None:
+        try:
+            profile = compute_shape(
+                iri,
+                manager,
+                instance_pattern=shapes.instance_pattern,
+                schema_pattern=shapes.schema_pattern,
+                shape_config=shape_config,
+            )
+        except Exception:
+            return None
+    else:
+        return None
+
+    if known is not None:
+        update_known_from_shape_iris(
+            known, collect_iris(profile, manager, shape_config), manager,
+        )
+
+    return emit_pseudo_shex(profile, manager, shape_config)
+
+
 # TODO: Refactor to eliminate code duplicates to `annotate`-method from cea.py
 def add_1_to_1_correspondence(
         managers: list[KgManager],
@@ -439,33 +483,74 @@ def call_function(
         raise ValueError(f"Unknown function {fn_name}")
 
 
-def input_instructions(task_input: AlignmentTaskInput, state: AlignmentState) -> str:
+def input_instructions(
+    task_input: AlignmentTaskInput,
+    state: AlignmentState,
+    managers: list[KgManager],
+    known: set[str],
+) -> str:
     instructions = ""
+    source_manager, _ = find_manager(managers, task_input.source_kg)
+    target_manager, _ = find_manager(managers, task_input.target_kg)
+    shape_shown = False
+    block_num = 0
+
+    def entity_block(entity: Entity, manager: KgManager, label: str) -> str:
+        # fenced code block for the shape: self-delimiting regardless of
+        # surrounding indentation, and semantically fitting since pseudo-SHEx
+        # is itself a small code-like syntax
+        nonlocal shape_shown
+        block = f"**{label}**: {entity.format()}\n"
+        shape_text = get_entity_shape_text(manager, entity.identifier, known)
+        if shape_text is not None:
+            shape_shown = True
+            block += f"```pseudo-shex\n{shape_text}\n```\n"
+        return block
+
+    # potential matches to validate
+    if len(task_input.potential_correspondences) != 0:
+        instructions += """\
+You are given a list of potential correspondences found by simple string matching. \
+Verify them and set the correspondences using the built-in functions for pairs you truely \
+find to represent an equivalnce. Remeber the injectivity rule.
+
+"""
+        for corr in task_input.potential_correspondences:
+            block_num += 1
+            instructions += f"### Entity {block_num}\n"
+            instructions += entity_block(corr.source_entity, source_manager, "Source")
+            for j, c in enumerate(corr.candidates, start=1):
+                instructions += entity_block(c, target_manager, f"Candidate {j}")
+            instructions += "\n"
+
+    # naked entities without potential equivalent candidates
     if len(task_input.unmatched_entities) != 0:
         instructions += f"""\
 Align the following entities from the source ontology {task_input.source_kg} \
 with entities from the target ontology {task_input.target_kg}:
+
 """
         if task_input.description:
             instructions += f"Context: {task_input.description}\n\n"
 
         for entity in task_input.unmatched_entities:
-            instructions += f"- {entity.format()}\n"
+            block_num += 1
+            instructions += f"### Entity {block_num}\n"
+            instructions += entity_block(entity, source_manager, "Source")
+            instructions += "\n"
 
-    if len(task_input.potential_correspondences) != 0:
-        instructions += f"""\
-You are given a list of potential correspondences found by simple string matching. \
-Verify them and set the correspondences using the built-in functions for pairs you truely \
-find to represent an equivalnce. Remeber the injectivity rule.
-"""
-        for corr in task_input.potential_correspondences:
-            instructions += f"- source entity: {corr.source_entity.format()}; potential matches: "
-            instructions += "; ".join((c.format() for c in corr.candidates)) + "\n"
+    if shape_shown:
+        instructions += f"\n{SHAPE_CAVEAT}\n"
 
     return instructions
 
 
-def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AlignmentState]:
+def input_and_state(
+    input: Any,
+    config: GraspConfig,
+    managers: list[KgManager],
+    known: set[str],
+) -> tuple[str, AlignmentState]:
     try:
         task_input = AlignmentTaskInput(**input)
     except Exception as e:
@@ -476,7 +561,7 @@ def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AlignmentStat
     for correspondence in state.task_input.input_alignment:
         state.add_1_to_1_correspondence(correspondence)
 
-    instructions = input_instructions(task_input, state)
+    instructions = input_instructions(task_input, state, managers, known)
     return instructions, state
 
 
@@ -524,7 +609,9 @@ class OmTask(GraspTask, FeedbackTask):
     name = "om"
 
     def setup(self, input: Any) -> str:
-        instructions, self.state = input_and_state(input, self.config)
+        instructions, self.state = input_and_state(
+            input, self.config, self.managers, self.known
+        )
         return instructions
 
     def system_information(self) -> str:
