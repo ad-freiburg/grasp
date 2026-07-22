@@ -107,9 +107,7 @@
     font-size: 0.85rem;
     color: var(--text-primary);
   }
-</style>
 
-<style>
   .input-media-summary {
     margin: 0.55rem 0 0;
     font-size: 0.78rem;
