@@ -1,4 +1,6 @@
 import os
+import json
+from typing import Any
 import numpy as np
 
 from grasp.configs import GraspConfig, LLMConfig
@@ -19,6 +21,7 @@ from grasp.multimodal.utils import (
     extract_user_input,
     ModalityTypes,
     Modality,
+    IMAGE_ANALYSIS_TOOL_SCHEMA,
 )
 from search_rdf.model.embedding import OpenClipModel
 
@@ -79,7 +82,7 @@ def verify(
     return score if score >= THRESHOLD_IMAGE_TO_IMAGE else 0.0
 
 
-def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
+def analyze_image(image_url: str, prompt: str, models: list[LLMConfig], free_text_output: bool) -> str:
     vision_configs = models
 
     output_messages = {}
@@ -88,26 +91,14 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
         model = get_model(vision_config)
 
         system_prompt = (
-            "Answer with only valid JSON. "
-            "No reasoning. No explanation. No extra words. "
+            "You are an image analysis engine. "
             "Use only what is directly visible in the image. "
             "Do not infer identity unless it is strongly visually supported. "
             "If uncertain, omit the item. "
-            "Return exactly this schema:\n"
-            "{"
-            '"entities": [string], '
-            '"attributes": [string], '
-            '"text_visible": [string]'
-            "}\n"
-            "Rules:\n"
-            "- entities: salient people, objects, logos, places, or clearly recognizable identities.\n"
-            "- attributes: atomic, visually verifiable phrases only; one fact per phrase; keep short.\n"
-            "- text_visible: exact text seen in the image, or [] if none.\n"
-            "- No full sentences.\n"
-            "- No duplicates.\n"
-            "- Prefer 1 to 5 items per list.\n"
-            "- If nothing is visible for a field, use [].\n"
-            "If you cannot comply, reply exactly: I cannot determine the answer from the image."
+            "Describe what entities or objects are in the picture, and where, "
+            "Describe the attributes of the objects. "
+            "Give description of what the image looks like. "
+            "Describe all visible text in the image. "
         )
 
         messages = [
@@ -121,13 +112,34 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig]) -> str:
             ),
         ]
 
-        response: Response = model.call(messages, fns=[])
-        if isinstance(response.message, ResponseMessage):
-            message = response.message.content
+        if not free_text_output:
+            required_tool_config = vision_config.model_copy(
+                update={"tool_choice": "required"}
+            )
+            response: Response = model.call(
+                messages,
+                fns=[IMAGE_ANALYSIS_TOOL_SCHEMA],
+                config=required_tool_config,
+            )
+
+            structured_payload = None
+            if response.tool_calls:
+                tool_call = response.tool_calls[0]
+                if tool_call.name == IMAGE_ANALYSIS_TOOL_SCHEMA["name"]:
+                    structured_payload = tool_call.args
+
+            message = structured_payload
         else:
-            message = response.message
+            response = model.call(messages, fns=[])
+            if isinstance(response.message, ResponseMessage):
+                message = response.message.content
+            if isinstance(response.message, str):
+                message = response.message
+            else:
+                message = ""
+
         output_messages[vision_config.model] = message
-    return str(output_messages)
+    return json.dumps(output_messages)
 
 
 def analyze_audio(audio_url: dict, model: LLMConfig) -> str:
@@ -223,7 +235,7 @@ def analyze(
         image_payload = load(input, modality, user_input)
         image_url = image_payload["image_url"]["url"]
 
-        return analyze_image(image_url, prompt, selected_models)
+        return analyze_image(image_url, prompt, selected_models, config.anser_in_free_text)
 
     if modality == Modality.AUDIO:
         audio_models = config.get_audio_models

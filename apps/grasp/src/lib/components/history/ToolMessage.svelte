@@ -2,6 +2,7 @@
   import MessageCard from './MessageCard.svelte';
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
+  import AnalyzeResultView from '../common/AnalyzeResultView.svelte';
   import { flattenFunctionArgs } from '../../utils/formatters.js';
 
   export let message;
@@ -11,6 +12,8 @@
 
   let showExtraArgs = false;
   let sparql = null;
+  let analyzeData = null;
+  let analyzeModelName = '';
 
   $: toolName = typeof message?.name === 'string' ? message.name : '';
   $: shouldCollapseArgs = COLLAPSED_TOOL_NAMES.has(toolName);
@@ -48,6 +51,10 @@
     showExtraArgs = false;
   }
 
+  $: analyzeParseResult = parseAnalyzeResult(toolName, message?.result);
+  $: analyzeData = analyzeParseResult?.payload ?? null;
+  $: analyzeModelName = analyzeParseResult?.modelName ?? '';
+
   const qleverLink = null;
 
   function pickPrimaryArgChipId(chips) {
@@ -81,6 +88,24 @@
 
   function normalizeWhitespace(text) {
     return text.replace(/\s+/g, ' ').trim();
+  }
+
+  function parseAnalyzeResult(name, value) {
+    if (name !== 'analyze' || typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      const [firstModelName] = Object.keys(parsed);
+      if (!firstModelName) return null;
+      const payload = parsed[firstModelName];
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+      return { payload, modelName: firstModelName };
+    } catch {
+      return null;
+    }
   }
 </script>
 
@@ -144,7 +169,9 @@
     <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
   {/if}
 
-  {#if message?.result}
+  {#if analyzeData}
+    <AnalyzeResultView payload={analyzeData} modelName={analyzeModelName} raw={message.result} />
+  {:else if message?.result}
     <MarkdownContent content={message.result} />
   {/if}
 </MessageCard>

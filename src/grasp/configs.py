@@ -200,6 +200,7 @@ class GraspConfig(BaseModel):
     max_feedbacks: int = 2
     notes_only_for_feedback: bool = False
     load_user_input: bool = False
+    anser_in_free_text: bool = False
 
     @property
     def sparql_request_timeout(self) -> tuple[float, float]:

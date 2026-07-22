@@ -188,3 +188,145 @@ _AUDIO_FORMAT_MAP = {
     "audio/flac": "flac",
     "audio/x-flac": "flac",
 }
+
+IMAGE_ANALYSIS_TOOL_SCHEMA = {
+    "name": "emit_image_analysis",
+    "description": "Return structured visual facts extracted from the image.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "image_type": {
+                "type": "string",
+                "enum": [
+                    "landscape_photo",
+                    "portrait",
+                    "traffic_camera",
+                    "presentation_slide",
+                    "document_scan",
+                    "chart_or_plot",
+                    "map",
+                    "screenshot",
+                    "illustration",
+                    "other",
+                ],
+            },
+            "scene_description": {
+                "type": "string",
+                "description": "Short factual scene summary based only on visible evidence.",
+            },
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                        "category": {"type": "string"},
+                        "entity": {"type": "string"},
+                        "locality": {
+                            "type": "object",
+                            "properties": {
+                                "position": {
+                                    "type": "string",
+                                    "enum": [
+                                        "top_left",
+                                        "top_center",
+                                        "top_right",
+                                        "center_left",
+                                        "center",
+                                        "center_right",
+                                        "bottom_left",
+                                        "bottom_center",
+                                        "bottom_right",
+                                    ],
+                                },
+                            },
+                            "required": ["position"],
+                            "additionalProperties": False,
+                        },
+                        "properties": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "value": {"type": "string"},
+                                },
+                                "required": ["name", "value"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "identity_hypothesis": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "entity_type": {"type": "string"},
+                                "confidence": {"type": "string"},
+                                "basis": {"type": "string"},
+                            },
+                            "required": ["name", "entity_type", "confidence", "basis"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["id", "label", "category", "entity", "locality", "properties", "identity_hypothesis"],
+                    "additionalProperties": False,
+                },
+            },
+            "relations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject_id": {"type": "string"},
+                        "predicate": {"type": "string"},
+                        "object_id": {"type": "string"},
+                    },
+                    "required": ["subject_id", "predicate", "object_id"],
+                    "additionalProperties": False,
+                },
+            },
+            "text_visible": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "entity_id": {"type": ["string", "null"]},
+                        "locality": {
+                            "type": "object",
+                            "properties": {
+                                "position": {
+                                    "type": "string",
+                                    "enum": [
+                                        "top_left",
+                                        "top_center",
+                                        "top_right",
+                                        "center_left",
+                                        "center",
+                                        "center_right",
+                                        "bottom_left",
+                                        "bottom_center",
+                                        "bottom_right",
+                                    ],
+                                },
+                            },
+                            "required": ["position"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "required": ["text", "entity_id", "locality"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": [
+            "image_type",
+            "scene_description",
+            "entities",
+            "relations",
+            "text_visible",
+        ],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
