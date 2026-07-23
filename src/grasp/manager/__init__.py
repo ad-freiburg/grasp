@@ -12,8 +12,8 @@ from search_rdf.model import (
     OpenClipModel,
     SentenceTransformerModel,
     HuggingFaceImageModel,
-    ClapCapModel,
 )
+from grasp.multimodal.ClapCapModel import ClapCapModel
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
