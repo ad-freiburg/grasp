@@ -2,7 +2,6 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from matplotlib.ticker import NullFormatter
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response as OpenAIResponse
