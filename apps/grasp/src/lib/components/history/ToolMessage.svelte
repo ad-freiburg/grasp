@@ -14,6 +14,9 @@
   let showExtraArgs = false;
   let sparql = null;
   let analyzeEntries = [];
+  let loadImagePayload = null;
+  let showLoadImageLinkFallback = false;
+  let activeLoadImageUrl = '';
 
   $: toolName = typeof message?.name === 'string' ? message.name : '';
   $: shouldCollapseArgs = COLLAPSED_TOOL_NAMES.has(toolName);
@@ -53,6 +56,14 @@
   }
 
   $: analyzeEntries = parseAnalyzeResults(toolName, message?.result);
+  $: loadImagePayload = parseLoadImageResult(toolName, message?.result);
+  $: {
+    const nextUrl = loadImagePayload?.url ?? '';
+    if (nextUrl !== activeLoadImageUrl) {
+      activeLoadImageUrl = nextUrl;
+      showLoadImageLinkFallback = false;
+    }
+  }
 
   const qleverLink = null;
 
@@ -94,6 +105,29 @@
     } catch {
       return [];
     }
+  }
+
+  function parseLoadImageResult(name, value) {
+    if (name !== 'load' || typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      if (parsed.type !== 'image_url') return null;
+
+      const url = parsed?.image_url?.url;
+      if (typeof url !== 'string' || !url.trim()) return null;
+
+      return { url: url.trim() };
+    } catch {
+      return null;
+    }
+  }
+
+  function handleLoadImageError() {
+    showLoadImageLinkFallback = true;
   }
 </script>
 
@@ -172,6 +206,27 @@
         </section>
       {/if}
     {/each}
+  {:else if loadImagePayload}
+    <section class="load-image-preview" aria-label="Loaded image preview">
+      {#if !showLoadImageLinkFallback}
+        <img
+          class="load-image-preview__image"
+          src={loadImagePayload.url}
+          alt="Loaded entity preview"
+          loading="lazy"
+          on:error={handleLoadImageError}
+        />
+      {:else}
+        <a
+          class="load-image-preview__link"
+          href={loadImagePayload.url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Open image source
+        </a>
+      {/if}
+    </section>
   {:else if message?.result}
     <MarkdownContent content={message.result} />
   {/if}
@@ -294,6 +349,35 @@
     color: var(--color-uni-blue);
     background: rgba(52, 74, 154, 0.08);
     white-space: nowrap;
+  }
+
+  .load-image-preview {
+    display: grid;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    border: 1px solid rgba(190, 170, 60, 0.28);
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, rgba(190, 170, 60, 0.06), rgba(255, 255, 255, 0.92));
+  }
+
+  .load-image-preview__image {
+    display: block;
+    width: min(100%, 640px);
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: #fff;
+  }
+
+  .load-image-preview__link {
+    color: var(--color-uni-blue);
+    text-decoration: underline;
+    text-decoration-color: rgba(52, 74, 154, 0.45);
+    width: fit-content;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   @media (max-width: 720px) {
