@@ -7,10 +7,34 @@
 
   const MAX_ENTITY_PROPERTIES = 2;
   const MAX_VISIBLE_TEXT = 8;
+  const MAX_AUDIO_ITEMS = 8;
 
   $: entities = Array.isArray(payload?.entities) ? payload.entities : [];
   $: relations = Array.isArray(payload?.relations) ? payload.relations : [];
   $: textVisible = Array.isArray(payload?.text_visible) ? payload.text_visible : [];
+  $: audioKeyPoints = Array.isArray(payload?.key_points) ? payload.key_points : [];
+  $: audioNoises = Array.isArray(payload?.notable_noises) ? payload.notable_noises : [];
+  $: audioIdentities = Array.isArray(payload?.identities) ? payload.identities : [];
+  $: isImagePayload =
+    entities.length > 0 ||
+    relations.length > 0 ||
+    textVisible.length > 0 ||
+    Boolean(payload?.image_type) ||
+    Boolean(payload?.scene_description);
+  $: isAudioPayload =
+    audioKeyPoints.length > 0 ||
+    audioNoises.length > 0 ||
+    audioIdentities.length > 0 ||
+    Boolean(payload?.summary) ||
+    Boolean(payload?.language) ||
+    Boolean(payload?.audio_quality);
+  $: visibleAudioKeyPoints = audioKeyPoints.slice(0, MAX_AUDIO_ITEMS);
+  $: visibleAudioNoises = audioNoises.slice(0, MAX_AUDIO_ITEMS);
+  $: visibleAudioIdentities = audioIdentities.slice(0, MAX_AUDIO_ITEMS);
+  $: analyzeTitle = isAudioPayload
+    ? 'Audio analysis'
+    : toText(payload?.image_type) || 'Analyze output';
+  $: analyzeSubtitle = isAudioPayload ? toText(payload?.summary) : toText(payload?.scene_description);
   $: entityLabelById = Object.fromEntries(
     entities
       .filter((entity) => entity && typeof entity.id === 'string')
@@ -45,6 +69,14 @@
     return confidence ? `${hypothesis.name} (${confidence})` : hypothesis.name;
   }
 
+  function audioIdentityText(identity) {
+    if (!identity || typeof identity !== 'object') return '';
+    const name = toText(identity?.name) || 'Unknown';
+    const confidence = toText(identity?.confidence);
+    if (!confidence) return name;
+    return `${name} (${confidence})`;
+  }
+
   function rawJson() {
     if (!raw) return '';
     try {
@@ -59,9 +91,9 @@
 <section class="analyze">
   <header class="analyze__header">
     <div>
-      <h4>{toText(payload?.image_type) || 'Analyze output'}</h4>
-      {#if payload?.scene_description}
-        <p>{payload.scene_description}</p>
+      <h4>{analyzeTitle}</h4>
+      {#if analyzeSubtitle}
+        <p>{analyzeSubtitle}</p>
       {/if}
     </div>
     {#if modelName}
@@ -69,13 +101,24 @@
     {/if}
   </header>
 
-  <div class="stats">
-    <span>{entities.length} entities</span>
-    <span>{relations.length} relations</span>
-    <span>{textVisible.length} text items</span>
-  </div>
+  {#if isAudioPayload}
+    <div class="stats">
+      <span>{audioKeyPoints.length} key points</span>
+      <span>{audioNoises.length} noises</span>
+      <span>{audioIdentities.length} identities</span>
+      {#if payload?.language}
+        <span>language: {toText(payload.language)}</span>
+      {/if}
+    </div>
+  {:else}
+    <div class="stats">
+      <span>{entities.length} entities</span>
+      <span>{relations.length} relations</span>
+      <span>{textVisible.length} text items</span>
+    </div>
+  {/if}
 
-  {#if entities.length > 0}
+  {#if isImagePayload && entities.length > 0}
     <div class="entities" aria-label="Entities">
       {#each entities as entity, index (entity?.id ?? index)}
         <article class="entity-card">
@@ -108,7 +151,7 @@
     </div>
   {/if}
 
-  {#if relations.length > 0}
+  {#if isImagePayload && relations.length > 0}
     <section class="relations" aria-label="Relations">
       {#each relations as relation, index (index)}
         <p>{relationSubject(relation)} {toText(relation?.predicate) || 'related to'} {relationObject(relation)}</p>
@@ -116,7 +159,7 @@
     </section>
   {/if}
 
-  {#if textVisible.length > 0}
+  {#if isImagePayload && textVisible.length > 0}
     <details class="text-visible">
       <summary>Visible text</summary>
       <ul>
@@ -128,6 +171,60 @@
         <p class="more">+{textVisible.length - MAX_VISIBLE_TEXT} more items</p>
       {/if}
     </details>
+  {/if}
+
+  {#if isAudioPayload}
+    {#if payload?.audio_quality}
+      <p class="audio-quality"><strong>Audio quality:</strong> {toText(payload.audio_quality)}</p>
+    {/if}
+
+    {#if visibleAudioKeyPoints.length > 0}
+      <details class="text-visible" open>
+        <summary>Key points</summary>
+        <ul>
+          {#each visibleAudioKeyPoints as item, index (index)}
+            <li>{toText(item)}</li>
+          {/each}
+        </ul>
+        {#if audioKeyPoints.length > MAX_AUDIO_ITEMS}
+          <p class="more">+{audioKeyPoints.length - MAX_AUDIO_ITEMS} more items</p>
+        {/if}
+      </details>
+    {/if}
+
+    {#if visibleAudioNoises.length > 0}
+      <details class="text-visible">
+        <summary>Notable noises</summary>
+        <ul>
+          {#each visibleAudioNoises as item, index (index)}
+            <li>{toText(item)}</li>
+          {/each}
+        </ul>
+        {#if audioNoises.length > MAX_AUDIO_ITEMS}
+          <p class="more">+{audioNoises.length - MAX_AUDIO_ITEMS} more items</p>
+        {/if}
+      </details>
+    {/if}
+
+    {#if visibleAudioIdentities.length > 0}
+      <section class="relations" aria-label="Identities">
+        <h5>Identities</h5>
+        {#each visibleAudioIdentities as identity, index (index)}
+          <p>
+            {audioIdentityText(identity)}
+            {#if identity?.entity_type}
+              - {toText(identity.entity_type)}
+            {/if}
+            {#if identity?.basis}
+              - {toText(identity.basis)}
+            {/if}
+          </p>
+        {/each}
+        {#if audioIdentities.length > MAX_AUDIO_ITEMS}
+          <p class="more">+{audioIdentities.length - MAX_AUDIO_ITEMS} more items</p>
+        {/if}
+      </section>
+    {/if}
   {/if}
 
   {#if raw}
@@ -276,6 +373,18 @@
 
   .relations p {
     margin: 0;
+  }
+
+  .relations h5 {
+    margin: 0 0 0.2rem;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+  }
+
+  .audio-quality {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-subtle);
   }
 
   .text-visible summary,

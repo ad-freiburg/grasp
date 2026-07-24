@@ -278,6 +278,17 @@ class OpenAIResponsesModel(Model):
                         url = part.get("image_url", {}).get("url")
                         if url is not None:
                             parts.append({"type": "input_image", "image_url": url})
+                    elif part.get("type") == "input_audio":
+                        audio = part.get("input_audio", {})
+                        data = audio.get("data")
+                        fmt = audio.get("format")
+                        if data is not None and fmt is not None:
+                            parts.append(
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": {"data": data, "format": fmt},
+                                }
+                            )
                 msgs.append({
                     "type": "message",
                     "role": role,

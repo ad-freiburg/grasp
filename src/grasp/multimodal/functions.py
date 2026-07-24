@@ -17,11 +17,14 @@ from grasp.multimodal.utils import (
     image_url_to_base64,
     audio_url_to_base64,
     audio_base64_to_file,
+    normalize_audio_base64_input,
     convert_base64_to_np_array,
     extract_user_input,
     ModalityTypes,
     Modality,
     IMAGE_ANALYSIS_TOOL_SCHEMA,
+    AUDIO_ANALYSIS_TOOL_SCHEMA,
+    unwrap_json_string_payload,
 )
 from search_rdf.model.embedding import OpenClipModel
 
@@ -41,7 +44,14 @@ def load(input: str, modality: str, user_input: list[str]) -> dict:
             return {"type": "image_url", "image_url": {"url": data}}
     elif modality == Modality.AUDIO:
         if modality_type == ModalityTypes.BASE64:
-            return {"type": "input_audio", "input_audio": {"data": input, "format": "wav"}}
+            data, audio_format = normalize_audio_base64_input(input)
+            return {
+                "type": "input_audio",
+                "input_audio": {
+                    "data": data,
+                    "format": audio_format,
+                },
+            }
         elif modality_type == ModalityTypes.URL:
             return audio_url_to_base64(input)
         elif modality_type == ModalityTypes.FILE:
@@ -101,6 +111,9 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig], free_tex
             "Describe all visible text in the image. "
         )
 
+        if free_text_output:
+            system_prompt += "Format your output as well structured Markdown. Return ONLY raw Markdown as plain text. No Json"
+
         messages = [
             Message.system(content=system_prompt),
             Message(
@@ -112,7 +125,11 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig], free_tex
             ),
         ]
 
-        if not free_text_output:
+        if free_text_output:
+            response = model.call(messages, fns=[])
+            content = response.get_content()
+            message = content.get("content")
+        else:
             required_tool_config = vision_config.model_copy(
                 update={"tool_choice": "required"}
             )
@@ -129,29 +146,27 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig], free_tex
                     structured_payload = tool_call.args
 
             message = structured_payload
-        else:
-            response = model.call(messages, fns=[])
-            if isinstance(response.message, ResponseMessage):
-                message = response.message.content
-            if isinstance(response.message, str):
-                message = response.message
-            else:
-                message = ""
 
         output_messages[vision_config.model] = message
     return json.dumps(output_messages)
 
 
-def analyze_audio(audio_url: dict, model: LLMConfig) -> str:
-    model = get_model(model)
+def analyze_audio(audio_url: dict, model_config: LLMConfig, free_text_output: bool) -> str:
+    model = get_model(model_config)
+    output_messages: dict[str, Any] = {}
 
-    system_prompt = """You are an audio analysis engine, evaluate the following points based on the provided audio: \
+    system_prompt = """You are an audio analysis engine, evaluate the following points \
+based on the provided audio: \
 1. a brief summary, \
 2. the detected language, \
 3. the important content/key points, \
-4. the audio quality or any noticeable noises. \
-\
+4. the audio quality or any noticeable noises, \
+5. potential identities that are clearly supported by the audio \
+(for example by explicit name mentions or distinct voice clues) with confidence and basis. \
 Do not include any introductory or closing sentences!"""
+
+    if free_text_output:
+        system_prompt += "Format your output as well structured Markdown. Return ONLY raw Markdown as plain text. No Json"
 
     messages = [
         Message.system(content=system_prompt),
@@ -163,12 +178,31 @@ Do not include any introductory or closing sentences!"""
         ),
     ]
 
-    response: Response = model.call(messages, fns=[])
-    if isinstance(response.message, ResponseMessage):
-        message = response.message.content
+    if free_text_output:
+        response = model.call(messages, fns=[])
+        content = response.get_content().get("content")
+        if isinstance(content, str):
+            content = unwrap_json_string_payload(content)
+        output_messages[model_config.model] = content
+        return json.dumps(output_messages)
     else:
-        message = response.message
-    return message
+        required_tool_config = model_config.model_copy(
+            update={"tool_choice": "required"}
+        )
+        response: Response = model.call(
+            messages,
+            fns=[AUDIO_ANALYSIS_TOOL_SCHEMA],
+            config=required_tool_config,
+        )
+
+        structured_payload = None
+        if response.tool_calls:
+            tool_call = response.tool_calls[0]
+            if tool_call.name == AUDIO_ANALYSIS_TOOL_SCHEMA["name"]:
+                structured_payload = tool_call.args
+
+        output_messages[model_config.model] = structured_payload
+        return json.dumps(output_messages)
 
 
 def caption_audio(input: str, input_type: ModalityTypes, manager: KgManager) -> str:
@@ -235,13 +269,17 @@ def analyze(
         image_payload = load(input, modality, user_input)
         image_url = image_payload["image_url"]["url"]
 
-        return analyze_image(image_url, prompt, selected_models, config.anser_in_free_text)
+        return analyze_image(image_url, prompt, selected_models, config.answer_in_free_text)
 
     if modality == Modality.AUDIO:
         audio_models = config.get_audio_models
         if audio_models:
             audio_url = load(input, modality, user_input)
-            return analyze_audio(audio_url, audio_models[0])  # only use the first audio model
+            return analyze_audio(
+                audio_url,
+                audio_models[0],
+                config.answer_in_free_text,
+            )  # only use the first audio model
 
         if manager is None:
             raise FunctionCallException("kg is required for audio analysis")

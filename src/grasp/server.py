@@ -429,6 +429,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                     continue
 
                 sel_managers, _ = partition_by(managers, lambda m: m.kg in sel)
+                request_input = request.input
 
                 past_messages = None
                 past_known = None
@@ -445,7 +446,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                     try:
                         generator = generate(
                             request.task,
-                            request.input,
+                            request_input,
                             config,
                             sel_managers,
                             kg_notes[request.task],

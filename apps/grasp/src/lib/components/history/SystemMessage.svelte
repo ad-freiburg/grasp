@@ -6,10 +6,26 @@
   export let message;
 
   let functionsMarkdown = '';
-  $: modelName =
-    typeof message?.config?.model === 'string'
-      ? message.config.model.trim()
-      : '';
+  $: modelName = (() => {
+    const config = message?.config;
+    const configuredModels = Array.isArray(config?.models) ? config.models : [];
+
+    const graspModel = configuredModels.find((entry) => {
+      const modalities = Array.isArray(entry?.modality) ? entry.modality : [];
+      return modalities.some(
+        (value) => typeof value === 'string' && value.toLowerCase() === 'grasp'
+      );
+    });
+
+    if (typeof graspModel?.model === 'string') {
+      const model = graspModel.model.trim();
+      if (model) {
+        return model;
+      }
+    }
+
+    return typeof config?.model === 'string' ? config.model.trim() : '';
+  })();
 
   $: functionsMarkdown = Array.isArray(message?.functions)
     ? message.functions

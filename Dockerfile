@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Triton compiles kernels at runtime and needs a C compiler
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc libc6-dev \
+  && apt-get install -y --no-install-recommends gcc libc6-dev ffmpeg \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy files
