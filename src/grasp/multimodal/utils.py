@@ -1,6 +1,7 @@
 import os
 import io
 import base64
+import json
 import tempfile
 from enum import Enum
 from urllib.request import Request, urlopen
@@ -102,6 +103,18 @@ def audio_file_to_base64(filepath: str) -> dict:
     return {"type": "input_audio", "input_audio": {"data": data, "format": file_extention}}
 
 
+def normalize_audio_base64_input(input_data: str, fallback_format: str = "wav") -> tuple[str, str]:
+    if input_data.startswith("data:"):
+        header, payload = input_data.split(",", 1)
+        mime = header[5:].split(";", 1)[0].strip().lower()
+        audio_format = _AUDIO_FORMAT_MAP.get(mime)
+        if audio_format is None and "/" in mime:
+            audio_format = mime.rsplit("/", 1)[-1]
+        return payload, audio_format or fallback_format
+
+    return input_data, fallback_format
+
+
 def convert_base64_to_np_array(image_url: str) -> np.ndarray:
     _, b64data = image_url.split(",", 1)
     img_bytes = base64.b64decode(b64data)
@@ -134,6 +147,14 @@ def guess_modality_type(input: str) -> ModalityTypes:
     return input_type
 
 
+def is_multimodal_payload(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if "input" not in value:
+        return False
+    return any(key in value for key in ("image_url", "image_input", "audio_input"))
+
+
 def media_reference_hint(num_images: int, num_audio: int) -> str:
     details: list[str] = []
     if num_images > 0:
@@ -143,7 +164,7 @@ def media_reference_hint(num_images: int, num_audio: int) -> str:
         )
     if num_audio > 0:
         start = num_images + 1
-        end = num_images + num_audio
+        end = num_images + num_audio + 1
         details.extend(
             f"USER_INPUT{i} (modality='audio')"
             for i in range(start, end)
@@ -179,15 +200,42 @@ def extract_user_input(input: str, user_input: list[str]) -> str:
 
 
 _AUDIO_FORMAT_MAP = {
+    "application/ogg": "ogg",
     "audio/wav": "wav",
     "audio/x-wav": "wav",
     "audio/wave": "wav",
     "audio/mpeg": "mp3",
     "audio/mp3": "mp3",
+    "audio/mp4": "m4a",
+    "audio/x-m4a": "m4a",
     "audio/ogg": "ogg",
+    "audio/webm": "webm",
     "audio/flac": "flac",
     "audio/x-flac": "flac",
 }
+
+
+def unwrap_json_string_payload(raw: str) -> str:
+    print("Raw text:")
+    print(raw)
+    text = (raw or "").strip()
+
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                first_string = next(
+                    (value for value in payload.values() if isinstance(value, str)),
+                    None,
+                )
+                if first_string is not None:
+                    return first_string
+        except json.JSONDecodeError:
+            pass
+    print("Edited Text:")
+    print(text)
+    return text
+
 
 IMAGE_ANALYSIS_TOOL_SCHEMA = {
     "name": "emit_image_analysis",
@@ -325,6 +373,64 @@ IMAGE_ANALYSIS_TOOL_SCHEMA = {
             "entities",
             "relations",
             "text_visible",
+        ],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
+
+AUDIO_ANALYSIS_TOOL_SCHEMA = {
+    "name": "emit_audio_analysis",
+    "description": "Return structured facts extracted from the provided audio.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "summary": {
+                "type": "string",
+                "description": "Brief factual summary of the audio content.",
+            },
+            "language": {
+                "type": "string",
+                "description": "Detected language in the audio.",
+            },
+            "key_points": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Important content points from the audio.",
+            },
+            "audio_quality": {
+                "type": "string",
+                "description": "Audio quality and overall clarity assessment.",
+            },
+            "notable_noises": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Noticeable background noises or artifacts.",
+            },
+            "identities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "entity_type": {"type": "string"},
+                        "confidence": {"type": "string"},
+                        "basis": {"type": "string"},
+                    },
+                    "required": ["name", "entity_type", "confidence", "basis"],
+                    "additionalProperties": False,
+                },
+                "description": "Potential identifiable entities inferred from voice or explicit mentions.",
+            },
+        },
+        "required": [
+            "summary",
+            "language",
+            "key_points",
+            "audio_quality",
+            "notable_noises",
+            "identities",
         ],
         "additionalProperties": False,
     },

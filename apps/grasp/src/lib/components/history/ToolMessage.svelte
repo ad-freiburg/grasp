@@ -3,17 +3,17 @@
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
   import AnalyzeResultView from '../common/AnalyzeResultView.svelte';
-  import { flattenFunctionArgs } from '../../utils/formatters.js';
+  import { flattenFunctionArgs, toPreviewText, truncatePreview } from '../../utils/formatters.js';
 
   export let message;
 
   const COLLAPSED_TOOL_NAMES = new Set(['analyze', 'load']);
   const PRIMARY_INPUT_KEYS = ['input', 'user_input', 'url', 'uri', 'query', 'text', 'prompt'];
+  const ARG_PREVIEW_MAX = 40;
 
   let showExtraArgs = false;
   let sparql = null;
-  let analyzeData = null;
-  let analyzeModelName = '';
+  let analyzeEntries = [];
 
   $: toolName = typeof message?.name === 'string' ? message.name : '';
   $: shouldCollapseArgs = COLLAPSED_TOOL_NAMES.has(toolName);
@@ -31,7 +31,8 @@
       argChips.push({
         id: `${entry.key}-${index}`,
         key: entry.key,
-        value: coerceArgValue(entry.value)
+        fullValue: toPreviewText(entry.value),
+        previewValue: truncatePreview(toPreviewText(entry.value), ARG_PREVIEW_MAX)
       });
     }
   }
@@ -51,9 +52,7 @@
     showExtraArgs = false;
   }
 
-  $: analyzeParseResult = parseAnalyzeResult(toolName, message?.result);
-  $: analyzeData = analyzeParseResult?.payload ?? null;
-  $: analyzeModelName = analyzeParseResult?.modelName ?? '';
+  $: analyzeEntries = parseAnalyzeResults(toolName, message?.result);
 
   const qleverLink = null;
 
@@ -68,43 +67,32 @@
     return chips[0].id;
   }
 
-  function coerceArgValue(value) {
-    if (value === null || value === undefined) {
-      return '';
-    }
-    if (typeof value === 'string') {
-      return normalizeWhitespace(value);
-    }
-    if (typeof value === 'number' || typeof value === 'boolean') {
-      return String(value);
-    }
-    try {
-      return normalizeWhitespace(JSON.stringify(value));
-    } catch (error) {
-      console.warn('Failed to stringify function argument', error);
-      return normalizeWhitespace(String(value));
-    }
-  }
-
-  function normalizeWhitespace(text) {
-    return text.replace(/\s+/g, ' ').trim();
-  }
-
-  function parseAnalyzeResult(name, value) {
-    if (name !== 'analyze' || typeof value !== 'string') return null;
+  function parseAnalyzeResults(name, value) {
+    if (name !== 'analyze' || typeof value !== 'string') return [];
     const trimmed = value.trim();
-    if (!trimmed) return null;
+    if (!trimmed) return [];
 
     try {
       const parsed = JSON.parse(trimmed);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-      const [firstModelName] = Object.keys(parsed);
-      if (!firstModelName) return null;
-      const payload = parsed[firstModelName];
-      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
-      return { payload, modelName: firstModelName };
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
+
+      return Object.entries(parsed).map(([modelName, modelValue]) => {
+        if (modelValue && typeof modelValue === 'object' && !Array.isArray(modelValue)) {
+          return {
+            modelName,
+            kind: 'structured',
+            payload: modelValue
+          };
+        }
+
+        return {
+          modelName,
+          kind: 'markdown',
+          markdown: typeof modelValue === 'string' ? modelValue : String(modelValue ?? '')
+        };
+      });
     } catch {
-      return null;
+      return [];
     }
   }
 </script>
@@ -121,9 +109,9 @@
 
       {#if shouldCollapseArgs}
         {#if primaryArgChip}
-          <span class="arg-chip" title={`${primaryArgChip.key}: ${primaryArgChip.value}`}>
+          <span class="arg-chip" title={`${primaryArgChip.key}: ${primaryArgChip.fullValue}`}>
             <span class="arg-chip__key">{primaryArgChip.key}</span>
-            <span class="arg-chip__value">{primaryArgChip.value}</span>
+            <span class="arg-chip__value">{primaryArgChip.previewValue}</span>
           </span>
         {/if}
 
@@ -145,9 +133,9 @@
         {/if}
       {:else}
         {#each argChips as chip (chip.id)}
-          <span class="arg-chip" title={`${chip.key}: ${chip.value}`}>
+          <span class="arg-chip" title={`${chip.key}: ${chip.fullValue}`}>
             <span class="arg-chip__key">{chip.key}</span>
-            <span class="arg-chip__value">{chip.value}</span>
+            <span class="arg-chip__value">{chip.previewValue}</span>
           </span>
         {/each}
       {/if}
@@ -157,9 +145,9 @@
   {#if shouldCollapseArgs && showExtraArgs && hiddenArgChips.length > 0}
     <div class="arg-details" aria-label="Additional function arguments">
       {#each hiddenArgChips as chip (chip.id)}
-        <span class="arg-chip arg-chip--linebreak" title={`${chip.key}: ${chip.value}`}>
+        <span class="arg-chip arg-chip--linebreak" title={`${chip.key}: ${chip.fullValue}`}>
           <span class="arg-chip__key">{chip.key}</span>
-          <span class="arg-chip__value">{chip.value}</span>
+          <span class="arg-chip__value">{chip.previewValue}</span>
         </span>
       {/each}
     </div>
@@ -169,8 +157,21 @@
     <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
   {/if}
 
-  {#if analyzeData}
-    <AnalyzeResultView payload={analyzeData} modelName={analyzeModelName} raw={message.result} />
+  {#if analyzeEntries.length > 0}
+    {#each analyzeEntries as entry, index (`${entry.modelName}-${index}`)}
+      {#if entry.kind === 'structured'}
+        <AnalyzeResultView payload={entry.payload} modelName={entry.modelName} raw={index === 0 ? message.result : ''} />
+      {:else}
+        <section class="analyze-markdown">
+          <header class="analyze-markdown__header">
+            {#if entry.modelName}
+              <span class="analyze-markdown__model-chip">{entry.modelName}</span>
+            {/if}
+          </header>
+          <MarkdownContent content={entry.markdown} />
+        </section>
+      {/if}
+    {/each}
   {:else if message?.result}
     <MarkdownContent content={message.result} />
   {/if}
@@ -267,6 +268,31 @@
   }
 
   .arg-chip--linebreak .arg-chip__key {
+    white-space: nowrap;
+  }
+
+  .analyze-markdown {
+    display: grid;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-md);
+    border: 1px solid rgba(52, 74, 154, 0.15);
+    border-radius: var(--radius-md);
+    background: linear-gradient(180deg, rgba(52, 74, 154, 0.04), rgba(255, 255, 255, 0.9));
+  }
+
+  .analyze-markdown__header {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  .analyze-markdown__model-chip {
+    border: 1px solid rgba(52, 74, 154, 0.22);
+    border-radius: 999px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    color: var(--color-uni-blue);
+    background: rgba(52, 74, 154, 0.08);
     white-space: nowrap;
   }
 

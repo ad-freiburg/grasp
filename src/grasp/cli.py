@@ -6,7 +6,6 @@ import sys
 from datetime import datetime
 from importlib import metadata
 
-from grasp.multimodal.functions import analyze_audio
 from search_rdf.model import SentenceTransformerModel
 from termcolor import colored
 from tqdm import tqdm
@@ -63,10 +62,9 @@ from grasp.utils import (
     parse_key_value_pairs,
 )
 from grasp.multimodal.utils import (
-    audio_file_to_base64,
-    audio_url_to_base64,
     image_file_to_base64,
     image_url_to_base64,
+    is_multimodal_payload,
 )
 
 
@@ -823,7 +821,7 @@ def run_grasp(args: argparse.Namespace) -> None:
 
     notes, kg_notes = load_notes(config)
 
-    audio_captions = []
+    audio_inputs: list[str] = []
     image_urls = []
 
     if args.input_field is None:
@@ -849,7 +847,7 @@ def run_grasp(args: argparse.Namespace) -> None:
             if isinstance(ipt, dict):
                 image_urls = ipt.get("image_url")
 
-            if input_field is not None and not (isinstance(ipt, dict) and "image_url" in ipt and "input" in ipt):
+            if input_field is not None and not is_multimodal_payload(ipt):
                 ipt = extract_field(ipt, input_field)
 
             if image_urls is not None:
@@ -901,42 +899,27 @@ def run_grasp(args: argparse.Namespace) -> None:
                     image_b64 = image_file_to_base64(image)
                 image_urls.append(image_b64)
         if args.audio_input is not None:
-            audio_model = next(
-                (model for model in config.models if "audio" in model.modality),
-                None,
-            )
-            for audio in args.audio_input:
-                if audio_model is not None:
-                    if audio.startswith("http") or audio.startswith("data:"):
-                        audio_url = audio_url_to_base64(audio)
-                    else:
-                        audio_url = audio_file_to_base64(audio)
-                    audio_captions.append(analyze_audio(audio_url, audio_model))
-                else:
-                    if not os.path.exists(audio):
-                        raise FileNotFoundError(f"Audio input not found: {audio}")
-                    if not hasattr(managers[0], "clap_model") or managers[0].clap_model is None:
-                        raise ValueError("No Clap Model found")
-                    audio_captions.append(" AUDIO_CAPTION: " + ",".join(managers[0].clap_model.generate_captions([audio])))
+            audio_inputs = [audio for audio in args.audio_input if isinstance(audio, str) and audio.strip()]
 
         if args.input_format == "json":
             obj = json.loads(ipt)
             if image_urls is not None:
                 obj["image_url"] = image_urls
+            if audio_inputs:
+                obj["audio_input"] = audio_inputs
             inputs = [obj]
         else:
-            if isinstance(ipt, str) and isinstance(audio_captions, list) and len(audio_captions) > 0:
-                ipt += str(audio_captions)
             inputs = [{
                 "input": ipt,
                 "image_url": image_urls,
+                "audio_input": audio_inputs,
             }]
             input_field = None  # overwrite
 
     for i, ipt in enumerate(inputs):
         id = extract_field(ipt, "id") or "unknown"
 
-        if input_field is not None and not (isinstance(ipt, dict) and "image_url" in ipt and "input" in ipt):
+        if input_field is not None and not is_multimodal_payload(ipt):
             ipt = extract_field(ipt, input_field)
 
         assert ipt is not None, f"Input not found for input {i:,}"

@@ -107,10 +107,17 @@ def system_instructions(
         rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality and task.config.load_user_input)
         blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
         vision_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_vision_models]
+        audio_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_audio_models]
         blocks.append(
             format_section(
                 "Vision Models to Choose from for 'analyze()'",
                 format_enumerate(vision_model_list)
+            ),
+        )
+        blocks.append(
+            format_section(
+                "Audio Models to Choose from for 'analyze()'",
+                format_enumerate(audio_model_list),
             )
         )
 
@@ -286,8 +293,8 @@ def generate(
                 f"'{config.get_default_model.model}' does not support image inputs"
             )
 
-        media_hint = media_reference_hint(0, len(audio_inputs))
-        content = [{"type": "text", "text": text_input}]
+        text_content = text_input + media_hint if audio_inputs else text_input
+        content = [{"type": "text", "text": text_content}]
         content.extend(
             {"type": "image_url", "image_url": {"url": image_url}}
             for image_url in image_urls
