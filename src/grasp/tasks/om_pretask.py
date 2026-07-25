@@ -55,6 +55,9 @@ SELECT DISTINCT ?prop WHERE {
     { ?prop a owl:ObjectProperty } UNION { ?prop a owl:DatatypeProperty }
     UNION { ?prop a owl:AnnotationProperty } UNION { ?s ?prop ?o }
     FILTER(isIRI(?prop))
+    FILTER(!STRSTARTS(STR(?prop), STR(owl:)))
+    FILTER(!STRSTARTS(STR(?prop), STR(rdf:)))
+    FILTER(!STRSTARTS(STR(?prop), STR(rdfs:)))
 }
 """
 
@@ -62,6 +65,9 @@ SELECT DISTINCT ?prop WHERE {
 SELECT DISTINCT ?instance WHERE {
   ?instance a ?class .
   FILTER(isIRI(?instance))
+  FILTER(!STRSTARTS(STR(?instance), STR(owl:)))
+  FILTER(!STRSTARTS(STR(?instance), STR(rdf:)))
+  FILTER(!STRSTARTS(STR(?instance), STR(rdfs:)))
   FILTER(!STRSTARTS(STR(?class), STR(owl:)))
   FILTER(!STRSTARTS(STR(?class), STR(rdf:)))
   FILTER(!STRSTARTS(STR(?class), STR(rdfs:)))
