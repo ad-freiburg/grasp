@@ -7,21 +7,32 @@ from pydantic import BaseModel
 from universal_ml_utils.table import generate_table
 
 from grasp.configs import GraspConfig, ShapeConfig
-from grasp.functions import find_manager, update_known_from_shape_iris, SHAPE_CAVEAT
+from grasp.functions import (
+    find_manager,
+    parse_iri_or_literal,
+    update_known_from_shape_iris,
+    SHAPE_CAVEAT,
+)
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
-from grasp.sparql.types import AskResult
+from grasp.sparql.types import AskResult, ObjType
 from grasp.sparql.utils import prepare_identifier_for_sparql
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import FunctionCallException, format_list, format_notes
-from grasp.tasks.cea import prepare_annotation, Annotation
 from grasp.build.shapes import collect_iris, compute_shape, emit_pseudo_shex
 
-# TODO: If we keep this design, the class hierarchy should
-# obviously be refactored...
-class Entity(Annotation):
+
+class Entity(BaseModel):
+    identifier: str
+    entity: str
+    label: str | None = None
+    aliases: list[str] | None = None
+    infos: list[str] | None = None
+
     def format(self) -> str:
-        output = f"Full IRI: {self.identifier}, Shortened IRI: {self.entity}"
+        output = f"Full IRI: {self.identifier}"
+        if self.entity != self.identifier:
+            output += f", shortened IRI: {self.entity}"
         if self.label is not None:
             output += f", label: {self.label}"
         if self.aliases is not None and self.aliases != []:
@@ -30,15 +41,37 @@ class Entity(Annotation):
             output += f", infos: {self.infos}"
         return output
 
-    @staticmethod
-    def from_annotation_object(annotation: Annotation) -> 'Entity':
-        return Entity(
-            identifier=annotation.identifier,
-            entity=annotation.entity,
-            label=annotation.label,
-            aliases=annotation.aliases,
-            infos=annotation.infos
-        )
+
+def prepare_entity(manager: KgManager, identifier: str) -> Entity:
+    binding = parse_iri_or_literal(identifier, manager.iri_literal_parser, manager.prefixes)
+    if binding is None or binding.typ != "uri":
+        raise ValueError(f"{identifier} is not a valid IRI")
+
+    identifier = binding.identifier()
+
+    norm = manager.normalize(identifier, ObjType.ENTITY.index_name)
+    if norm is not None:
+        identifier, _ = norm
+
+    infos = manager.get_info_for_identifiers_from_index(
+        [identifier], ObjType.ENTITY.index_name
+    )
+    info = infos.get(identifier, {})
+
+    # format normalized identifier again, so always
+    # prefixed form is shown if available
+    formatted_entity = manager.format_iri(identifier)
+    label = info.get("label")
+    aliases = info.get("alias", [])
+    infos = info.get("other", [])
+
+    return Entity(
+        identifier=identifier,
+        entity=formatted_entity,
+        label=label,
+        aliases=aliases,
+        infos=infos,
+    )
 
 
 class Relation(StrEnum):
@@ -71,6 +104,8 @@ class PotentialCorrespondences(BaseModel):
 class LogMapValidationResult(BaseModel):
     valid: bool
     message: str
+    repair: list[Correspondence] = []
+    unknown: list[Correspondence] = []
 
 
 class AlignmentTaskInput(BaseModel):
@@ -264,30 +299,69 @@ def rules() -> list[str]:
     ]
 
 
+def _post_alignment_to_logmap(state: AlignmentState, server_url: str) -> LogMapValidationResult:
+    unique_correspondences = list({id(c): c for c in state.correspondences.values()}.values())
+    response = requests.post(
+        f"{server_url}/validate",
+        json=[c.model_dump() for c in unique_correspondences],
+        timeout=30,
+    )
+    response.raise_for_status()
+    return LogMapValidationResult(**response.json())
+
+
 def check_alignment_with_logmap(state: AlignmentState, server_url: str) -> str | None:
     """
     Sends the current, deduplicated alignment to the LogMap server for a
     consistency/conflict check. Returns feedback text to surface to the LLM if
     the check failed or could not be performed, or None if it passed cleanly.
     """
-    unique_correspondences = list({id(c): c for c in state.correspondences.values()}.values())
-
     try:
-        response = requests.post(
-            f"{server_url}/validate",
-            json=[c.model_dump() for c in unique_correspondences],
-            timeout=30,
-        )
-        response.raise_for_status()
+        result = _post_alignment_to_logmap(state, server_url)
     except requests.RequestException as e:
         return f"LogMap check could not be performed: {e}"
 
-    result = LogMapValidationResult(**response.json())
     if not result.valid:
         return f"LogMap check failed: {result.message}"
 
-    else:
-        return result.message
+    return result.message
+
+
+def cleanup_invalid_correspondences(state: AlignmentState, server_url: str) -> list[Correspondence]:
+    """
+    Safety fallback for when the LLM's run ends (cleanly or not - stuck in a
+    loop, out of steps, API error, ...) despite unresolved logical conflicts
+    or unknown-entity correspondences: re-checks the final alignment with
+    LogMap and silently drops any correspondence still flagged as unknown or
+    in need of repair, without relying on the LLM having read or acted on the
+    check's message.
+    """
+    try:
+        result = _post_alignment_to_logmap(state, server_url)
+    except Exception:
+        # fail open: anything that can go wrong while talking to the LogMap
+        # server (network error, malformed JSON, schema mismatch, unexpected
+        # top-level JSON type, ...) should leave the alignment untouched
+        # rather than crashing the whole task run - unlike
+        # check_alignment_with_logmap, this runs from OmTask.output(), which
+        # core.py calls unguarded, with no surrounding try/except.
+        return []
+
+    removed: list[Correspondence] = []
+    seen: set[tuple[str, str]] = set()
+    for c in result.unknown + result.repair:
+        key = (c.entity_source.identifier, c.entity_target.identifier)
+        if (
+            key in seen
+            or state.get_correspondence(c.entity_source.identifier) is None
+            or state.get_correspondence(c.entity_target.identifier) is None
+        ):
+            continue
+        seen.add(key)
+        state.remove_correspondence(c.entity_source.identifier, c.entity_target.identifier)
+        removed.append(c)
+
+    return removed
 
 
 def entity_exists_in_kg(manager: KgManager, iri: str) -> bool:
@@ -386,8 +460,8 @@ def add_1_to_1_correspondence(
     try:
         manager_source, _ = find_manager(managers, kg_source)
         manager_target, _ = find_manager(managers, kg_target)
-        entity_object_source = Entity.from_annotation_object(prepare_annotation(manager_source, entity_source))
-        entity_object_target = Entity.from_annotation_object(prepare_annotation(manager_target, entity_target))
+        entity_object_source = prepare_entity(manager_source, entity_source)
+        entity_object_target = prepare_entity(manager_target, entity_target)
         full_iri_source = entity_object_source.identifier
         full_iri_target = entity_object_target.identifier
 
@@ -624,6 +698,9 @@ class OmTask(GraspTask, FeedbackTask):
         return functions(self.managers)
 
     def output(self, messages: list[Message]) -> dict:
+        logmap_server_url = self.config.task_kwargs.get("om", {}).get("logmap_server_url")
+        if logmap_server_url is not None:
+            cleanup_invalid_correspondences(self.state, logmap_server_url)
         return self.state.to_dict()
 
     def call_function(
