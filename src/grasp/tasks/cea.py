@@ -6,11 +6,12 @@ from universal_ml_utils.table import generate_table
 
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
-from grasp.functions import find_manager, parse_iri_or_literal
+from grasp.functions import find_manager
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
-from grasp.sparql.types import Alternative, ObjType
+from grasp.sparql.types import Alternative
 from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.tasks.entities import Entity, prepare_entity
 from grasp.utils import (
     FunctionCallException,
     format_enumerate,
@@ -20,15 +21,7 @@ from grasp.utils import (
 )
 
 
-class Annotation(BaseModel):
-    identifier: str
-    entity: str
-    label: str | None = None
-    aliases: list[str] | None = None
-    infos: list[str] | None = None
-
-
-class CellAnnotation(Annotation):
+class CellAnnotation(Entity):
     row: int
     column: int
 
@@ -122,14 +115,14 @@ class AnnotationState:
         )
 
         # map from cell (row, column) to annoation
-        self.annotations: dict[tuple[int, int], Annotation] = {}
+        self.annotations: dict[tuple[int, int], Entity] = {}
 
     def annotate(
         self,
         row: int,
         column: int,
-        annotation: Annotation | None,
-    ) -> Annotation | None:
+        annotation: Entity | None,
+    ) -> Entity | None:
         if row < 0 or row >= self.table.height:
             raise ValueError(f"Row {row} out of bounds")
 
@@ -147,7 +140,7 @@ class AnnotationState:
             self.annotations[(row, column)] = annotation
         return current
 
-    def get(self, row: int, column: int) -> Annotation | None:
+    def get(self, row: int, column: int) -> Entity | None:
         return self.annotations.get((row, column), None)
 
     def to_dict(self) -> dict:
@@ -163,7 +156,7 @@ class AnnotationState:
             ],
         }
 
-    def iter(self) -> Iterator[list[Annotation | None]]:
+    def iter(self) -> Iterator[list[Entity | None]]:
         for r in range(self.table.height):
             yield [self.get(r, c) for c in range(self.table.width)]
 
@@ -303,39 +296,6 @@ This function overwrites any previous annotation of the cell.""",
     return fns
 
 
-def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
-    binding = parse_iri_or_literal(entity, manager.iri_literal_parser, manager.prefixes)
-    if binding is None or binding.typ != "uri":
-        raise ValueError(f"Entity {entity} is not a valid IRI")
-
-    identifier = binding.identifier()
-
-    norm = manager.normalize(identifier, ObjType.ENTITY.index_name)
-    if norm is not None:
-        identifier, _ = norm
-
-    infos = manager.get_info_for_identifiers_from_index(
-        [identifier], ObjType.ENTITY.index_name
-    )
-    info = infos.get(identifier, {})
-
-    # format normalized identifier again, so always
-    # prefixed form is shown if available
-    entity = manager.format_iri(identifier)
-    # extract fields from info dict
-    label = info.get("label")
-    aliases = info.get("alias", [])
-    infos = info.get("info", [])
-
-    return Annotation(
-        identifier=identifier,
-        entity=entity,
-        label=label,
-        aliases=aliases,
-        infos=infos,
-    )
-
-
 def annotate(
     managers: list[KgManager],
     kg: str,
@@ -349,7 +309,7 @@ def annotate(
     manager, _ = find_manager(managers, kg)
 
     try:
-        annotation = prepare_annotation(manager, entity)
+        annotation = prepare_entity(manager, entity)
         if know_before_annotate and annotation.identifier not in known:
             raise FunctionCallException(
                 f"The entity {entity} cannot be used for annotation "

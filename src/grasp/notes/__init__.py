@@ -24,7 +24,8 @@ from grasp.functions import find_manager
 from grasp.manager import KgManager
 from grasp.model import get_model
 from grasp.tasks import get_task
-from grasp.tasks.cea import AnnotationState, CeaSample, prepare_annotation
+from grasp.tasks.cea import AnnotationState, CeaSample
+from grasp.tasks.entities import prepare_entity
 from grasp.tasks.exploration import (
     FunctionalExplorationState,
     StructuralExplorationState,
@@ -428,7 +429,7 @@ def prepare_ground_truth(
 
         annots = AnnotationState(sample.table)
         for annot in sample.annotations:
-            full_annot = prepare_annotation(manager, annot.entity)
+            full_annot = prepare_entity(manager, annot.entity)
             annots.annotate(annot.row, annot.column, full_annot)
 
         return annots.format()
