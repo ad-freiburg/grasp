@@ -6,11 +6,12 @@ from pydantic import BaseModel
 
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
-from grasp.functions import find_manager, parse_iri_or_literal
+from grasp.functions import find_manager
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
-from grasp.sparql.types import Alternative, ObjType
+from grasp.sparql.types import Alternative
 from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.tasks.entities import Entity, prepare_entity
 from grasp.utils import (
     FunctionCallException,
     format_enumerate,
@@ -20,15 +21,7 @@ from grasp.utils import (
 )
 
 
-class Annotation(BaseModel):
-    identifier: str
-    entity: str
-    label: str | None = None
-    aliases: list[str] | None = None
-    infos: list[str] | None = None
-
-
-class TextAnnotation(Annotation):
+class TextAnnotation(Entity):
     start_index: int
     end_index: int
 
@@ -114,14 +107,14 @@ class AnnotationState:
     ) -> None:
         self.text, self.offset = text.trim(context)
         self.annotation_window: slice = slice(self.text.start, self.text.end)
-        self.annotations: dict[tuple[int, int], Annotation] = {}
+        self.annotations: dict[tuple[int, int], Entity] = {}
 
     def annotate(
         self,
         start_index: int,
         end_index: int,
-        annotation: Annotation | None,
-    ) -> Annotation | None:
+        annotation: Entity | None,
+    ) -> Entity | None:
         aws = self.annotation_window.stop - self.annotation_window.start
         if start_index < 0 or start_index >= aws:
             raise ValueError(f"Start_index {start_index} out of bounds")
@@ -134,7 +127,7 @@ class AnnotationState:
             self.annotations[(start_index, end_index)] = annotation
         return current
 
-    def get(self, start_index: int, end_index: int) -> Annotation | None:
+    def get(self, start_index: int, end_index: int) -> Entity | None:
         return self.annotations.get((start_index, end_index), None)
 
     def to_dict(self) -> dict:
@@ -371,39 +364,6 @@ so always keep that in mind and adjust the occurrence_index accordingly.""",
     return fns
 
 
-def prepare_annotation(manager: KgManager, entity: str) -> Annotation:
-    binding = parse_iri_or_literal(entity, manager.iri_literal_parser, manager.prefixes)
-    if binding is None or binding.typ != "uri":
-        raise ValueError(f"Entity {entity} is not a valid IRI")
-
-    identifier = binding.identifier()
-
-    norm = manager.normalize(identifier, ObjType.ENTITY.index_name)
-    if norm is not None:
-        identifier, _ = norm
-
-    infos = manager.get_info_for_identifiers_from_index(
-        [identifier], ObjType.ENTITY.index_name
-    )
-
-    # format normalized identifier again, so always
-    # prefixed form is shown if available
-    entity = manager.format_iri(identifier)
-    # extract fields from info dict
-    info = infos.get(identifier, {})
-    label = info.get("label")
-    aliases = info.get("alias", [])
-    infos = info.get("info", [])
-
-    return Annotation(
-        identifier=identifier,
-        entity=entity,
-        label=label,
-        aliases=aliases,
-        infos=infos,
-    )
-
-
 def annotate(
     managers: list[KgManager],
     kg: str,
@@ -453,9 +413,9 @@ def annotate(
 
     try:
         if entity is None:
-            annotation = Annotation(identifier="<NIL>", entity="<NIL>")
+            annotation = Entity(identifier="<NIL>", entity="<NIL>")
         else:
-            annotation = prepare_annotation(manager, entity)
+            annotation = prepare_entity(manager, entity)
             if know_before_annotate and annotation.identifier not in known:
                 raise FunctionCallException(
                     f"The entity {entity} cannot be used for annotation "

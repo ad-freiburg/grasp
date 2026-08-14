@@ -18,7 +18,8 @@ from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import FunctionCallException, derive_label_from_iri, camel_case_split, format_list, format_notes
-from grasp.tasks.om import Entity, Correspondence, AlignmentTaskInput, PotentialCorrespondences
+from grasp.tasks.entities import Entity
+from grasp.tasks.om import Correspondence, AlignmentTaskInput, PotentialCorrespondences
 from grasp.sparql.types import SelectResult
 
 

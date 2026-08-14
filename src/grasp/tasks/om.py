@@ -9,69 +9,17 @@ from universal_ml_utils.table import generate_table
 from grasp.configs import GraspConfig, ShapeConfig
 from grasp.functions import (
     find_manager,
-    parse_iri_or_literal,
     update_known_from_shape_iris,
     SHAPE_CAVEAT,
 )
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message
-from grasp.sparql.types import AskResult, ObjType
+from grasp.sparql.types import AskResult
 from grasp.sparql.utils import prepare_identifier_for_sparql
 from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.tasks.entities import Entity, prepare_entity
 from grasp.utils import FunctionCallException, format_list, format_notes
 from grasp.build.shapes import collect_iris, compute_shape, emit_pseudo_shex
-
-
-class Entity(BaseModel):
-    identifier: str
-    entity: str
-    label: str | None = None
-    aliases: list[str] | None = None
-    infos: list[str] | None = None
-
-    def format(self) -> str:
-        output = f"Full IRI: {self.identifier}"
-        if self.entity != self.identifier:
-            output += f", shortened IRI: {self.entity}"
-        if self.label is not None:
-            output += f", label: {self.label}"
-        if self.aliases is not None and self.aliases != []:
-            output += f", aliases: {self.aliases}"
-        if self.infos is not None and self.infos != []:
-            output += f", infos: {self.infos}"
-        return output
-
-
-def prepare_entity(manager: KgManager, identifier: str) -> Entity:
-    binding = parse_iri_or_literal(identifier, manager.iri_literal_parser, manager.prefixes)
-    if binding is None or binding.typ != "uri":
-        raise ValueError(f"{identifier} is not a valid IRI")
-
-    identifier = binding.identifier()
-
-    norm = manager.normalize(identifier, ObjType.ENTITY.index_name)
-    if norm is not None:
-        identifier, _ = norm
-
-    infos = manager.get_info_for_identifiers_from_index(
-        [identifier], ObjType.ENTITY.index_name
-    )
-    info = infos.get(identifier, {})
-
-    # format normalized identifier again, so always
-    # prefixed form is shown if available
-    formatted_entity = manager.format_iri(identifier)
-    label = info.get("label")
-    aliases = info.get("alias", [])
-    infos = info.get("other", [])
-
-    return Entity(
-        identifier=identifier,
-        entity=formatted_entity,
-        label=label,
-        aliases=aliases,
-        infos=infos,
-    )
 
 
 class Relation(StrEnum):
@@ -501,7 +449,12 @@ def add_1_to_1_correspondence(
         raise FunctionCallException(str(e)) from e
 
 
-def delete_correspondence(entity1: str, entity2: str, state: AlignmentState) -> str:
+def delete_correspondence(
+        entity1: str,
+        entity2: str,
+        state: AlignmentState,
+        logmap_server_url: str | None = None
+        ) -> str:
     correspondence1 = state.get_correspondence(entity1)
     correspondence2 = state.get_correspondence(entity2)
     if correspondence1 is None or correspondence1 is not correspondence2:
@@ -510,7 +463,14 @@ def delete_correspondence(entity1: str, entity2: str, state: AlignmentState) -> 
             "Notice you have to use the full IRI as entity reference."
             )
     state.remove_correspondence(entity1, entity2)
-    return f"Deleted correspondence between {entity1} and {entity2}"
+    message = f"Deleted correspondence between {entity1} and {entity2}"
+
+    if logmap_server_url is not None:
+        feedback = check_alignment_with_logmap(state, logmap_server_url)
+        if feedback is not None:
+            message += f"\n{feedback}"
+
+    return message
 
 
 def call_function(
@@ -527,6 +487,9 @@ def call_function(
     )
     assert not example_indices, "Example indices are not supported for OM task"
 
+    om_kwargs = config.task_kwargs.get("om", {})
+    logmap_server_url = om_kwargs.get("logmap_server_url")
+
     if fn_name == "set_correspondence":
         if state is None:
             return "No AlignmentState was provided. Cannot set correspondences without AlignmentState"
@@ -535,8 +498,6 @@ def call_function(
         overwrite = fn_args.get("overwrite", False)
 
         ent1, ent2 = fn_args["source_entity"], fn_args["target_entity"]
-        om_kwargs = config.task_kwargs.get("om", {})
-        logmap_server_url = om_kwargs.get("logmap_server_url")
         know_before_use = om_kwargs.get("know_before_use", True)
 
         return add_1_to_1_correspondence(
@@ -545,7 +506,11 @@ def call_function(
         )
 
     elif fn_name == "delete_correspondence":
-        return delete_correspondence(fn_args["source_entity"], fn_args["target_entity"], state)
+        return delete_correspondence(
+            fn_args["source_entity"],
+            fn_args["target_entity"],
+            state, logmap_server_url
+            )
 
     elif fn_name == "show_correspondences":
         return state.format(num=fn_args.get("num"))
