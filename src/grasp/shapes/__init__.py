@@ -44,7 +44,12 @@ class TargetIri(BaseModel):
     triple_count: int = 0
 
 
-Target = TargetClass | TargetLiteral | TargetIri
+class TargetBnode(BaseModel):
+    type: Literal["bnode"] = "bnode"
+    triple_count: int = 0
+
+
+Target = TargetClass | TargetLiteral | TargetIri | TargetBnode
 
 
 class PropertyProfile(BaseModel):
@@ -61,6 +66,10 @@ class ClassProfile(BaseModel):
     short_iri: str
     total_entities: int = 0
     properties: list[PropertyProfile] = Field(default_factory=list)
+    # inverse edges: properties for which instances of this class are the *object*.
+    # reuses PropertyProfile, where `targets` holds the *source* classes rather
+    # than the target ones, and `entity_count` counts distinct receiving instances.
+    incoming: list[PropertyProfile] = Field(default_factory=list)
 
 
 class ShapeSample(BaseModel):

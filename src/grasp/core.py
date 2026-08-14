@@ -91,8 +91,8 @@ def system_instructions(
 
     if common_prefixes or any(manager.kg_prefixes for manager in managers):
         blocks.append(
-            "All SPARQL prefixes above can be used implicitly in SPARQL queries "
-            "and function calls."
+            "All common and knowledge-graph-specific SPARQL prefixes above "
+            "can be used implicitly in SPARQL queries and function calls."
         )
 
     rules = general_rules() + task.rules()

@@ -2,6 +2,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
+from itertools import chain
 from typing import Any
 
 from tqdm import tqdm
@@ -15,93 +16,50 @@ from grasp.shapes import (
     PropertyProfile,
     ShapeSample,
     Target,
+    TargetBnode,
     TargetClass,
     TargetIri,
     TargetLiteral,
 )
-from grasp.sparql.types import SelectResult
+from grasp.sparql.types import AskResult, SelectResult
 from grasp.utils import derive_label_from_iri, get_local_name_from_iri
 
 
-def class_pattern(pattern: str) -> str:
-    return pattern.replace("{CLASS}", "?class")
+# instantiate a pattern by choosing the class term and the variable the
+# membership is anchored on. anchoring on ?o (or ?s) is what turns an outgoing
+# pattern into an incoming one; the pattern itself is directionless.
+def bind_pattern(
+    pattern: str,
+    class_term: str = "?class",
+    member_var: str = "?instance",
+) -> str:
+    return pattern.replace("?instance", member_var).replace("{CLASS}", class_term)
 
 
-def object_pattern(pattern: str) -> str:
-    p = pattern.replace("?instance", "?o")
-    return p.replace("{CLASS}", "?targetClass")
+def iri_term(class_iri: str) -> str:
+    return f"<{class_iri}>"
 
 
-def instance_pattern(pattern: str, class_iri: str) -> str:
-    return pattern.replace("{CLASS}", f"<{class_iri}>")
-
-
-def subquery(pattern: str) -> str:
-    cp = class_pattern(pattern)
-    return f"  {{\n    SELECT DISTINCT ?class WHERE {{\n      {cp}\n    }}\n  }}"
-
-
-def membership(pattern: str) -> str:
-    cp = class_pattern(pattern)
-    inner = "\n".join(f"    {line}" for line in cp.strip().splitlines())
-    return f"  {{\n{inner}\n  }}"
-
-
-def objectmembership(pattern: str) -> str:
-    op = object_pattern(pattern)
-    inner = "\n".join(f"    {line}" for line in op.strip().splitlines())
-    return f"  {{\n{inner}\n  }}"
-
-
-def build_property_frequency_query(pattern: str) -> str:
+# dedup here plus COUNT(*) outside scales where COUNT(DISTINCT ?instance) does
+# not, since the latter materializes the whole membership relation.
+def distinct_members(pattern: str, class_term: str = "?class") -> str:
+    cp = bind_pattern(pattern, class_term)
+    inner = "\n".join(f"      {line}" for line in cp.strip().splitlines())
+    project = "?class ?instance" if class_term == "?class" else "?instance"
     return (
-        f"SELECT ?class ?p (COUNT(*) AS ?tripleCount) "
-        f"(COUNT(DISTINCT ?instance) AS ?entityCount)\n"
-        f"WHERE {{\n"
-        f"{subquery(pattern)}\n"
-        f"{membership(pattern)}\n"
-        f"  ?instance ?p ?o .\n"
-        f"}}\n"
-        f"GROUP BY ?class ?p\n"
-        f"ORDER BY ?class DESC(?tripleCount)"
-    )
-
-
-def build_literal_profile_query(pattern: str) -> str:
-    return (
-        f"SELECT ?class ?p ?datatype (COUNT(*) AS ?count)\n"
-        f"WHERE {{\n"
-        f"{subquery(pattern)}\n"
-        f"{membership(pattern)}\n"
-        f"  ?instance ?p ?o .\n"
-        f"  FILTER(isLiteral(?o))\n"
-        f"  BIND(DATATYPE(?o) AS ?datatype)\n"
-        f"}}\n"
-        f"GROUP BY ?class ?p ?datatype\n"
-        f"ORDER BY ?class ?p DESC(?count)"
-    )
-
-
-def build_range_profile_query(pattern: str) -> str:
-    return (
-        f"SELECT ?class ?p ?targetClass (COUNT(*) AS ?count)\n"
-        f"WHERE {{\n"
-        f"{subquery(pattern)}\n"
-        f"{membership(pattern)}\n"
-        f"  ?instance ?p ?o .\n"
-        f"{objectmembership(pattern)}\n"
-        f"}}\n"
-        f"GROUP BY ?class ?p ?targetClass\n"
-        f"ORDER BY ?class ?p DESC(?count)"
+        f"  {{\n"
+        f"    SELECT DISTINCT {project} WHERE {{\n"
+        f"{inner}\n"
+        f"    }}\n"
+        f"  }}"
     )
 
 
 def build_total_entities_query(pattern: str) -> str:
     return (
-        f"SELECT ?class (COUNT(DISTINCT ?instance) AS ?totalEntities)\n"
+        f"SELECT ?class (COUNT(*) AS ?totalEntities)\n"
         f"WHERE {{\n"
-        f"{subquery(pattern)}\n"
-        f"{membership(pattern)}\n"
+        f"{distinct_members(pattern)}\n"
         f"}}\n"
         f"GROUP BY ?class"
     )
@@ -113,9 +71,12 @@ def wrap_pattern(pattern: str) -> str:
 
 
 def build_per_class_property_frequency_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(instance_pattern(pattern, class_iri))
+    ip = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
+    # ?bnodeCount rides along as an extra aggregate so the node-kind split costs
+    # no additional query.
     return (
-        f"SELECT ?p (COUNT(*) AS ?tripleCount) (COUNT(DISTINCT ?instance) AS ?entityCount)\n"
+        f"SELECT ?p (COUNT(*) AS ?tripleCount) (COUNT(DISTINCT ?instance) AS ?entityCount)"
+        f" (SUM(IF(isBlank(?o), 1, 0)) AS ?bnodeCount)\n"
         f"WHERE {{\n"
         f"{ip}\n"
         f"  ?instance ?p ?o .\n"
@@ -126,7 +87,7 @@ def build_per_class_property_frequency_query(pattern: str, class_iri: str) -> st
 
 
 def build_per_class_literal_profile_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(instance_pattern(pattern, class_iri))
+    ip = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
     return (
         f"SELECT ?p ?datatype (COUNT(*) AS ?count)\n"
         f"WHERE {{\n"
@@ -141,13 +102,16 @@ def build_per_class_literal_profile_query(pattern: str, class_iri: str) -> str:
 
 
 def build_per_class_range_profile_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(instance_pattern(pattern, class_iri))
-    op = wrap_pattern(object_pattern(pattern))
+    ip = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
+    op = wrap_pattern(bind_pattern(pattern, "?targetClass", "?o"))
+    # blank-node objects are excluded here so that they are counted exactly once,
+    # by ?bnodeCount above, instead of also landing in a class bucket.
     return (
         f"SELECT ?p ?targetClass (COUNT(*) AS ?count)\n"
         f"WHERE {{\n"
         f"{ip}\n"
         f"  ?instance ?p ?o .\n"
+        f"  FILTER(!isBlank(?o))\n"
         f"{op}\n"
         f"}}\n"
         f"GROUP BY ?p ?targetClass\n"
@@ -155,9 +119,39 @@ def build_per_class_range_profile_query(pattern: str, class_iri: str) -> str:
     )
 
 
+def build_per_class_incoming_frequency_query(pattern: str, class_iri: str) -> str:
+    op = wrap_pattern(bind_pattern(pattern, iri_term(class_iri), "?o"))
+    return (
+        f"SELECT ?p (COUNT(*) AS ?tripleCount) (COUNT(DISTINCT ?o) AS ?entityCount)"
+        f" (SUM(IF(isBlank(?s), 1, 0)) AS ?bnodeCount)\n"
+        f"WHERE {{\n"
+        f"{op}\n"
+        f"  ?s ?p ?o .\n"
+        f"}}\n"
+        f"GROUP BY ?p\n"
+        f"ORDER BY DESC(?tripleCount)"
+    )
+
+
+def build_per_class_incoming_source_query(pattern: str, class_iri: str) -> str:
+    op = wrap_pattern(bind_pattern(pattern, iri_term(class_iri), "?o"))
+    sp = wrap_pattern(bind_pattern(pattern, "?sourceClass", "?s"))
+    return (
+        f"SELECT ?p ?sourceClass (COUNT(*) AS ?count)\n"
+        f"WHERE {{\n"
+        f"{op}\n"
+        f"  ?s ?p ?o .\n"
+        f"  FILTER(!isBlank(?s))\n"
+        f"{sp}\n"
+        f"}}\n"
+        f"GROUP BY ?p ?sourceClass\n"
+        f"ORDER BY ?p DESC(?count)"
+    )
+
+
 def build_per_class_total_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(instance_pattern(pattern, class_iri))
-    return f"SELECT (COUNT(DISTINCT ?instance) AS ?totalEntities)\nWHERE {{\n{ip}\n}}"
+    ip = distinct_members(pattern, iri_term(class_iri))
+    return f"SELECT (COUNT(*) AS ?totalEntities)\nWHERE {{\n{ip}\n}}"
 
 
 XSD_NAMESPACE = "http://www.w3.org/2001/XMLSchema#"
@@ -187,21 +181,36 @@ class PropertyFreq:
         self.entity_count += other.entity_count
 
 
+# property profile in one direction, outgoing or incoming
 @dataclass
-class ClassMaps:
+class DirectedMaps:
     freq: dict[str, PropertyFreq] = field(default_factory=dict)
     literals: dict[str, dict[str, int]] = field(default_factory=nested_counter)
-    ranges: dict[str, dict[str, int]] = field(default_factory=nested_counter)
+    # target classes when outgoing, source classes when incoming
+    classes: dict[str, dict[str, int]] = field(default_factory=nested_counter)
+    bnodes: dict[str, int] = field(default_factory=lambda: defaultdict(int))
 
-    def merge(self, other: "ClassMaps") -> None:
+    def merge(self, other: "DirectedMaps") -> None:
         for p, freq in other.freq.items():
             self.freq.setdefault(p, PropertyFreq()).add(freq)
         for p, dtype_counts in other.literals.items():
             for dt, c in dtype_counts.items():
                 self.literals[p][dt] += c
-        for p, target_counts in other.ranges.items():
-            for t, c in target_counts.items():
-                self.ranges[p][t] += c
+        for p, class_counts in other.classes.items():
+            for t, c in class_counts.items():
+                self.classes[p][t] += c
+        for p, c in other.bnodes.items():
+            self.bnodes[p] += c
+
+
+@dataclass
+class ClassMaps:
+    out: DirectedMaps = field(default_factory=DirectedMaps)
+    inc: DirectedMaps = field(default_factory=DirectedMaps)
+
+    def merge(self, other: "ClassMaps") -> None:
+        self.out.merge(other.out)
+        self.inc.merge(other.inc)
 
     @classmethod
     def from_instance_rows(
@@ -213,15 +222,33 @@ class ClassMaps:
     ) -> "ClassMaps":
         maps = cls()
         for row in freq_rows:
-            maps.freq[row["p"]] = PropertyFreq(
+            maps.out.freq[row["p"]] = PropertyFreq(
                 triple_count=int(row["tripleCount"]),
                 entity_count=int(row["entityCount"]),
             )
+            maps.out.bnodes[row["p"]] += int(row.get("bnodeCount") or 0)
         for row in lit_rows:
             dt = manager.format_iri(row["datatype"], wrap=True)
-            maps.literals[row["p"]][dt] += int(row["count"])
+            maps.out.literals[row["p"]][dt] += int(row["count"])
         for row in range_rows:
-            maps.ranges[row["p"]][row["targetClass"]] += int(row["count"])
+            maps.out.classes[row["p"]][row["targetClass"]] += int(row["count"])
+        return maps
+
+    @classmethod
+    def from_incoming_rows(
+        cls,
+        freq_rows: list[dict],
+        source_rows: list[dict],
+    ) -> "ClassMaps":
+        maps = cls()
+        for row in freq_rows:
+            maps.inc.freq[row["p"]] = PropertyFreq(
+                triple_count=int(row["tripleCount"]),
+                entity_count=int(row["entityCount"]),
+            )
+            maps.inc.bnodes[row["p"]] += int(row.get("bnodeCount") or 0)
+        for row in source_rows:
+            maps.inc.classes[row["p"]][row["sourceClass"]] += int(row["count"])
         return maps
 
     @classmethod
@@ -231,23 +258,40 @@ class ClassMaps:
             prop = row.get("property")
             if prop is None:
                 continue
-            p = prop.value
-            maps.freq.setdefault(p, PropertyFreq())
-            target = row.get("target")
-            if target is None:
-                continue
-            if target.typ == "literal":
-                dt_iri = target.datatype or f"{XSD_NAMESPACE}string"
-                maps.literals[p][manager.format_iri(dt_iri, wrap=True)] += 1
-            elif target.typ == "uri" and is_datatype_iri(target.value):
-                maps.literals[p][manager.format_iri(target.value, wrap=True)] += 1
-            elif target.typ == "uri":
-                maps.ranges[p][target.value] += 1
+
+            direction = row.get("dir")
+            if direction is None:
+                raise ValueError(
+                    "Schema pattern returned a row without a bound '?dir'. "
+                    'Every branch of the pattern must bind ?dir to "out" or '
+                    '"in" (e.g. via BIND("out" AS ?dir)).'
+                )
+            if direction.value == "out":
+                side = maps.out
+            elif direction.value == "in":
+                side = maps.inc
             else:
-                # blank-node target (e.g. an owl:unionOf range): no usable class
-                # IRI; keep the property but add no target (renders as bare IRI).
+                raise ValueError(
+                    f"Schema pattern bound ?dir to '{direction.value}', "
+                    'expected "out" or "in".'
+                )
+
+            p = prop.value
+            side.freq.setdefault(p, PropertyFreq())
+            peer = row.get("other")
+            if peer is None:
                 continue
-            maps.freq[p].triple_count += 1
+            if peer.typ == "literal":
+                dt_iri = peer.datatype or f"{XSD_NAMESPACE}string"
+                side.literals[p][manager.format_iri(dt_iri, wrap=True)] += 1
+            elif peer.typ == "uri" and is_datatype_iri(peer.value):
+                side.literals[p][manager.format_iri(peer.value, wrap=True)] += 1
+            elif peer.typ == "uri":
+                side.classes[p][peer.value] += 1
+            else:
+                # anonymous class expression (e.g. an owl:unionOf domain/range)
+                side.bnodes[p] += 1
+            side.freq[p].triple_count += 1
         return maps
 
 
@@ -256,26 +300,26 @@ class NormalizedMaps:
     freq: dict[str, PropertyFreq]
     literals: dict[str, dict[str, int]]
     ranges: dict[str, dict[str, int]]
+    bnodes: dict[str, int]
     prop_variants: dict[str, list[str]]
     target_variants: dict[str, dict[str, list[str]]]
 
 
-def schema_class_pattern(pattern: str) -> str:
-    return pattern.replace("{CLASS}", "?class")
-
-
-def schema_iri_pattern(pattern: str, class_iri: str) -> str:
-    return pattern.replace("{CLASS}", f"<{class_iri}>")
-
-
 def build_schema_class_query(pattern: str) -> str:
-    cp = wrap_pattern(schema_class_pattern(pattern))
+    cp = wrap_pattern(bind_pattern(pattern))
     return f"SELECT DISTINCT ?class\nWHERE {{\n{cp}\n}}"
 
 
 def build_schema_profile_query(pattern: str, class_iri: str) -> str:
-    sp = wrap_pattern(schema_iri_pattern(pattern, class_iri))
-    return f"SELECT DISTINCT ?property ?target\nWHERE {{\n{sp}\n}}"
+    sp = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
+    return f"SELECT DISTINCT ?property ?other ?dir\nWHERE {{\n{sp}\n}}"
+
+
+def build_iri_exists_query(iri: str) -> str:
+    # Class-hood cannot be probed with the shape pattern itself: a real class
+    # that simply has no matching properties fails it just like a non-existent
+    # one. So we only check whether the IRI occurs in the graph at all.
+    return f"ASK {{\n  {{ <{iri}> ?p ?o }}\n  UNION\n  {{ ?s ?p <{iri}> }}\n}}"
 
 
 def property_rank(iri: str, manager: KgManager) -> int:
@@ -351,6 +395,8 @@ def bracketed(items: list[str]) -> str:
 def render_target(target: Target, manager: KgManager) -> str:
     if isinstance(target, TargetLiteral):
         return target.datatype
+    if isinstance(target, TargetBnode):
+        return "BNODE"
     if isinstance(target, TargetClass):
         return resolve_label(
             target.iri,
@@ -360,6 +406,30 @@ def render_target(target: Target, manager: KgManager) -> str:
             variants=target.variants or None,
         )
     return "IRI"
+
+
+def select_from(
+    props: list[PropertyProfile],
+    total_entities: int,
+    cap: int,
+    min_share: float,
+) -> tuple[list[PropertyProfile], int, int]:
+    candidates = props[:cap]
+    omitted = max(0, len(props) - cap)
+
+    kept: list[PropertyProfile] = []
+    filtered = 0
+    for prop in candidates:
+        # only filter rare *instance* properties; a property with no instance
+        # usage (entity_count == 0) is a pure schema declaration, not noise.
+        if total_entities > 0 and prop.entity_count > 0:
+            coverage = prop.entity_count / total_entities
+            if coverage < min_share:
+                filtered += 1
+                continue
+        kept.append(prop)
+
+    return kept, omitted, filtered
 
 
 def select_properties(
@@ -372,22 +442,30 @@ def select_properties(
         if dense
         else shape_config.max_properties_per_class
     )
-    candidates = profile.properties[:cap]
-    omitted = max(0, len(profile.properties) - cap)
+    return select_from(
+        profile.properties,
+        profile.total_entities,
+        cap,
+        shape_config.min_property_share,
+    )
 
-    kept: list[PropertyProfile] = []
-    filtered = 0
-    for prop in candidates:
-        # only filter rare *instance* properties; a property with no instance
-        # usage (entity_count == 0) is a pure schema declaration, not noise.
-        if profile.total_entities > 0 and prop.entity_count > 0:
-            coverage = prop.entity_count / profile.total_entities
-            if coverage < shape_config.min_property_share:
-                filtered += 1
-                continue
-        kept.append(prop)
 
-    return kept, omitted, filtered
+def select_incoming(
+    profile: ClassProfile,
+    shape_config: ShapeConfig,
+    dense: bool,
+) -> tuple[list[PropertyProfile], int, int]:
+    cap = (
+        shape_config.dense_max_incoming_per_class
+        if dense
+        else shape_config.max_incoming_per_class
+    )
+    return select_from(
+        profile.incoming,
+        profile.total_entities,
+        cap,
+        shape_config.min_property_share,
+    )
 
 
 def cardinality_tag_for_property(prop: PropertyProfile, total_entities: int) -> str:
@@ -408,8 +486,9 @@ def emit_pseudo_shex(
     lines = [f"{header} {{"]
 
     kept, omitted, filtered = select_properties(profile, shape_config, dense)
+    in_kept, in_omitted, in_filtered = select_incoming(profile, shape_config, dense)
 
-    for prop in kept:
+    def render(prop: PropertyProfile, inverse: bool) -> str:
         prop_str = resolve_label(
             prop.iri,
             "properties",
@@ -417,22 +496,38 @@ def emit_pseudo_shex(
             manager,
             variants=prop.variants or None,
         )
-        tag = cardinality_tag_for_property(prop, profile.total_entities)
-        tag_suffix = f" {tag}" if tag else ""
-
         if prop.targets:
             value_str = bracketed([render_target(t, manager) for t in prop.targets])
         else:
             value_str = "IRI"
-        lines.append(f"  {prop_str} {value_str}{tag_suffix} ;")
 
-    if omitted or filtered:
-        parts = []
-        if omitted:
-            parts.append(f"{omitted:,} omitted (cap)")
-        if filtered:
-            parts.append(f"{filtered:,} filtered (low coverage)")
+        if inverse:
+            # no cardinality tag: coverage and values-per-entity are defined over
+            # the focus class' own instances and do not carry over to inverse edges.
+            return f"  ^{prop_str} {value_str} ;"
+
+        tag = cardinality_tag_for_property(prop, profile.total_entities)
+        tag_suffix = f" {tag}" if tag else ""
+        return f"  {prop_str} {value_str}{tag_suffix} ;"
+
+    lines.extend(render(prop, inverse=False) for prop in kept)
+    lines.extend(render(prop, inverse=True) for prop in in_kept)
+
+    parts = []
+    if omitted:
+        parts.append(f"{omitted:,} omitted (cap)")
+    if filtered:
+        parts.append(f"{filtered:,} filtered (low coverage)")
+    if in_omitted:
+        parts.append(f"{in_omitted:,} incoming omitted (cap)")
+    if in_filtered:
+        parts.append(f"{in_filtered:,} incoming filtered (low coverage)")
+
+    if parts:
         lines.append(f"  ... {', '.join(parts)}")
+    elif not kept and not in_kept:
+        # make the empty case explicit; an empty body on its own is ambiguous
+        lines.append("  # no properties found for this class")
 
     lines.append("}")
 
@@ -449,7 +544,9 @@ def collect_iris(
     prop_norm = manager.get_normalizer("properties")
     ent_norm = manager.get_normalizer("entities")
     kept, _, _ = select_properties(profile, shape_config, dense)
-    for prop in kept:
+    in_kept, _, _ = select_incoming(profile, shape_config, dense)
+    # inverse edges are rendered too, so their IRIs must count as known as well
+    for prop in chain(kept, in_kept):
         iris.append(prop.iri)
         for v in prop.variants:
             denorm = prop_norm.denormalize(prop.iri, v)
@@ -466,7 +563,7 @@ def collect_iris(
     return iris
 
 
-def group_by_normalized(maps: ClassMaps, manager: KgManager) -> NormalizedMaps:
+def group_by_normalized(maps: DirectedMaps, manager: KgManager) -> NormalizedMaps:
     prop_normalizer = manager.get_normalizer("properties")
     ent_normalizer = manager.get_normalizer("entities")
 
@@ -482,6 +579,7 @@ def group_by_normalized(maps: ClassMaps, manager: KgManager) -> NormalizedMaps:
     new_freq: dict[str, PropertyFreq] = {}
     new_lit: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     new_range: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    new_bnodes: dict[str, int] = defaultdict(int)
     prop_variants: dict[str, list[str]] = defaultdict(list)
     target_variants: dict[str, dict[str, list[str]]] = defaultdict(
         lambda: defaultdict(list)
@@ -498,13 +596,17 @@ def group_by_normalized(maps: ClassMaps, manager: KgManager) -> NormalizedMaps:
         for dt, c in dtype_counts.items():
             new_lit[k][dt] += c
 
-    for p_iri, tc_counts in maps.ranges.items():
+    for p_iri, tc_counts in maps.classes.items():
         k, _ = prop_key(p_iri)
         for t_iri, c in tc_counts.items():
             tk, tv = ent_key(t_iri)
             new_range[k][tk] += c
             if tv is not None and tv not in target_variants[k][tk]:
                 target_variants[k][tk].append(tv)
+
+    for p_iri, c in maps.bnodes.items():
+        k, _ = prop_key(p_iri)
+        new_bnodes[k] += c
 
     # sort variants
     for k in list(prop_variants.keys()):
@@ -518,18 +620,17 @@ def group_by_normalized(maps: ClassMaps, manager: KgManager) -> NormalizedMaps:
         freq=new_freq,
         literals=new_lit,
         ranges=new_range,
+        bnodes=new_bnodes,
         prop_variants=prop_variants,
         target_variants=target_variants,
     )
 
 
-def assemble_profile(
-    class_iri: str,
-    maps: ClassMaps,
-    total_entities: int,
+def assemble_direction(
+    maps: DirectedMaps,
     shape_config: ShapeConfig,
     manager: KgManager,
-) -> ClassProfile:
+) -> list[PropertyProfile]:
     norm = group_by_normalized(maps, manager)
 
     common_props = sorted(
@@ -557,7 +658,13 @@ def assemble_profile(
                 )
             )
 
-        # gap between total triples and the typed buckets are untyped IRIs.
+        # blank nodes are counted separately from the class buckets (the class
+        # queries filter them out), so they never double count.
+        bnode_count = norm.bnodes.get(p_iri, 0)
+        if bnode_count > 0:
+            targets.append(TargetBnode(triple_count=bnode_count))
+
+        # gap between total triples and the classified buckets are untyped IRIs.
         # require the gap to be both positive and a meaningful share of total.
         typed_sum = sum(t.triple_count for t in targets)
         gap = freq.triple_count - typed_sum
@@ -582,11 +689,22 @@ def assemble_profile(
             )
         )
 
+    return properties
+
+
+def assemble_profile(
+    class_iri: str,
+    maps: ClassMaps,
+    total_entities: int,
+    shape_config: ShapeConfig,
+    manager: KgManager,
+) -> ClassProfile:
     return ClassProfile(
         iri=class_iri,
         short_iri=manager.format_iri(class_iri, wrap=True),
         total_entities=total_entities,
-        properties=properties,
+        properties=assemble_direction(maps.out, shape_config, manager),
+        incoming=assemble_direction(maps.inc, shape_config, manager),
     )
 
 
@@ -619,6 +737,15 @@ def collect_class_maps(
         maps.merge(
             ClassMaps.from_instance_rows(freq_rows, lit_rows, range_rows, manager)
         )
+        in_freq_rows = select_values(
+            execute(
+                build_per_class_incoming_frequency_query(instance_pattern, class_iri)
+            )
+        )
+        in_source_rows = select_values(
+            execute(build_per_class_incoming_source_query(instance_pattern, class_iri))
+        )
+        maps.merge(ClassMaps.from_incoming_rows(in_freq_rows, in_source_rows))
         if include_total:
             total_rows = select_values(
                 execute(build_per_class_total_query(instance_pattern, class_iri))
@@ -668,7 +795,22 @@ def compute_shape(
             f"One of the queries for computing the shape of '{class_iri}' failed:\n{e}"
         )
 
-    return assemble_profile(class_iri, maps, total, shape_config, manager)
+    profile = assemble_profile(class_iri, maps, total, shape_config, manager)
+
+    # an empty profile is ambiguous: the class may exist but have no properties
+    # matching the pattern, or the IRI may not be in the graph at all. Only in
+    # that case is the extra probe worth its query.
+    if not profile.properties and not profile.incoming and profile.total_entities == 0:
+        result = manager.execute_sparql(
+            build_iri_exists_query(class_iri),
+            shape_config.request_timeout,
+            shape_config.read_timeout,
+        )
+        assert isinstance(result, AskResult), "Expected ASK query result"
+        if not result.boolean:
+            raise RuntimeError(f"'{class_iri}' does not exist in the knowledge graph")
+
+    return profile
 
 
 def build_shapes(

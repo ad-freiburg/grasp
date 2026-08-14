@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import uuid
@@ -24,6 +25,29 @@ REQUEST_TIMEOUT = (6, 30)
 READ_TIMEOUT = 10
 
 QLEVER_API = "https://qlever.dev/api"
+
+
+def basic_auth_env_vars(kg: str) -> tuple[str, str]:
+    name = re.sub(r"[^A-Z0-9]+", "_", kg.upper()).strip("_")
+    return f"GRASP_BASICAUTH_{name}_USER", f"GRASP_BASICAUTH_{name}_PASSWD"
+
+
+def get_basic_auth(kg: str) -> tuple[str, str] | None:
+    user_var, passwd_var = basic_auth_env_vars(kg)
+    user = os.getenv(user_var)
+    passwd = os.getenv(passwd_var)
+    if user and passwd:
+        return user, passwd
+    elif user or passwd:
+        # half-configured credentials would silently turn into a confusing
+        # 401 further down, so fail here instead
+        missing = passwd_var if user else user_var
+        raise ValueError(
+            f'Incomplete Basic Auth configuration for knowledge graph "{kg}": '
+            f"{missing} is unset or empty"
+        )
+
+    return None
 
 
 def get_qlever_endpoint(kg: str) -> str:
@@ -955,6 +979,7 @@ def execute(
     headers: dict[str, str] | None = None,
     params: dict[str, str] | None = None,
     sparql_result_max_rows: int | None = None,
+    auth: tuple[str, str] | None = None,
     **kwargs: Any,
 ) -> SelectResult | AskResult:
     if headers is None:
@@ -975,6 +1000,7 @@ def execute(
                 },
                 data={**params, "query": sparql},
                 timeout=request_timeout,
+                auth=auth,
                 stream=True,
                 **kwargs,
             )
@@ -1033,6 +1059,33 @@ def execute(
                     body = e.response.text
 
             client_error = status and int(status / 100) == 4
+
+            if status in (401, 403) and auth is None:
+                # almost always a missing Basic Auth configuration, which is
+                # not obvious from the bare status code
+                raise SPARQLExecuteException(
+                    f"Endpoint {endpoint} requires authentication but no "
+                    "credentials were sent, set GRASP_BASICAUTH_<KG>_USER "
+                    "and GRASP_BASICAUTH_<KG>_PASSWD for the knowledge graph "
+                    "in question",
+                    sparql,
+                    status_code=status,
+                ) from e
+
+            if status == 400 and auth is not None:
+                # QLever rejects any Authorization header that is not a Bearer
+                # token, so Basic Auth credentials meant for an authenticating
+                # proxy in front of an endpoint turn into a confusing 400 as
+                # soon as the endpoint is queried directly
+                raise SPARQLExecuteException(
+                    f"Endpoint {endpoint} rejected the request with 400 while "
+                    f"Basic Auth credentials were sent: {qlever_ex or body}; "
+                    "if this endpoint does not require authentication, unset "
+                    "GRASP_BASICAUTH_<KG>_USER and GRASP_BASICAUTH_<KG>_PASSWD "
+                    "for the knowledge graph in question",
+                    sparql,
+                    status_code=status,
+                ) from e
 
             # immediately return on client error
             if client_error and qlever_ex:
@@ -1191,7 +1244,10 @@ def format_identifier(
     return binding.identifier()
 
 
-def load_qlever_prefixes(endpoint: str) -> dict[str, str]:
+def load_qlever_prefixes(
+    endpoint: str,
+    auth: tuple[str, str] | None = None,
+) -> dict[str, str]:
     parse = urlparse(endpoint)
     parse.encode()
     split = parse.path.split("/")
@@ -1201,7 +1257,7 @@ def load_qlever_prefixes(endpoint: str) -> dict[str, str]:
     parse = parse._replace(path=path)
     prefix_url = urlunparse(parse)
 
-    response = requests.get(prefix_url)
+    response = requests.get(prefix_url, auth=auth)
     response.raise_for_status()
     prefixes = {}
     for line in response.text.splitlines():

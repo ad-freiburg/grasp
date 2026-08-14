@@ -352,6 +352,7 @@ def main(args: argparse.Namespace) -> None:
                 manager.endpoint,
                 args.f1_timeout,
                 args.max_result_rows,
+                manager.auth,
             )
             if err is not None:
                 logger.debug(f"Error executing query for F1:\n{err}\n\n{sparql}")

@@ -3,6 +3,7 @@ from unittest.mock import Mock
 from grasp.build.shapes import (
     ClassMaps,
     ClassProfile,
+    DirectedMaps,
     PropertyFreq,
     PropertyProfile,
     assemble_profile,
@@ -15,7 +16,7 @@ from grasp.configs import ShapeConfig
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer, WikidataPropertyNormalizer
 from grasp.shapes import ShapeSample, Target, TargetClass, TargetLiteral
-from grasp.sparql.types import SelectResult
+from grasp.sparql.types import AskResult, SelectResult
 
 
 def _attach_normalizers(
@@ -92,15 +93,30 @@ def literal(value: str, datatype: str | None = None) -> dict:
     return d
 
 
+def make_directed(
+    freq: dict[str, dict] | None = None,
+    literals: dict[str, dict[str, int]] | None = None,
+    ranges: dict[str, dict[str, int]] | None = None,
+    bnodes: dict[str, int] | None = None,
+) -> DirectedMaps:
+    return DirectedMaps(
+        freq={p: PropertyFreq(**f) for p, f in (freq or {}).items()},
+        literals=literals or {},
+        classes=ranges or {},
+        bnodes=bnodes or {},
+    )
+
+
 def make_maps(
     freq: dict[str, dict] | None = None,
     literals: dict[str, dict[str, int]] | None = None,
     ranges: dict[str, dict[str, int]] | None = None,
+    bnodes: dict[str, int] | None = None,
+    incoming: DirectedMaps | None = None,
 ) -> ClassMaps:
     return ClassMaps(
-        freq={p: PropertyFreq(**f) for p, f in (freq or {}).items()},
-        literals=literals or {},
-        ranges=ranges or {},
+        out=make_directed(freq, literals, ranges, bnodes),
+        inc=incoming or DirectedMaps(),
     )
 
 
@@ -224,7 +240,77 @@ class TestAssembleProfile:
         )
         shex = emit_pseudo_shex(profile, manager, shape_config)
 
-        assert shex == "http://ex.org/X {\n}"
+        assert shex == "http://ex.org/X {\n  # no properties found for this class\n}"
+
+    def test_hint_suppressed_when_only_incoming(self):
+        # a class with no properties of its own but with inverse edges is not
+        # empty, so the hint must not fire.
+        manager = make_manager()
+        shape_config = ShapeConfig()
+        profile = assemble_profile(
+            "http://ex.org/Decision",
+            make_maps(
+                incoming=make_directed(
+                    freq={"http://ex.org/hasDecision": {"triple_count": 10}},
+                    ranges={"http://ex.org/hasDecision": {"http://ex.org/Paper": 10}},
+                )
+            ),
+            total_entities=0,
+            shape_config=shape_config,
+            manager=manager,
+        )
+        shex = emit_pseudo_shex(profile, manager, shape_config)
+
+        assert shex == (
+            "http://ex.org/Decision {\n"
+            "  ^http://ex.org/hasDecision http://ex.org/Paper ;\n"
+            "}"
+        )
+
+    def test_incoming_has_its_own_cap(self):
+        manager = make_manager()
+        shape_config = ShapeConfig(max_incoming_per_class=2)
+        incoming = make_directed(
+            freq={f"http://ex.org/in{i}": {"triple_count": 100 - i} for i in range(5)},
+        )
+        profile = assemble_profile(
+            "http://ex.org/C",
+            make_maps(
+                freq={"http://ex.org/out": {"triple_count": 10, "entity_count": 10}},
+                incoming=incoming,
+            ),
+            total_entities=10,
+            shape_config=shape_config,
+            manager=manager,
+        )
+        shex = emit_pseudo_shex(profile, manager, shape_config)
+
+        # the outgoing property is untouched by the incoming cap
+        assert "  http://ex.org/out IRI ;" in shex
+        assert shex.count("  ^") == 2
+        assert "... 3 incoming omitted (cap)" in shex
+
+    def test_blank_node_objects_split_out_of_the_iri_gap(self):
+        manager = make_manager()
+        shape_config = ShapeConfig()
+        profile = assemble_profile(
+            "http://ex.org/C",
+            make_maps(
+                freq={"http://ex.org/p": {"triple_count": 100, "entity_count": 100}},
+                ranges={"http://ex.org/p": {"http://ex.org/T": 40}},
+                bnodes={"http://ex.org/p": 35},
+            ),
+            total_entities=100,
+            shape_config=shape_config,
+            manager=manager,
+        )
+        shex = emit_pseudo_shex(profile, manager, shape_config)
+
+        # 40 typed + 35 blank + 25 untyped IRIs; blanks must not be swallowed
+        # by the gap bucket, which would misreport them as IRI.
+        assert shex == (
+            "http://ex.org/C {\n  http://ex.org/p [ http://ex.org/T BNODE IRI ] ;\n}"
+        )
 
 
 class TestMixedTargets:
@@ -327,11 +413,34 @@ class TestComputeShape:
             ],
         )
         range_result = select(["p", "targetClass", "count"], [])
+        in_freq_result = select(
+            ["p", "tripleCount", "entityCount", "bnodeCount"],
+            [
+                {
+                    "p": uri("http://ex.org/knows"),
+                    "tripleCount": literal("400"),
+                    "entityCount": literal("400"),
+                    "bnodeCount": literal("0"),
+                }
+            ],
+        )
+        in_source_result = select(
+            ["p", "sourceClass", "count"],
+            [
+                {
+                    "p": uri("http://ex.org/knows"),
+                    "sourceClass": uri("http://ex.org/Human"),
+                    "count": literal("400"),
+                }
+            ],
+        )
         total_result = select(["totalEntities"], [{"totalEntities": literal("1000")}])
         manager.execute_sparql.side_effect = [
             freq_result,
             lit_result,
             range_result,
+            in_freq_result,
+            in_source_result,
             total_result,
         ]
 
@@ -343,9 +452,12 @@ class TestComputeShape:
             shape_config=shape_config,
         )
 
+        # inverse edges render with a leading ^ and carry no cardinality tag,
+        # even though the incoming entity counts are known.
         assert emit_pseudo_shex(profile, manager, shape_config) == (
             "http://ex.org/Human {\n"
             "  http://ex.org/name http://www.w3.org/2001/XMLSchema#string ? ;\n"
+            "  ^http://ex.org/knows http://ex.org/Human ;\n"
             "}"
         )
 
@@ -361,22 +473,67 @@ class TestComputeShape:
         except RuntimeError as e:
             assert "timeout" in str(e)
 
+    def test_missing_class_raises_not_found(self):
+        # every profile query legitimately returns zero rows for an IRI that is
+        # not in the graph; only the existence probe can tell the difference.
+        manager = make_manager()
+        manager.execute_sparql.side_effect = [
+            select(["property", "target"], []),
+            AskResult(boolean=False),
+        ]
+
+        try:
+            compute_shape(
+                "http://edas/#MadeUp",
+                manager,
+                schema_pattern="?property rdfs:domain {CLASS} .",
+            )
+            assert False, "Expected an exception"
+        except RuntimeError as e:
+            assert "http://edas/#MadeUp" in str(e)
+            assert "does not exist" in str(e)
+
+    def test_existing_class_without_properties_renders_hint(self):
+        # same empty query results as above, but the IRI does occur in the graph
+        manager = make_manager()
+        manager.execute_sparql.side_effect = [
+            select(["property", "target"], []),
+            AskResult(boolean=True),
+        ]
+
+        shape_config = ShapeConfig()
+        profile = compute_shape(
+            "http://edas/#Acceptance",
+            manager,
+            schema_pattern="?property rdfs:domain {CLASS} .",
+            shape_config=shape_config,
+        )
+
+        assert emit_pseudo_shex(profile, manager, shape_config) == (
+            "http://edas/#Acceptance {\n  # no properties found for this class\n}"
+        )
+
     def test_schema_pattern_classifies_targets(self):
-        # mirrors EDAS: a single (?property, ?target) query, no instances/counts.
+        # mirrors EDAS: a single (?property, ?other, ?dir) query, no instances/counts.
         manager = make_manager()
         xsd_string = "http://www.w3.org/2001/XMLSchema#string"
         schema_result = select(
-            ["property", "target"],
+            ["property", "other", "dir"],
             [
                 {
                     "property": uri("http://edas/#hasFirstName"),
-                    "target": uri(xsd_string),
+                    "other": uri(xsd_string),
+                    "dir": literal("out"),
                 },
                 {
                     "property": uri("http://edas/#attendeeAt"),
-                    "target": uri("http://edas/#ConferenceEvent"),
+                    "other": uri("http://edas/#ConferenceEvent"),
+                    "dir": literal("out"),
                 },
-                {"property": uri("http://edas/#noRange")},  # optional target unbound
+                {
+                    "property": uri("http://edas/#noRange"),
+                    "dir": literal("out"),
+                },  # optional peer unbound
             ],
         )
         manager.execute_sparql.side_effect = [schema_result]
@@ -387,12 +544,13 @@ class TestComputeShape:
             manager,
             schema_pattern=(
                 "?property rdfs:domain {CLASS} . "
-                "OPTIONAL { ?property rdfs:range ?target }"
+                "OPTIONAL { ?property rdfs:range ?other } "
+                'BIND("out" AS ?dir)'
             ),
             shape_config=shape_config,
         )
 
-        # one SELECT DISTINCT ?property ?target query, no instance/total queries
+        # one SELECT DISTINCT ?property ?other ?dir query, no instance/total queries
         assert manager.execute_sparql.call_count == 1
         assert profile.total_entities == 0  # no cardinality tags
 
@@ -403,6 +561,90 @@ class TestComputeShape:
         assert "http://edas/#attendeeAt http://edas/#ConferenceEvent ;" in out
         assert "http://edas/#noRange IRI ;" in out
         assert "?" not in out and "+" not in out and "*" not in out
+
+    def test_schema_pattern_routes_both_directions(self):
+        manager = make_manager()
+        schema_result = select(
+            ["property", "other", "dir"],
+            [
+                {
+                    "property": uri("http://cmt/#hasDecision"),
+                    "other": uri("http://cmt/#Decision"),
+                    "dir": literal("out"),
+                },
+                {
+                    "property": uri("http://cmt/#writePaper"),
+                    "other": uri("http://cmt/#Author"),
+                    "dir": literal("in"),
+                },
+            ],
+        )
+        manager.execute_sparql.side_effect = [schema_result]
+
+        shape_config = ShapeConfig()
+        profile = compute_shape(
+            "http://cmt/#Paper",
+            manager,
+            schema_pattern="{ ?property rdfs:domain {CLASS} } UNION "
+            "{ ?property rdfs:range {CLASS} }",
+            shape_config=shape_config,
+        )
+
+        assert [p.iri for p in profile.properties] == ["http://cmt/#hasDecision"]
+        assert [p.iri for p in profile.incoming] == ["http://cmt/#writePaper"]
+        assert emit_pseudo_shex(profile, manager, shape_config) == (
+            "http://cmt/#Paper {\n"
+            "  http://cmt/#hasDecision http://cmt/#Decision ;\n"
+            "  ^http://cmt/#writePaper http://cmt/#Author ;\n"
+            "}"
+        )
+
+    def test_schema_row_without_dir_raises(self):
+        manager = make_manager()
+        manager.execute_sparql.side_effect = [
+            select(
+                ["property", "other", "dir"],
+                [{"property": uri("http://ex.org/p"), "other": uri("http://ex.org/C")}],
+            )
+        ]
+
+        try:
+            compute_shape(
+                "http://ex.org/X",
+                manager,
+                schema_pattern="?property rdfs:domain {CLASS} .",
+            )
+            assert False, "Expected an exception"
+        except RuntimeError as e:
+            assert "?dir" in str(e)
+
+    def test_blank_node_peer_renders_as_bnode(self):
+        manager = make_manager()
+        schema_result = select(
+            ["property", "other", "dir"],
+            [
+                {
+                    "property": uri("http://cmt/#markConflictOfInterest"),
+                    "other": {"type": "bnode", "value": "bn4"},
+                    "dir": literal("in"),
+                }
+            ],
+        )
+        manager.execute_sparql.side_effect = [schema_result]
+
+        shape_config = ShapeConfig()
+        profile = compute_shape(
+            "http://cmt/#Paper",
+            manager,
+            schema_pattern="?property rdfs:range {CLASS} .",
+            shape_config=shape_config,
+        )
+
+        # an anonymous class expression is reported as BNODE, not as a bare IRI:
+        # claiming IRI would tell the model to bind something that cannot match.
+        assert emit_pseudo_shex(profile, manager, shape_config) == (
+            "http://cmt/#Paper {\n  ^http://cmt/#markConflictOfInterest BNODE ;\n}"
+        )
 
     def test_merged_keeps_schema_only_props_but_filters_rare_instance_props(self):
         # both patterns set: instance + schema bindings merge. A rare *instance*
@@ -445,12 +687,15 @@ class TestComputeShape:
             ],
         )
         total_result = select(["totalEntities"], [{"totalEntities": literal("1000")}])
+        empty_in_freq = select(["p", "tripleCount", "entityCount", "bnodeCount"], [])
+        empty_in_source = select(["p", "sourceClass", "count"], [])
         schema_result = select(
-            ["property", "target"],
+            ["property", "other", "dir"],
             [
                 {
                     "property": uri("http://ex.org/schemaOnly"),
-                    "target": uri("http://ex.org/Target"),
+                    "other": uri("http://ex.org/Target"),
+                    "dir": literal("out"),
                 }
             ],
         )
@@ -458,6 +703,8 @@ class TestComputeShape:
             freq_result,
             lit_result,
             range_result,
+            empty_in_freq,
+            empty_in_source,
             total_result,
             schema_result,
         ]
@@ -468,11 +715,13 @@ class TestComputeShape:
             manager,
             instance_pattern="?instance a {CLASS} .",
             schema_pattern="?property rdfs:domain {CLASS} . "
-            "OPTIONAL { ?property rdfs:range ?target }",
+            'OPTIONAL { ?property rdfs:range ?other } BIND("out" AS ?dir)',
             shape_config=shape_config,
         )
 
-        assert manager.execute_sparql.call_count == 5
+        # 5 instance-side queries (freq, literals, ranges, incoming freq,
+        # incoming sources) + the total + 1 schema query
+        assert manager.execute_sparql.call_count == 7
         out = emit_pseudo_shex(profile, manager, shape_config)
         assert "http://ex.org/name" in out  # high coverage instance prop kept
         assert "http://ex.org/schemaOnly" in out  # schema-only prop kept (no usage)
@@ -603,6 +852,26 @@ class TestWikidataVariantGrouping:
         assert "http://www.wikidata.org/entity/P31" in iris
         assert "http://www.wikidata.org/prop/direct/P31" in iris
         assert "http://www.wikidata.org/prop/P31" in iris
+
+    def test_collect_iris_covers_incoming(self):
+        # inverse edges are rendered, so their IRIs must be marked known too or
+        # know_before_use rejects the very properties the shape just showed.
+        manager = make_manager()
+        profile = assemble_profile(
+            "http://ex.org/Decision",
+            make_maps(
+                incoming=make_directed(
+                    freq={"http://ex.org/hasDecision": {"triple_count": 10}},
+                    ranges={"http://ex.org/hasDecision": {"http://ex.org/Paper": 10}},
+                )
+            ),
+            total_entities=0,
+            shape_config=ShapeConfig(),
+            manager=manager,
+        )
+        iris = collect_iris(profile, manager, ShapeConfig())
+        assert "http://ex.org/hasDecision" in iris
+        assert "http://ex.org/Paper" in iris
 
 
 def _empty_profile(

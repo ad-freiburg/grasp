@@ -1,4 +1,4 @@
-model: env(MODEL:gpt-5.4-mini)
+model: env(MODEL:gpt-5.6-terra)
 model_provider: env(MODEL_PROVIDER:openai/responses)
 model_endpoint: env(MODEL_ENDPOINT:null)
 model_api_key: env(OPENAI_API_KEY)
@@ -24,8 +24,6 @@ knowledge_graphs:
     entities: env(ENTITIES_TYPE:fuzzy)
     properties: env(PROPERTIES_TYPE:embedding)
     notes_file: env(KG_NOTES_FILE:null)
-    info:
-      endpoint: env(KG_ENDPOINT:null)
 
 # note configuration
 max_notes: env(MAX_NOTES:16)

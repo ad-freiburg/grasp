@@ -26,9 +26,11 @@ SearchParams = EmbeddingSearchParams
 # Percentile of the random query-query similarity distribution used as the
 # default min-score floor. The score at this percentile is the similarity that
 # only (100 - p)% of random (i.e. unrelated) pairs exceed, so it acts as a noise
-# floor: a genuine match must be more similar than ~90% of random pairs. The
+# floor: a genuine match must be more similar than ~75% of random pairs. The
 # median (50) is roughly the average random similarity and barely filters noise.
-DEFAULT_MIN_SCORE_PERCENTILE = 90.0
+# Kept below the tail because the random distribution is narrow (p50 to p90 spans
+# only ~0.1 cosine), so a higher percentile starts cutting genuine matches.
+DEFAULT_MIN_SCORE_PERCENTILE = 75.0
 
 
 def estimate_embedding_min_score(

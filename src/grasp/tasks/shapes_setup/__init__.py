@@ -12,11 +12,28 @@ from grasp.utils import FunctionCallException
 
 REFERENCE_SETUP = {
     "instance_pattern": "?instance a {CLASS}",
-    "schema_pattern": (
-        "?property rdfs:domain {CLASS} .\nOPTIONAL { ?property rdfs:range ?target }"
-    ),
-    "description": "All classes derived via rdf:type instances and rdfs:domain properties "
-    "with rdfs:range targets (if any)",
+    "schema_pattern": """\
+{
+  ?property rdfs:domain/(owl:unionOf/rdf:rest*/rdf:first)? {CLASS} .
+  OPTIONAL {
+    { ?property rdfs:range ?other . FILTER(!isBlank(?other)) }
+    UNION
+    { ?property rdfs:range/owl:unionOf/rdf:rest*/rdf:first ?other }
+  }
+  BIND("out" AS ?dir)
+}
+UNION
+{
+  ?property rdfs:range/(owl:unionOf/rdf:rest*/rdf:first)? {CLASS} .
+  OPTIONAL {
+    { ?property rdfs:domain ?other . FILTER(!isBlank(?other)) }
+    UNION
+    { ?property rdfs:domain/owl:unionOf/rdf:rest*/rdf:first ?other }
+  }
+  BIND("in" AS ?dir)
+}""",
+    "description": "All classes derived via rdf:type instances and rdfs:domain/rdfs:range "
+    "property declarations, in both directions",
 }
 
 
@@ -53,10 +70,22 @@ def validate_schema_pattern_format(pattern: str, parser: LR1Parser) -> None:
         raise FunctionCallException(
             "Pattern must contain '{CLASS}' as the class placeholder."
         )
-    if "?property" not in extract_variables(pattern, parser):
+    variables = extract_variables(pattern, parser)
+    if "?property" not in variables:
         raise FunctionCallException(
-            "Schema pattern must bind '?property' as the property variable "
-            "(and optionally '?target' for the property's target)."
+            "Schema pattern must bind '?property' as the property variable."
+        )
+    if "?dir" not in variables:
+        raise FunctionCallException(
+            "Schema pattern must bind '?dir' to \"out\" (properties whose subject "
+            'is the class) or "in" (properties whose object is the class), e.g. via '
+            'BIND("out" AS ?dir). Every branch of the pattern must bind it.'
+        )
+    if "?other" not in variables:
+        raise FunctionCallException(
+            "Schema pattern must bind '?other' as the class or datatype on the "
+            'far side of the property (the target when ?dir is "out", the '
+            'source when ?dir is "in").'
         )
 
 
@@ -84,16 +113,27 @@ Use it when the graph contains instances: the shape of a \
 class is then profiled empirically by walking the triples of its instances. Classes \
 are discovered by replacing {{CLASS}} with ?class.
 
-The schema pattern links properties to their classes by relating a ?property \
-variable (required) and, optionally, a ?target variable to a {{CLASS}} placeholder \
-directly from the schema/ontology - no instances needed. Use it for ontology-only \
-knowledge graphs (or to add curated structure). ?property is a property of the class \
-and ?target is its target type (a class IRI or a datatype IRI such as xsd:string). \
-Examples:
-- RDFS: "?property rdfs:domain {{CLASS}} .\nOPTIONAL {{ ?property rdfs:range ?target }}"
-- Wikidata property constraints: "?prop p:P2302 ?sc . ?sc ps:P2302 wd:Q21503250 ; \
-pq:P2308 {{CLASS}} . ?prop wikibase:directClaim ?property . OPTIONAL {{ ?prop p:P2302 \
-?vc . ?vc ps:P2302 wd:Q21510865 ; pq:P2308 ?target . }}"
+The schema pattern links properties to their classes directly from the \
+schema/ontology - no instances needed. Use it for ontology-only knowledge graphs \
+(or to add curated structure). It must bind three variables:
+- ?property (required): the property related to the class.
+- ?dir (required): "out" when the class is the property's subject side, "in" when \
+it is the property's object side. Bind it per branch, e.g. BIND("out" AS ?dir).
+- ?other (required): the class or datatype on the far side of the property. \
+Usually wrapped in OPTIONAL, since it may be undeclared.
+
+Cover both directions, typically as a UNION of the two branches: a class that is \
+only ever used as a value of other properties has no outgoing properties and would \
+otherwise get an empty shape.
+
+Where the schema points at anonymous nodes instead of class IRIs, traverse them \
+with a property path so the classes behind them are found, and make sure ?other \
+cannot bind to the anonymous node itself. Anonymous nodes that resolve to no class \
+are reported as BNODE.
+
+The reference pattern below covers these cases for a typical schema vocabulary; \
+adapt it to whichever relations play the same roles here, and drop the parts this \
+knowledge graph does not need.
 
 When both patterns are set, their per-class properties/targets are merged.
 
@@ -169,7 +209,7 @@ Reference description:
                     "properties": {
                         "pattern": {
                             "type": ["string", "null"],
-                            "description": "The SPARQL graph pattern binding ?property (and optionally ?target) for {CLASS}, or null to clear it.",
+                            "description": "The SPARQL graph pattern binding ?property, ?dir and ?other for {CLASS}, or null to clear it.",
                         },
                     },
                     "required": ["pattern"],

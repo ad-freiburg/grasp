@@ -40,6 +40,28 @@ def strip_none(s: str | None) -> str | None:
     return s
 
 
+def check_api_response(response: Any, expected: type, endpoint: str | None) -> None:
+    # both the openai and the anthropic sdk hand back the raw response body as
+    # a plain string if the endpoint answers with a 2xx status but something
+    # that is not the expected object, for example an html error page from a
+    # proxy in front of a model server that is down; without this check that
+    # only surfaces as a confusing AttributeError while converting the response
+    if isinstance(response, expected):
+        return
+
+    body = str(response)
+    if len(body) > 500:
+        body = body[:500] + "..."
+
+    # qualify with the sdk package, since both sdks have generic type names
+    # like Response and Message that also exist in grasp itself
+    name = f"{expected.__module__.split('.')[0]}.{expected.__name__}"
+    raise ValueError(
+        f"Expected {name} from {endpoint or 'the default model endpoint'}, "
+        f"but got {type(response).__name__}: {body}"
+    )
+
+
 class Response(BaseModel):
     id: str
     message: str | ResponseMessage | None = None

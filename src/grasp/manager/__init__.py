@@ -63,6 +63,7 @@ from grasp.sparql.utils import (
     format_identifier,
     format_iri,
     format_literal,
+    get_basic_auth,
     get_qlever_endpoint,
     load_iri_and_literal_parser,
     load_sparql_parser,
@@ -93,6 +94,7 @@ class KgManager:
         description: str | None = None,
         headers: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
+        auth: tuple[str, str] | None = None,
     ):
         self.kg = kg
 
@@ -113,6 +115,9 @@ class KgManager:
         self.description = description
         self.headers = headers or {}
         self.params = params or {}
+        # credentials are looked up per knowledge graph, so managers for
+        # different KGs in the same process never share them
+        self.auth = auth or get_basic_auth(self.kg)
 
         self.embedding_models: dict[str, EmbeddingModel] = {}
         self.shapes: Shapes | None = None
@@ -183,6 +188,7 @@ class KgManager:
             self.headers,
             self.params,
             sparql_result_max_rows,
+            self.auth,
         )
 
     def format_sparql_result(

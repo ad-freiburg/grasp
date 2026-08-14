@@ -1,4 +1,4 @@
-model: env(MODEL:gpt-5.4-mini)
+model: env(MODEL:gpt-5.6-terra)
 model_provider: env(MODEL_PROVIDER:openai/responses)
 model_endpoint: env(MODEL_ENDPOINT:null)
 model_api_key: env(MODEL_API_KEY:null)
@@ -43,20 +43,9 @@ random_examples: env(RANDOM_EXAMPLES:false)
 num_examples: env(NUM_EXAMPLES:3)
 
 knowledge_graphs:
-  - kg: wikidata
-    examples: env(WD_EXAMPLES:null)
-    entities: env(WD_ENT_TYPE:fuzzy)
-    properties: env(WD_PROP_TYPE:embedding)
-    notes_file: env(WD_NOTES_FILE:null)
-    info:
-      endpoint: env(WD_ENDPOINT:null)
-  - kg: freebase
-  - kg: dblp
-  - kg: dbpedia
-  - kg: imdb
-  - kg: orkg
-  - kg: osm-planet
-  - kg: uniprot
+  - kg: env(KG:wikidata)
+    examples: env(KG_EXAMPLES:null)
+    notes_file: env(KG_NOTES_FILE:null)
 
 # server config
 port: env(PORT:6789)

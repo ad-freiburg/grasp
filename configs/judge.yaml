@@ -1,4 +1,4 @@
-model: env(MODEL:gpt-5.4-mini)
+model: env(MODEL:gpt-5.6-terra)
 model_provider: env(MODEL_PROVIDER:openai/responses)
 model_endpoint: env(MODEL_ENDPOINT:null)
 model_api_key: env(MODEL_API_KEY:null)
@@ -13,5 +13,3 @@ seed: env(SEED:22)
 
 knowledge_graph:
   kg: env(KG:wikidata)
-  info:
-    endpoint: env(ENDPOINT:null)

@@ -12,6 +12,7 @@ from grasp.model.base import (
     Response,
     ResponseMessage,
     ToolCall,
+    check_api_response,
 )
 from grasp.model.openai import coerce_tool_call_args
 
@@ -151,6 +152,8 @@ class AnthropicModel(Model):
             }
 
         response = self.client.messages.create(**kwargs)
+
+        check_api_response(response, AnthropicMessage, config.model_endpoint)
 
         return self.convert(response, fns)
 

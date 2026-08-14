@@ -76,6 +76,13 @@ def parse_args() -> argparse.Namespace:
         help="Probability of shuffling alternatives within each type bucket",
     )
     parser.add_argument(
+        "--constrain-p",
+        type=float,
+        default=0.1,
+        help="Probability of constraining the alternatives with a SPARQL query "
+        "against the endpoint (like at inference time); expensive, so keep low",
+    )
+    parser.add_argument(
         "--val-output-file",
         type=str,
         default=None,
@@ -127,6 +134,7 @@ def materialize_sample(
     drop_infos_p: float = 0.05,
     drop_target_p: float = 0.1,
     shuffle_alts_p: float = 0.1,
+    constrain_p: float = 0.1,
 ) -> GRISPMaterializedSample:
     if is_val:
         n = 1
@@ -144,6 +152,7 @@ def materialize_sample(
                 drop_infos_p,
                 drop_target_p,
                 shuffle_alts_p,
+                constrain_p,
             )
             selections.append(
                 SelectionSample(
@@ -200,7 +209,12 @@ def main(args: argparse.Namespace) -> None:
         val_samples = None
         samples = samples[skip:]
 
-    config = KgConfig(kg=args.knowledge_graph, info=KgInfo(endpoint=args.endpoint))
+    # only override the kg's own info if an endpoint was given, an explicit
+    # KgInfo(endpoint=None) counts as set and would discard it
+    config = KgConfig(
+        kg=args.knowledge_graph,
+        info=KgInfo(endpoint=args.endpoint) if args.endpoint else None,
+    )
     manager = load_kg_manager(config)
     manager.load_models()
 
@@ -218,6 +232,7 @@ def main(args: argparse.Namespace) -> None:
                 args.drop_infos_p,
                 args.drop_target_p,
                 args.shuffle_alts_p,
+                args.constrain_p,
             )
 
             yield materialized_sample.model_dump()

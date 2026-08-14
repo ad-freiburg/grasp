@@ -14,6 +14,7 @@ from grasp.model.base import (
     Response,
     ResponseMessage,
     ToolCall,
+    check_api_response,
     strip_none,
 )
 
@@ -137,6 +138,8 @@ class OpenAICompletionsModel(Model):
             max_completion_tokens=config.max_completion_tokens,
             **config.model_kwargs,
         )
+
+        check_api_response(response, ChatCompletion, config.model_endpoint)
 
         # convert completions api response to our response
         if not response.choices:
@@ -329,6 +332,8 @@ class OpenAIResponsesModel(Model):
             store=False,
             include=["reasoning.encrypted_content", "message.input_image.image_url"],
         )
+
+        check_api_response(response, OpenAIResponse, config.model_endpoint)
 
         message = None
         reasoning = None

@@ -22,6 +22,7 @@ from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, SelectResult
 from grasp.sparql.utils import (
     execute,
+    get_basic_auth,
     get_qlever_endpoint,
     load_iri_and_literal_parser,
     load_sparql_parser,
@@ -47,6 +48,7 @@ def get_result_or_error(
     endpoint: str,
     timeout: float = 300.0,
     sparql_result_max_rows: int | None = None,
+    auth: tuple[str, str] | None = None,
 ) -> tuple[SelectResult | AskResult | None, str | None]:
     try:
         result = execute(
@@ -55,6 +57,7 @@ def get_result_or_error(
             request_timeout=timeout,
             read_timeout=timeout,
             sparql_result_max_rows=sparql_result_max_rows,
+            auth=auth,
         )
         return result, None
     except Exception as e:
@@ -119,6 +122,8 @@ def evaluate_f1(
 
     endpoint = endpoint or info.endpoint or get_qlever_endpoint(kg)
 
+    auth = get_basic_auth(kg)
+
     def fix(sparql: str) -> str:
         if not fix_prefixes:
             return sparql
@@ -174,6 +179,7 @@ def evaluate_f1(
             endpoint,
             timeout,
             sparql_result_max_rows,
+            auth,
         )
         evaluations[id] = {
             "target": {
@@ -201,6 +207,7 @@ def evaluate_f1(
                 endpoint,
                 timeout,
                 sparql_result_max_rows,
+                auth,
             )
 
         if pred_result is not None:

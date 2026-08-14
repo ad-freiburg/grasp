@@ -57,12 +57,16 @@ def f1_score(
     target: SelectResult | AskResult,
     exact: int | bool = 1024,
 ) -> float:
-    if isinstance(target, AskResult) or isinstance(pred, AskResult):
-        # convert to ask result if needed
-        target = target.to_ask_result() if not isinstance(target, AskResult) else target
+    # if reference is an ask query, convert the select results to a bool
+    if isinstance(target, AskResult):
         pred = pred.to_ask_result() if not isinstance(pred, AskResult) else pred
-
         return float(pred == target)
+
+    # if reference is a select query, a ask prediction cannot be
+    # judged correctly, so return 0.0; if we turn the reference into a bool
+    # a trivial ASK query like ASK { ?s ?p ?o } would always score perfectly
+    if isinstance(pred, AskResult):
+        return 0.0
 
     if pred.is_empty and target.is_empty:
         return 1.0
@@ -170,6 +174,16 @@ class TestF1Score(unittest.TestCase):
         self.assertEqual(f1_score(AskResult(True), AskResult(True)), 1.0)
         self.assertEqual(f1_score(AskResult(False), AskResult(False)), 1.0)
         self.assertEqual(f1_score(AskResult(True), AskResult(False)), 0.0)
+
+    def test_f1_score_ask_prediction_against_select_reference(self):
+        # regression: an ask prediction cannot answer a select reference, so it
+        # must score 0.0. collapsing the reference to a bool instead let a
+        # trivial ASK { ?s ?p ?o } (always true) score 1.0 against any
+        # non-empty reference
+        from grasp.sparql.types import AskResult, SelectResult
+
+        ref = SelectResult(["uri"], [{"uri": "Q1"}, {"uri": "Q2"}])
+        self.assertEqual(f1_score(AskResult(True), ref), 0.0)
 
     def test_f1_score_empty_results(self):
         from grasp.sparql.types import SelectResult

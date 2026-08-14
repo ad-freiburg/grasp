@@ -20,6 +20,7 @@ from grasp.manager.utils import (
 )
 from grasp.sparql.types import Binding
 from grasp.sparql.utils import (
+    get_basic_auth,
     get_qlever_endpoint,
     has_scheme,
     load_iri_and_literal_parser,
@@ -42,6 +43,7 @@ def download_data(
     endpoint: str | None = None,
     params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
+    auth: tuple[str, str] | None = None,
     add_id_as_label: str = "never",
     result_file: str | None = None,
     overwrite: bool = False,
@@ -58,12 +60,14 @@ def download_data(
         assert endpoint is not None, (
             "Endpoint must be provided if no result file is given"
         )
+        # only the user name is logged, never the password
+        auth_fmt = f"Basic Auth as {auth[0]}" if auth else "no Basic Auth"
         logger.info(
             f"Downloading data to {data_file} from {endpoint} "
             f"with parameters {params or {}}, headers {headers or {}}, "
-            f"and SPARQL:\n{sparql}"
+            f"{auth_fmt}, and SPARQL:\n{sparql}"
         )
-        bindings = stream_json(endpoint, sparql, params, headers)
+        bindings = stream_json(endpoint, sparql, params, headers, auth)
 
     dump_jsonl(
         prepare_items(bindings, prefixes, parser, add_id_as_label, logger),
@@ -127,6 +131,8 @@ def get_data(
 
     endpoint = endpoint or info.endpoint or get_qlever_endpoint(kg)
 
+    auth = get_basic_auth(kg)
+
     prefixes = get_common_sparql_prefixes()
     prefixes, _, _ = merge_prefixes(prefixes, info.prefixes or {}, logger)
     logger.info(f"Using prefixes:\n{json.dumps(prefixes, indent=2)}")
@@ -150,6 +156,7 @@ def get_data(
         endpoint,
         params,
         headers,
+        auth,
         add_id_as_label,
         data_file,
         overwrite,
@@ -163,6 +170,7 @@ def stream_json(
     sparql: str,
     params: dict[str, str] | None = None,
     headers: dict[str, str] | None = None,
+    auth: tuple[str, str] | None = None,
 ) -> Iterator[dict]:
     try:
         headers = {
@@ -177,11 +185,44 @@ def stream_json(
             data=sparql,
             params=params,
             headers=headers,
+            auth=auth,
             stream=True,
         )
         response.raise_for_status()
     except Exception as e:
-        raise ValueError(f"Failed to stream SPARQL results as JSON: {e}") from e
+        status = None
+        # the response body carries the actual explanation, e.g. QLever puts
+        # its error message in there, so never drop it from the error
+        body = ""
+        if isinstance(e, requests.HTTPError) and e.response is not None:
+            status = e.response.status_code
+            body = e.response.text.strip()
+
+        if status in (401, 403) and auth is None:
+            raise ValueError(
+                f"Endpoint {endpoint} requires authentication but no "
+                "credentials were sent, set GRASP_BASICAUTH_<KG>_USER and "
+                "GRASP_BASICAUTH_<KG>_PASSWD for the knowledge graph "
+                "in question"
+            ) from e
+
+        if status == 400 and auth is not None:
+            # QLever rejects any Authorization header that is not a Bearer
+            # token, so Basic Auth credentials meant for an authenticating
+            # proxy in front of an endpoint turn into a confusing 400 as soon
+            # as the endpoint is queried directly
+            raise ValueError(
+                f"Endpoint {endpoint} rejected the request with 400 while "
+                f"Basic Auth credentials were sent: {body}; if this endpoint "
+                "does not require authentication, unset "
+                "GRASP_BASICAUTH_<KG>_USER and GRASP_BASICAUTH_<KG>_PASSWD "
+                "for the knowledge graph in question"
+            ) from e
+
+        raise ValueError(
+            f"Failed to stream SPARQL results as JSON: {e}"
+            + (f" ({body})" if body else "")
+        ) from e
 
     class _StreamReader:
         def __init__(self, response: requests.Response) -> None:
@@ -233,6 +274,24 @@ def parse_binding(
     return id, value_binding, tags
 
 
+def id_as_label_field(
+    id_binding: Binding,
+    prefixes: dict[str, str],
+    fields: list[dict],
+) -> dict:
+    # the id-derived label becomes the main field unless the index query
+    # already marked one, so an item whose only field is this one still has a
+    # label. Indices can use this on purpose: freebase properties leave their
+    # name untagged, making the id-derived schema path ("sports sports team
+    # roster from") the main field instead of the ambiguous name ("From").
+    main = any("main" in field["tags"] for field in fields)
+    return {
+        "type": "text",
+        "value": get_value_from_id_binding(id_binding, prefixes),
+        "tags": [] if main else ["main"],
+    }
+
+
 def prepare_items(
     bindings: Iterator[dict],
     prefixes: dict[str, str],
@@ -263,13 +322,7 @@ def prepare_items(
             if add_id_as_label == "always" or (
                 add_id_as_label == "empty" and not fields
             ):
-                fields.append(
-                    {
-                        "type": "text",
-                        "value": get_value_from_id_binding(last_id_binding, prefixes),
-                        "tags": [],
-                    }
-                )
+                fields.append(id_as_label_field(last_id_binding, prefixes, fields))
 
             yield {
                 "identifier": last_id_binding.identifier(),
@@ -293,13 +346,7 @@ def prepare_items(
 
     # dont forget final item
     if add_id_as_label == "always" or (add_id_as_label == "empty" and not fields):
-        fields.append(
-            {
-                "type": "text",
-                "value": get_value_from_id_binding(last_id_binding, prefixes),
-                "tags": [],
-            }
-        )
+        fields.append(id_as_label_field(last_id_binding, prefixes, fields))
 
     yield {
         "identifier": last_id_binding.identifier(),

@@ -14,6 +14,9 @@ class KgInfo(BaseModel):
 class ShapeConfig(BaseModel):
     max_properties_per_class: int = 30
     dense_max_properties_per_class: int = 10
+    # separate caps so inverse edges can never displace outgoing ones
+    max_incoming_per_class: int = 10
+    dense_max_incoming_per_class: int = 3
     max_targets_per_property: int = 5
     min_property_share: float = 0.01
     min_target_share: float = 0.01
