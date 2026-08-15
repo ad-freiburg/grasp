@@ -20,7 +20,7 @@ from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import FunctionCallException, derive_label_from_iri, camel_case_split, format_list, format_notes
 from grasp.tasks.entities import Entity
 from grasp.tasks.om import Correspondence, AlignmentTaskInput, PotentialCorrespondences
-from grasp.sparql.types import SelectResult
+from grasp.sparql.types import ObjType
 
 
 def normalize_name(name: str) -> str:
@@ -40,88 +40,11 @@ def entity_names(entity: Entity) -> list[str]:
     return names
 
 
-def retrieve_all_entities(kg_manager: KgManager) -> dict[str, Entity]:
-    classes_sparql = """
-SELECT DISTINCT ?class WHERE {
-    { ?x a ?class } UNION { ?class a owl:Class } UNION { ?class a rdfs:Class }
-    FILTER(isIRI(?class))
-    FILTER(!STRSTARTS(STR(?class), STR(owl:)))
-    FILTER(!STRSTARTS(STR(?class), STR(rdf:)))
-    FILTER(!STRSTARTS(STR(?class), STR(rdfs:)))
-}
-"""
-
-    properties_sparql = """
-SELECT DISTINCT ?prop WHERE {
-    { ?prop a owl:ObjectProperty } UNION { ?prop a owl:DatatypeProperty }
-    UNION { ?prop a owl:AnnotationProperty } UNION { ?s ?prop ?o }
-    FILTER(isIRI(?prop))
-    FILTER(!STRSTARTS(STR(?prop), STR(owl:)))
-    FILTER(!STRSTARTS(STR(?prop), STR(rdf:)))
-    FILTER(!STRSTARTS(STR(?prop), STR(rdfs:)))
-}
-"""
-
-    instances_sparql = """
-SELECT DISTINCT ?instance WHERE {
-  ?instance a ?class .
-  FILTER(isIRI(?instance))
-  FILTER(!STRSTARTS(STR(?instance), STR(owl:)))
-  FILTER(!STRSTARTS(STR(?instance), STR(rdf:)))
-  FILTER(!STRSTARTS(STR(?instance), STR(rdfs:)))
-  FILTER(!STRSTARTS(STR(?class), STR(owl:)))
-  FILTER(!STRSTARTS(STR(?class), STR(rdf:)))
-  FILTER(!STRSTARTS(STR(?class), STR(rdfs:)))
-}
-"""
-
-    # shared info query, following GRASP's own `*.entity.info.sparql` convention
-    # (id/value/type rows), consumable directly by retrieve_info_for_identifiers
-    info_sparql = """
-SELECT DISTINCT ?id ?value ?type WHERE {
-  {
-    VALUES ?id { {IDS} }
-    ?id rdfs:label ?value
-    FILTER(LANG(?value) = "en")
-    BIND("label" AS ?type)
-  } UNION {
-    VALUES ?id { {IDS} }
-    ?id skos:altLabel ?value
-    FILTER(LANG(?value) = "en")
-    BIND("alias" AS ?type)
-  } UNION {
-    VALUES ?id { {IDS} }
-    ?id rdfs:comment ?value
-    FILTER(LANG(?value) = "en")
-    BIND("info" AS ?type)
-  } UNION {
-    VALUES ?id { {IDS} }
-    ?id a ?t .
-    ?t rdfs:label ?tl
-    FILTER(LANG(?tl) = "en")
-    BIND(CONCAT("is a ", ?tl) AS ?value)
-    BIND("info" AS ?type)
-  }
-}
-ORDER BY ?id ?type ?value
-"""
-
-    classes = kg_manager.execute_sparql(classes_sparql)
-    properties = kg_manager.execute_sparql(properties_sparql)
-    instances = kg_manager.execute_sparql(instances_sparql)
-    assert isinstance(classes, SelectResult), "classes_sparql must be a SELECT query"
-    assert isinstance(properties, SelectResult), "properties_sparql must be a SELECT query"
-    assert isinstance(instances, SelectResult), "instances_sparql must be a SELECT query"
-
-    class_iris = [row["class"].value for row in classes.rows()]
-    property_iris = [row["prop"].value for row in properties.rows()]
-    instance_iris = [row["instance"].value for row in instances.rows()]
-    all_iris = class_iris + property_iris + instance_iris
-
-    info = kg_manager.retrieve_info_for_identifiers(all_iris, info_sparql)
-
+def _entities_from_ids(
+    kg_manager: KgManager, ids: list[str], info: dict[str, dict]
+) -> dict[str, Entity]:
     result: dict[str, Entity] = {}
-    for iri in all_iris:
+    for iri in ids:
         entry = info.get(iri, {})
         label = entry.get("label") or derive_label_from_iri(iri, kg_manager.prefixes)
 
@@ -133,6 +56,37 @@ ORDER BY ?id ?type ?value
             infos=entry.get("other", []),
         )
 
+    return result
+
+
+def retrieve_entities_and_properties(kg_manager: KgManager) -> dict[str, Entity]:
+    """
+    Retrieves all classes and properties of a KG using GRASP's own, already
+    built entities/properties indices instead of custom SPARQL queries.
+    Does not cover individuals/instances.
+    """
+    entities_data = kg_manager.get_data(ObjType.ENTITY.index_name)
+    properties_data = kg_manager.get_data(ObjType.PROPERTY.index_name)
+
+    property_ids = [identifier for identifier, _ in properties_data]
+    property_id_set = set(property_ids)
+
+    # the entities index may already include properties (depends on how the KG
+    # was set up) - exclude those here so they are only queried/enriched once,
+    # via the properties index's own, property-specific info SPARQL
+    entity_ids = [
+        identifier for identifier, _ in entities_data if identifier not in property_id_set
+    ]
+
+    entity_info = kg_manager.get_info_for_identifiers_from_index(
+        entity_ids, ObjType.ENTITY.index_name
+    )
+    property_info = kg_manager.get_info_for_identifiers_from_index(
+        property_ids, ObjType.PROPERTY.index_name
+    )
+
+    result = _entities_from_ids(kg_manager, entity_ids, entity_info)
+    result.update(_entities_from_ids(kg_manager, property_ids, property_info))
     return result
 
 
@@ -223,8 +177,8 @@ def write_jsonl_input(
 
 
 def om_pretask(source_manager: KgManager, target_manager: KgManager, output_file: Path, config: GraspConfig):
-    source_entities = retrieve_all_entities(source_manager)
-    target_entities = retrieve_all_entities(target_manager)
+    source_entities = retrieve_entities_and_properties(source_manager)
+    target_entities = retrieve_entities_and_properties(target_manager)
 
     matches, unmatched = perform_string_matching(source_entities, target_entities)
 
