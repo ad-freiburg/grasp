@@ -1,25 +1,15 @@
-import argparse
 import json
 import logging
 from pathlib import Path
-import random
-from typing import Any
-from enum import StrEnum
-
-from pydantic import BaseModel
-from universal_ml_utils.table import generate_table
 
 import re
 import unicodedata
 
 from grasp.configs import GraspConfig
-from grasp.functions import find_manager
-from grasp.manager import KgManager, format_kgs
-from grasp.model import Message
-from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.utils import FunctionCallException, derive_label_from_iri, camel_case_split, format_list, format_notes
+from grasp.manager import KgManager
+from grasp.utils import derive_label_from_iri, camel_case_split
 from grasp.tasks.entities import Entity
-from grasp.tasks.om import Correspondence, AlignmentTaskInput, PotentialCorrespondences
+from grasp.tasks.om import AlignmentTaskInput, PotentialCorrespondences
 from grasp.sparql.types import ObjType
 
 
@@ -59,24 +49,39 @@ def _entities_from_ids(
     return result
 
 
+def _filter_own_namespace(identifiers: list[str], kg_manager: KgManager) -> list[str]:
+    """
+    Keeps only identifiers within the KG's own namespace(s).
+    """
+    own_namespaces = tuple(kg_manager.kg_prefixes.values())
+    if not own_namespaces:
+        # no declared KG-specific namespace to filter against - fail open
+        # rather than risk filtering out everything
+        return identifiers
+    return [i for i in identifiers if i.startswith(own_namespaces)]
+
+
 def retrieve_entities_and_properties(kg_manager: KgManager) -> dict[str, Entity]:
     """
     Retrieves all classes and properties of a KG using GRASP's own, already
-    built entities/properties indices instead of custom SPARQL queries.
+    built entities/properties indices.
     Does not cover individuals/instances.
     """
     entities_data = kg_manager.get_data(ObjType.ENTITY.index_name)
     properties_data = kg_manager.get_data(ObjType.PROPERTY.index_name)
 
-    property_ids = [identifier for identifier, _ in properties_data]
+    property_ids = _filter_own_namespace(
+        [identifier for identifier, _ in properties_data], kg_manager
+    )
     property_id_set = set(property_ids)
 
     # the entities index may already include properties (depends on how the KG
     # was set up) - exclude those here so they are only queried/enriched once,
     # via the properties index's own, property-specific info SPARQL
-    entity_ids = [
-        identifier for identifier, _ in entities_data if identifier not in property_id_set
-    ]
+    entity_ids = _filter_own_namespace(
+        [identifier for identifier, _ in entities_data if identifier not in property_id_set],
+        kg_manager,
+    )
 
     entity_info = kg_manager.get_info_for_identifiers_from_index(
         entity_ids, ObjType.ENTITY.index_name
