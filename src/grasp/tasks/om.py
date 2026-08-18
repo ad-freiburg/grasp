@@ -507,15 +507,14 @@ def add_1_to_1_correspondence(
         if result.valid:
             return f"{success_message}\n{result.message}"
 
-
         # if logmap result is not valid, there is a logical conflict
         # connected to the new correspondence or the involved iris
         # aren't correct
         state.discard_correspondence_of(full_iri_source)
         return (
-                f"Did NOT align {entity_source} with {entity_target}: setting this correspondence "
-                "triggers a logical conflict according to LogMap.\n"
-                f"LogMap's message: {result.message}\n"
+            f"Did not align {entity_source} with {entity_target}: setting this correspondence "
+            "triggers a logical conflict according to LogMap.\n"
+            f"LogMap's message: {result.message}\n"
             )
 
     except ValueError as e:
@@ -639,16 +638,20 @@ def input_instructions(
         shape_text = get_entity_shape_text(manager, entity.identifier, known)
         if shape_text is not None:
             shape_shown = True
-            block += f"```pseudo-shex\n{shape_text}\n```\n"
+            block += f"\n```shape: \n{shape_text}\n```\n"
         return block
 
     # potential matches to validate
-    if len(task_input.potential_correspondences) != 0:
-        instructions += """\
-You are given a list of potential correspondences found by simple string matching. \
-Verify them and set the correspondences using the built-in functions for pairs you truely \
-find to represent an equivalnce. Remeber the injectivity rule.
-
+    len_pc = len(task_input.potential_correspondences)
+    if len_pc > 0:
+        quantity_corrs = "a list of potential correspondences"
+        if len_pc == 1:
+            quantity_corrs = "a potential correspondence"
+        instructions += f"""\
+You are given {quantity_corrs} found by simple string matching. \
+Assume by default that exact lexical matches represent valid equivalence correspondences. \
+Your sole responsibility is to filter out clear homonyms e.g., Title as a publication \
+title vs. Title as an academic degree. Do not overthink minor nuances.
 """
         for corr in task_input.potential_correspondences:
             block_num += 1
@@ -659,10 +662,19 @@ find to represent an equivalnce. Remeber the injectivity rule.
             instructions += "\n"
 
     # naked entities without potential equivalent candidates
-    if len(task_input.unmatched_entities) != 0:
+    len_corrs = len(task_input.unmatched_entities)
+    if len_corrs > 0:
+        filler_1 = "entities"
+        filler_2 = "entities"
+        filler_3 = "they have no appropriate matches"
+        if len_corrs == 1:
+            filler_1 = "entity"
+            filler_2 = "an entity"
+            filler_3 = "it has no appropriate match"
         instructions += f"""\
-Align the following entities from the source ontology {task_input.source_kg} \
-with entities from the target ontology {task_input.target_kg}:
+Align the following {filler_1} from the source ontology {task_input.source_kg} \
+with {filler_2} from the target ontology {task_input.target_kg} or verify {filler_3}. \
+Remember the rules: injectivity, strict equivalence, precision over recall:
 
 """
         if task_input.description:
