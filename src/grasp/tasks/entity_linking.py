@@ -207,14 +207,7 @@ class AnnotationState:
                 if annot.identifier in entities:
                     continue
 
-                alternative = Alternative(
-                    annot.identifier,
-                    short_identifier=annot.entity,
-                    label=annot.label,
-                    aliases=annot.aliases,
-                    info=annot.infos,
-                )
-                entities[annot.identifier] = alternative
+                entities[annot.identifier] = annot.to_alternative()
 
             if entities:
                 annotations = format_list(
