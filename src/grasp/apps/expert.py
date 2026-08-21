@@ -48,7 +48,7 @@ st.markdown(
 )
 
 
-def _parse_args(argv: list[str]) -> argparse.Namespace:
+def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Blind expert evaluation app")
     parser.add_argument("input_file", help="JSONL with id/question/sparql")
     parser.add_argument(
@@ -70,28 +70,28 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 @st.cache_resource
-def _load_kg_manager_cached(kg_config_path: str):
+def load_kg_manager_cached(kg_config_path: str):
     cfg = KgConfig(**load_config(kg_config_path))
     return load_kg_manager(cfg)
 
 
 @st.cache_data
-def _load_jsonl_cached(path: str, _mtime: float) -> list:
+def load_jsonl_cached(path: str, _mtime: float) -> list:
     return load_jsonl(path)
 
 
-def _mtime(p: str) -> float:
+def mtime(p: str) -> float:
     try:
         return os.path.getmtime(p)
     except OSError:
         return 0.0
 
 
-def _letter(i: int) -> str:
+def candidate_letter(i: int) -> str:
     return chr(ord("A") + i)
 
 
-def _evaluation_label(path: str) -> dict[str, str]:
+def evaluation_label(path: str) -> dict[str, str]:
     p = Path(path)
     filename = p.stem
     benchmark = p.parent.name if p.parent.name else "?"
@@ -104,7 +104,7 @@ def _evaluation_label(path: str) -> dict[str, str]:
     return {"group": group, "benchmark": benchmark, "evaluation": filename}
 
 
-def _load_evaluation(path: str, prediction_files: list[str]) -> dict:
+def load_evaluation(path: str, prediction_files: list[str]) -> dict:
     if os.path.exists(path):
         try:
             data = load_json(path)
@@ -130,7 +130,7 @@ def _load_evaluation(path: str, prediction_files: list[str]) -> dict:
     }
 
 
-def _recompute_summary(evaluation_state: dict) -> None:
+def recompute_summary(evaluation_state: dict) -> None:
     prediction_files: list[str] = evaluation_state["prediction_files"]
     evaluations = evaluation_state["evaluations"]
 
@@ -175,12 +175,12 @@ def _recompute_summary(evaluation_state: dict) -> None:
     evaluation_state["summary"] = summary
 
 
-def _save_evaluation(evaluation_state: dict, path: str) -> None:
-    _recompute_summary(evaluation_state)
+def save_evaluation(evaluation_state: dict, path: str) -> None:
+    recompute_summary(evaluation_state)
     dump_json(evaluation_state, path)
 
 
-def _status_marker(evaluations: dict, example_id: str) -> str:
+def status_marker(evaluations: dict, example_id: str) -> str:
     ev = evaluations.get(example_id)
     if not ev:
         return "○"
@@ -189,7 +189,7 @@ def _status_marker(evaluations: dict, example_id: str) -> str:
     return "✅"
 
 
-def _score_implied_choice(scores: dict[str, int]) -> tuple[str, int, list[str]] | None:
+def score_implied_choice(scores: dict[str, int]) -> tuple[str, int, list[str]] | None:
     if not scores:
         return None
 
@@ -203,7 +203,7 @@ def _score_implied_choice(scores: dict[str, int]) -> tuple[str, int, list[str]] 
 
 def main() -> None:
     # Streamlit swallows argv[0] as the script name; everything after `--` is ours.
-    args = _parse_args(sys.argv[1:])
+    args = parse_args(sys.argv[1:])
 
     prediction_files: list[str] = list(args.prediction_files)
     if len(prediction_files) < 2:
@@ -212,7 +212,7 @@ def main() -> None:
 
     # Load input data
     try:
-        inputs = _load_jsonl_cached(args.input_file, _mtime(args.input_file))
+        inputs = load_jsonl_cached(args.input_file, mtime(args.input_file))
     except Exception as e:
         st.error(f"Failed to load input file {args.input_file}: {e}")
         return
@@ -228,7 +228,7 @@ def main() -> None:
     pred_by_file: list[dict] = []
     for pf in prediction_files:
         try:
-            rows = _load_jsonl_cached(pf, _mtime(pf))
+            rows = load_jsonl_cached(pf, mtime(pf))
         except Exception as e:
             st.error(f"Failed to load prediction file {pf}: {e}")
             return
@@ -239,19 +239,17 @@ def main() -> None:
     # Evaluation state in session (persisted on each save)
     state_key = f"expert_eval::{args.evaluation}"
     if state_key not in st.session_state:
-        st.session_state[state_key] = _load_evaluation(
-            args.evaluation, prediction_files
-        )
+        st.session_state[state_key] = load_evaluation(args.evaluation, prediction_files)
     evaluation_state: dict = st.session_state[state_key]
     evaluation_state["expert_config"]["kg_config"] = args.kg_config
     evaluations: dict = evaluation_state["evaluations"]
 
     # Sidebar: example picker
     st.sidebar.title("Blind Expert Evaluation")
-    evaluation_label = _evaluation_label(args.evaluation)
-    st.sidebar.markdown(f"**Group:** `{evaluation_label['group']}`")
-    st.sidebar.markdown(f"**Benchmark:** `{evaluation_label['benchmark']}`")
-    st.sidebar.markdown(f"**Evaluation:** `{evaluation_label['evaluation']}`")
+    label = evaluation_label(args.evaluation)
+    st.sidebar.markdown(f"**Group:** `{label['group']}`")
+    st.sidebar.markdown(f"**Benchmark:** `{label['benchmark']}`")
+    st.sidebar.markdown(f"**Evaluation:** `{label['evaluation']}`")
     st.sidebar.caption(f"{len(prediction_files)} candidate file(s)")
     sidebar_judgement_placeholder = st.sidebar.empty()
 
@@ -283,8 +281,8 @@ def main() -> None:
         st.sidebar.success("All examples have been evaluated 🎉")
         id_pool = example_ids
 
-    def _format_id(i: str) -> str:
-        marker = _status_marker(evaluations, i)
+    def format_id(i: str) -> str:
+        marker = status_marker(evaluations, i)
         q = input_by_id[i].get("question", "")
         return f"{marker} {i} — {q}"
 
@@ -308,7 +306,7 @@ def main() -> None:
     selected_id = st.sidebar.selectbox(
         "Sample",
         id_pool,
-        format_func=_format_id,
+        format_func=format_id,
         key="example_selectbox",
     )
     st.session_state["current_id"] = selected_id
@@ -332,11 +330,13 @@ def main() -> None:
     candidate_entries = []  # list[(letter, canonical_idx, output_entry)]
     for letter_i, canonical_idx in enumerate(perm):
         output_entry = pred_by_file[canonical_idx].get(selected_id)
-        candidate_entries.append((_letter(letter_i), canonical_idx, output_entry))
+        candidate_entries.append(
+            (candidate_letter(letter_i), canonical_idx, output_entry)
+        )
 
     existing = evaluations.get(selected_id) or {}
     has_existing_evaluation = selected_id in evaluations
-    letters = [_letter(i) for i in range(len(prediction_files))]
+    letters = [candidate_letter(i) for i in range(len(prediction_files))]
     choice_options = letters + ["Tie"]
 
     default_choice = "Tie"
@@ -344,11 +344,11 @@ def main() -> None:
         try:
             canonical_verdict = int(existing["verdict"])
             letter_idx = perm.index(canonical_verdict)
-            default_choice = _letter(letter_idx)
+            default_choice = candidate_letter(letter_idx)
         except (ValueError, IndexError):
             default_choice = "Tie"
 
-    def _render_judgement_panel(
+    def render_judgement_panel(
         panel, in_sidebar: bool
     ) -> tuple[str, str, dict[str, int], bool, bool]:
         with panel:
@@ -428,7 +428,7 @@ def main() -> None:
             letter_scores,
             submitted_next,
             submitted_secondary,
-        ) = _render_judgement_panel(
+        ) = render_judgement_panel(
             sidebar_judgement_placeholder.container(), in_sidebar=True
         )
     else:
@@ -440,7 +440,7 @@ def main() -> None:
             letter_scores,
             submitted_next,
             submitted_secondary,
-        ) = _render_judgement_panel(verdict_col, in_sidebar=False)
+        ) = render_judgement_panel(verdict_col, in_sidebar=False)
 
     with gt_col:
         with st.expander("Ground Truth", expanded=False):
@@ -452,7 +452,7 @@ def main() -> None:
                 st.code(gt_sparql, language="sparql")
                 if args.kg_config:
                     try:
-                        manager = _load_kg_manager_cached(args.kg_config)
+                        manager = load_kg_manager_cached(args.kg_config)
                     except Exception as e:
                         st.error(
                             f"Failed to load KG manager from {args.kg_config}: {e}"
@@ -506,7 +506,7 @@ def main() -> None:
                         render_messages(output_entry)
                 render_output_panel(output_entry, show_answer=False)
 
-    def _commit_evaluation(
+    def commit_evaluation(
         selected_choice: str,
         selected_explanation: str,
         selected_letter_scores: dict[str, int],
@@ -522,7 +522,9 @@ def main() -> None:
         if rate_each:
             scores_canonical = {}
             for letter, canonical_idx, _ in candidate_entries:
-                scores_canonical[str(canonical_idx)] = int(selected_letter_scores[letter])
+                scores_canonical[str(canonical_idx)] = int(
+                    selected_letter_scores[letter]
+                )
 
         evaluations[selected_id] = {
             "verdict": canonical_verdict,
@@ -532,7 +534,7 @@ def main() -> None:
         }
 
         try:
-            _save_evaluation(evaluation_state, args.evaluation)
+            save_evaluation(evaluation_state, args.evaluation)
         except Exception as e:
             st.error(f"Failed to save evaluation: {e}")
             return
@@ -556,7 +558,7 @@ def main() -> None:
     pending_confirmation_key = f"score_verdict_confirmation::{selected_id}"
 
     @st.dialog("Score and verdict differ")
-    def _render_score_verdict_confirmation() -> None:
+    def render_score_verdict_confirmation() -> None:
         pending = st.session_state.get(pending_confirmation_key)
         if not pending:
             return
@@ -586,7 +588,7 @@ def main() -> None:
                 use_container_width=True,
             ):
                 st.session_state.pop(pending_confirmation_key, None)
-                _commit_evaluation(
+                commit_evaluation(
                     pending["choice"],
                     pending["explanation"],
                     pending["letter_scores"],
@@ -599,7 +601,7 @@ def main() -> None:
                 use_container_width=True,
             ):
                 st.session_state.pop(pending_confirmation_key, None)
-                _commit_evaluation(
+                commit_evaluation(
                     score_choice,
                     pending["explanation"],
                     pending["letter_scores"],
@@ -617,7 +619,7 @@ def main() -> None:
         if has_existing_evaluation:
             del evaluations[selected_id]
             try:
-                _save_evaluation(evaluation_state, args.evaluation)
+                save_evaluation(evaluation_state, args.evaluation)
             except Exception as e:
                 st.error(f"Failed to clear evaluation: {e}")
             else:
@@ -626,7 +628,7 @@ def main() -> None:
                 st.session_state["current_id"] = selected_id
                 st.rerun()
     elif submitted_secondary or submitted_next:
-        score_implied = _score_implied_choice(letter_scores) if rate_each else None
+        score_implied = score_implied_choice(letter_scores) if rate_each else None
         if score_implied is not None and choice != score_implied[0]:
             score_choice, top_score, top_letters = score_implied
             st.session_state[pending_confirmation_key] = {
@@ -638,13 +640,13 @@ def main() -> None:
                 "top_score": top_score,
                 "top_letters": top_letters,
             }
-            _render_score_verdict_confirmation()
+            render_score_verdict_confirmation()
             dialog_rendered = True
         else:
-            _commit_evaluation(choice, explanation, letter_scores, submitted_next)
+            commit_evaluation(choice, explanation, letter_scores, submitted_next)
 
     if st.session_state.get(pending_confirmation_key) and not dialog_rendered:
-        _render_score_verdict_confirmation()
+        render_score_verdict_confirmation()
 
 
 if __name__ == "__main__":

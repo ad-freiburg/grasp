@@ -79,10 +79,10 @@ class Item:
         return self.full_prefix[start:end]
 
 
-def _byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int, int]:
+def byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int, int]:
     if "children" in parse:
         for child in parse["children"]:
-            start, end = _byte_span(child, start, end)
+            start, end = byte_span(child, start, end)
         return start, end
 
     f, t = parse["byte_span"]
@@ -92,14 +92,14 @@ def _byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int
 COMMON_PREFIXES = get_common_sparql_prefixes()
 
 
-def _get_item(
+def get_item(
     parse: dict,
     manager: KgManager,
     sparql_encoded: bytes,
 ) -> Item | None:
     # return tuple with identifier, variant, label, synonyms
     # and additional info
-    (byte_start, byte_end) = _byte_span(parse)
+    (byte_start, byte_end) = byte_span(parse)
     prefix = sparql_encoded[:byte_start].decode()
     item = sparql_encoded[byte_start:byte_end].decode()
     suffix = sparql_encoded[byte_end:].decode()
@@ -265,13 +265,13 @@ def extract_sparql_items(
         chain(
             (
                 # get IRIs (excluding prefixes)
-                _get_item(iri, manager, sparql_encoded)
+                get_item(iri, manager, sparql_encoded)
                 for iri in find_all(parse, name="iri", skip={"Prologue"})
             ),
             # commented out for now, since not used anywhere
             # (
             #     # get literals in triples
-            #     _get_item(lit, manager, sparql_encoded)
+            #     get_item(lit, manager, sparql_encoded)
             #     for triple in find_all(parse, name="TriplesSameSubject")
             #     for lit in find_all(
             #         triple,

@@ -164,7 +164,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             return generate_and_check_share_id(max_retries - 1)
 
         @app.post("/save")
-        async def _save(request: State):
+        async def save_state(request: State):
             share_id = generate_and_check_share_id()
             if share_id is None:
                 logger.error(
@@ -192,7 +192,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             return {"id": share_id}
 
         @app.get("/load/{share_id}")
-        async def _load(share_id: str):
+        async def load_state(share_id: str):
             try:
                 path = os.path.join(share_dir, f"{share_id}.json")
                 data = load_json(path)
@@ -204,15 +204,15 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                 raise HTTPException(status_code=500, detail="Failed to load state")
 
     @app.get("/knowledge_graphs")
-    async def _knowledge_graphs():
+    async def get_knowledge_graphs():
         return kgs
 
     @app.get("/config")
-    async def _config():
+    async def get_config():
         return config.model_dump()
 
     @app.post("/run")
-    async def _run(request: Request, http_request: HTTPRequest):
+    async def run_task(request: Request, http_request: HTTPRequest):
         nonlocal active_connections
         nonlocal rate_limiter
 
@@ -341,7 +341,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             logger.info(f"{prefix} Request finished ({active_connections=:,})")
 
     @app.websocket("/live")
-    async def _live(websocket: WebSocket):
+    async def live_socket(websocket: WebSocket):
         nonlocal active_connections
         nonlocal rate_limiter
 
@@ -556,7 +556,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             )
 
         @app.post("/transcribe")
-        async def _transcribe(
+        async def transcribe_audio(
             http_request: HTTPRequest,
             file: UploadFile = File(...),
         ):

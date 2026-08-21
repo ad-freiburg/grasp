@@ -217,20 +217,20 @@ def parse_into_binding(
 
 
 def parse_to_string(parse: dict) -> str:
-    def _flatten(parse: dict) -> str:
+    def flatten(parse: dict) -> str:
         if "value" in parse:
             return parse["value"]
         elif "children" in parse:
             children = []
             for p in parse["children"]:
-                child = _flatten(p)
+                child = flatten(p)
                 if child != "":
                     children.append(child)
             return " ".join(children)
         else:
             return ""
 
-    return _flatten(parse)
+    return flatten(parse)
 
 
 def parse_to_string_with_whitespace(parse: dict, encoded: bytes) -> str:
@@ -810,7 +810,7 @@ def prettify(
     s = ""
     last = None
 
-    def _pretty(parse: dict) -> bool:
+    def pretty(parse: dict) -> bool:
         nonlocal current_indent
         nonlocal s
         nonlocal last
@@ -836,14 +836,14 @@ def prettify(
             s += parse["value"]
 
         elif len(parse["children"]) == 1:
-            newline = _pretty(parse["children"][0])
+            newline = pretty(parse["children"][0])
 
         else:
             for i, child in enumerate(parse["children"]):
                 if i > 0 and not newline:  # and child["name"] != "(":
                     s += " "
 
-                newline = _pretty(child)
+                newline = pretty(child)
 
         if not newline and parse["name"] in [
             "{",
@@ -866,7 +866,7 @@ def prettify(
 
         return newline
 
-    newline = _pretty(parse)
+    newline = pretty(parse)
     if newline:
         s = s.rstrip()
 

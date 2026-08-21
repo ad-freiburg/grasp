@@ -354,11 +354,11 @@ class Selection:
 def group_selections(
     selections: list[Selection],
 ) -> dict[ObjType, list[tuple[Alternative, list[str]]]]:
-    def _key(sel: Selection) -> tuple[str, str]:
+    def key(sel: Selection) -> tuple[str, str]:
         return sel.alternative.identifier, sel.obj_type.name
 
     grouped = {}
-    for _, group in groupby(sorted(selections, key=_key), key=_key):
+    for _, group in groupby(sorted(selections, key=key), key=key):
         selections = list(group)
         obj_type = selections[0].obj_type
 

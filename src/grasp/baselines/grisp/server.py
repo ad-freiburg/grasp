@@ -126,15 +126,15 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
     )
 
     @app.get("/knowledge_graphs")
-    async def _knowledge_graphs():
+    async def get_knowledge_graphs():
         return [config.knowledge_graph.kg]
 
     @app.get("/config")
-    async def _config():
+    async def get_config():
         return config.model_dump()
 
     @app.post("/run")
-    async def _run(request: Request, http_request: HTTPRequest):
+    async def run_task(request: Request, http_request: HTTPRequest):
         global active_connections
 
         if active_connections >= config.max_connections:
@@ -226,7 +226,7 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
             logger.info(f"HTTP run request finished ({active_connections=:,})")
 
     @app.websocket("/live")
-    async def _live(websocket: WebSocket):
+    async def live_socket(websocket: WebSocket):
         global active_connections
         assert websocket.client is not None
         client = f"{websocket.client.host}:{websocket.client.port}"

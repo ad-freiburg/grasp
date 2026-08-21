@@ -44,15 +44,15 @@ class _FakeResponse:
         self.closed = True
 
 
-def _fix(sparql: str, **kwargs) -> str:
+def fix(sparql: str, **kwargs) -> str:
     return fix_prefixes(sparql, SPARQL_PARSER, IRI_PARSER, PREFIXES, **kwargs)
 
 
-def _parse(sparql: str) -> dict:
+def parse_sparql(sparql: str) -> dict:
     return SPARQL_PARSER.parse(sparql)
 
 
-def _derive(query: str, **kwargs):
+def derive(query: str, **kwargs):
     # the placeholder being resolved is marked <rep>...</rep>
     assert "<rep>" in query, "Expected <rep> marker in test query"
     return derive_constraint_query_from_sparql(query, SPARQL_PARSER, **kwargs)
@@ -181,34 +181,34 @@ class TestQueryType:
 
 class TestFixPrefixes:
     def test_replaces_iri_with_prefix(self):
-        result = _fix("SELECT ?s WHERE { ?s <http://example.org/prop/p1> ?o }")
+        result = fix("SELECT ?s WHERE { ?s <http://example.org/prop/p1> ?o }")
         assert result == (
             "PREFIX wdt: <http://example.org/prop/>\nSELECT ?s WHERE { ?s wdt:p1 ?o }"
         )
 
     def test_preserves_spaces(self):
-        result = _fix("SELECT  ?s  WHERE  {  ?s  <http://example.org/prop/p1>  ?o  }")
+        result = fix("SELECT  ?s  WHERE  {  ?s  <http://example.org/prop/p1>  ?o  }")
         assert result == (
             "PREFIX wdt: <http://example.org/prop/>\n"
             "SELECT  ?s  WHERE  {  ?s  wdt:p1  ?o  }"
         )
 
     def test_preserves_newlines_and_indentation(self):
-        result = _fix("SELECT ?s WHERE {\n  ?s <http://example.org/prop/p1> ?o\n}")
+        result = fix("SELECT ?s WHERE {\n  ?s <http://example.org/prop/p1> ?o\n}")
         assert result == (
             "PREFIX wdt: <http://example.org/prop/>\n"
             "SELECT ?s WHERE {\n  ?s wdt:p1 ?o\n}"
         )
 
     def test_preserves_tabs(self):
-        result = _fix("SELECT\t?s\tWHERE\t{\n\t?s\t<http://example.org/prop/p1>\t?o\n}")
+        result = fix("SELECT\t?s\tWHERE\t{\n\t?s\t<http://example.org/prop/p1>\t?o\n}")
         assert result == (
             "PREFIX wdt: <http://example.org/prop/>\n"
             "SELECT\t?s\tWHERE\t{\n\t?s\twdt:p1\t?o\n}"
         )
 
     def test_existing_prefix(self):
-        result = _fix(
+        result = fix(
             "PREFIX wd: <http://example.org/entity/>\nSELECT ?s WHERE { ?s wd:e1 ?o }"
         )
         assert result == (
@@ -216,7 +216,7 @@ class TestFixPrefixes:
         )
 
     def test_existing_prefix_whitespace_preserved(self):
-        result = _fix(
+        result = fix(
             "PREFIX wd: <http://example.org/entity/>\n"
             "SELECT  ?s  WHERE  {\n  ?s  wd:e1  ?o\n}"
         )
@@ -226,18 +226,18 @@ class TestFixPrefixes:
         )
 
     def test_no_prefixes_needed(self):
-        result = _fix("SELECT  ?s  WHERE  {\n  ?s  ?p  ?o\n}")
+        result = fix("SELECT  ?s  WHERE  {\n  ?s  ?p  ?o\n}")
         assert result == "SELECT  ?s  WHERE  {\n  ?s  ?p  ?o\n}"
 
     def test_remove_known(self):
-        result = _fix(
+        result = fix(
             "PREFIX wd: <http://example.org/entity/>\nSELECT ?s WHERE { ?s wd:e1 ?o }",
             remove_known=True,
         )
         assert result == "SELECT ?s WHERE { ?s wd:e1 ?o }"
 
     def test_sort_prefixes(self):
-        result = _fix(
+        result = fix(
             "SELECT ?s WHERE { "
             "?s <http://example.org/prop/p1> <http://example.org/entity/e1> "
             "}",
@@ -250,11 +250,11 @@ class TestFixPrefixes:
         )
 
     def test_unknown_iri_not_replaced(self):
-        result = _fix("SELECT ?s WHERE { ?s <http://unknown.org/foo> ?o }")
+        result = fix("SELECT ?s WHERE { ?s <http://unknown.org/foo> ?o }")
         assert result == "SELECT ?s WHERE { ?s <http://unknown.org/foo> ?o }"
 
     def test_preserves_comments(self):
-        result = _fix(
+        result = fix(
             "SELECT ?s WHERE {\n"
             "  # find all properties of entity\n"
             "  ?s <http://example.org/prop/p1> ?o\n"
@@ -271,7 +271,7 @@ class TestFixPrefixes:
 
 class TestFindConnectedTopLevelTriples:
     def test_keeps_only_connected_component_of_selected_var(self):
-        parse = _parse(
+        parse = parse_sparql(
             "SELECT ?b WHERE { "
             "?a <http://example.org/p1> ?b . "
             "?b <http://example.org/p2> ?c . "
@@ -287,7 +287,7 @@ class TestFindConnectedTopLevelTriples:
         assert all("?x <http://example.org/p3> ?y" not in block for block in result)
 
     def test_keeps_transitively_connected_triples(self):
-        parse = _parse(
+        parse = parse_sparql(
             "SELECT ?b WHERE { "
             "?a <http://example.org/p1> ?b . "
             "?b <http://example.org/p2> ?c . "
@@ -305,7 +305,7 @@ class TestFindConnectedTopLevelTriples:
         assert all("?x <http://example.org/p4> ?y" not in block for block in result)
 
     def test_returns_empty_when_selected_var_not_in_top_level_triples(self):
-        parse = _parse(
+        parse = parse_sparql(
             "SELECT ?z WHERE { "
             "?a <http://example.org/p1> ?b . "
             "?b <http://example.org/p2> ?c "
@@ -357,7 +357,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -374,7 +374,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -391,7 +391,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -402,7 +402,7 @@ class TestDeriveConstraintQueryFromSparql:
         query = "SELECT ?z WHERE { ?a <http://example.org/p1> ?z . FILTER(?z != <rep>x</rep>) }"
 
         with pytest.raises(SPARQLException):
-            _derive(query)
+            derive(query)
 
     def test_ignores_triples_inside_optional(self):
         query = (
@@ -412,7 +412,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1>" in result
@@ -426,7 +426,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1>" in result
@@ -442,7 +442,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
 
         assert result is not None
         assert "?a <http://example.org/p1> ?b" in result
@@ -452,19 +452,19 @@ class TestDeriveConstraintQueryFromSparql:
     def test_returns_none_for_single_all_variable_triple(self):
         # ?s ?p ?current — all variables, so no constraint
         query = "SELECT ?x WHERE { ?s ?p <rep>x</rep> }"
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is None
 
     def test_returns_constraint_for_single_triple_with_iri_predicate(self):
         query = "SELECT ?x WHERE { ?s <http://example.org/p1> <rep>x</rep> }"
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is not None
         assert "<http://example.org/p1>" in result
 
     def test_returns_none_for_all_variable_triples(self):
         # nothing resolved anywhere, so there is nothing to constrain on
         query = "SELECT ?x WHERE { ?a ?b ?x . ?x ?c <rep>x</rep> }"
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is None
 
     def test_returns_none_constraint_inside_optional(self):
@@ -475,7 +475,7 @@ class TestDeriveConstraintQueryFromSparql:
             "}"
         )
 
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is None
 
     # the following need the full query, not a bare prefix: resolved neighbours
@@ -484,7 +484,7 @@ class TestDeriveConstraintQueryFromSparql:
     def test_uses_resolved_right_neighbour(self):
         # object is a resolved entity to the right of the property placeholder
         query = "SELECT ?x WHERE { ?x <rep>x</rep> <http://example.org/o> }"
-        result, position = _derive(query)
+        result, position = derive(query)
         assert result is not None
         assert position == Position.PROPERTY
         assert "<http://example.org/o>" in result
@@ -496,7 +496,7 @@ class TestDeriveConstraintQueryFromSparql:
             "?x <rep>x</rep> <http://example.org/o> "
             "}"
         )
-        result, position = _derive(query)
+        result, position = derive(query)
         assert result is not None
         assert position == Position.PROPERTY
         assert "<http://example.org/s> <http://example.org/p1> ?x" in result
@@ -507,7 +507,7 @@ class TestDeriveConstraintQueryFromSparql:
         query = (
             "SELECT ?x WHERE { <http://example.org/s> <rep>x</rep> <iri>entity</iri> }"
         )
-        result, position = _derive(query)
+        result, position = derive(query)
         assert result is not None
         assert position == Position.PROPERTY
         assert "<http://example.org/s>" in result
@@ -522,7 +522,7 @@ class TestDeriveConstraintQueryFromSparql:
             "<http://example.org/s> <rep>x</rep> ?y "
             "}"
         )
-        result, position = _derive(query)
+        result, position = derive(query)
         assert result is not None
         assert position == Position.PROPERTY
         assert "<http://example.org/s>" in result
@@ -536,7 +536,7 @@ class TestDeriveConstraintQueryFromSparql:
             "?x <rep>x</rep> <iri>entity b</iri> "
             "}"
         )
-        result, position = _derive(query)
+        result, position = derive(query)
         assert result is not None
         assert position == Position.PROPERTY
         assert "<iri>" not in result
@@ -557,7 +557,7 @@ class TestDeriveConstraintQueryFromSparql:
             "?y <iri>second hop</iri> ?x "
             "}"
         )
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is not None
         assert "<http://example.org/s>" in result
         # only the cursor's own triple survives, no second hop
@@ -573,7 +573,7 @@ class TestDeriveConstraintQueryFromSparql:
             "?y <rep>x</rep> <http://example.org/o> "
             "}"
         )
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is not None
         assert "<http://example.org/s> <http://example.org/p1> ?y" in result
         assert "<http://example.org/o>" in result
@@ -588,7 +588,7 @@ class TestDeriveConstraintQueryFromSparql:
             "?z <http://example.org/p3> <http://example.org/o> "
             "}"
         )
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is not None
         assert "<http://example.org/s>" in result
         # the connecting triple and the far resolved triple are both kept
@@ -606,28 +606,28 @@ class TestDeriveConstraintQueryFromSparql:
             "?y <iri>dangling</iri> ?w "
             "}"
         )
-        result, _ = _derive(query)
+        result, _ = derive(query)
         assert result is not None
         assert "<http://example.org/o>" in result
         assert "?w" not in result
 
 
 class TestParseToStringWithWhitespace:
-    def _roundtrip(self, sparql: str) -> str:
+    def roundtrip(self, sparql: str) -> str:
         parse, _ = parse_string(sparql, SPARQL_PARSER)
         return parse_to_string_with_whitespace(parse, sparql.encode())
 
     def test_root_roundtrip_simple(self):
         sparql = "SELECT ?s WHERE { ?s ?p ?o }"
-        assert self._roundtrip(sparql) == sparql
+        assert self.roundtrip(sparql) == sparql
 
     def test_root_roundtrip_preserves_internal_whitespace(self):
         sparql = "SELECT  ?s\n  ?p\nWHERE {\n  ?s  ?p   ?o .\n} LIMIT 10"
-        assert self._roundtrip(sparql) == sparql
+        assert self.roundtrip(sparql) == sparql
 
     def test_root_roundtrip_preserves_trailing_clause(self):
         sparql = "SELECT ?s WHERE { ?s ?p ?o } LIMIT 10"
-        assert self._roundtrip(sparql) == sparql
+        assert self.roundtrip(sparql) == sparql
 
     def test_subtree_select_clause(self):
         sparql = (
