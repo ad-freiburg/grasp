@@ -357,27 +357,15 @@ so always keep that in mind and adjust the occurrence_index accordingly.""",
     return fns
 
 
-def annotate(
-    managers: list[KgManager],
-    kg: str,
+def find_matches(
     words_to_be_annotated: str,
-    occurrence_index: int,
-    entity: str | None,
-    state: AnnotationState,
-    known: set[str],
-    know_before_annotate: bool = False,
-    show_state_after_annotation: bool = True,
-) -> str:
-    # A function for the llm to call to annotate the words_to_be_annotated in the text
-    # with the entity and knowledge graph. The occurrence_index helps to distinguish
-    # between different occurrences of the words in the text excerpt.
-    manager, _ = find_manager(managers, kg)
-    sequence = state.text.data[state.annotation_window]
-
+    sequence: str,
+    occurrence_index: int
+) -> tuple[int, int]:
     # normalizing, because some llms are heavily biased towards specific characters like
     # the ascii apostrophe although they are technically able to output the correct one.
     def normalize(string: str) -> str:
-        return unicodedata.normalize("NFC", string).replace("‘", "'").replace("’", "'")
+        return string.replace("‘", "'").replace("’", "'")
 
     words_to_be_annotated = normalize(words_to_be_annotated)
     sequence = normalize(sequence)
@@ -402,7 +390,27 @@ def annotate(
             f"number of matches: {len(word_matches)}."
         )
 
-    start_idx, end_idx = word_matches[occurrence_index]
+    return word_matches[occurrence_index]
+
+
+def annotate(
+    managers: list[KgManager],
+    kg: str,
+    words_to_be_annotated: str,
+    occurrence_index: int,
+    entity: str | None,
+    state: AnnotationState,
+    known: set[str],
+    know_before_annotate: bool = False,
+    show_state_after_annotation: bool = True,
+) -> str:
+    # A function for the llm to call to annotate the words_to_be_annotated in the text
+    # with the entity and knowledge graph. The occurrence_index helps to distinguish
+    # between different occurrences of the words in the text excerpt.
+    manager, _ = find_manager(managers, kg)
+    sequence = state.text.data[state.annotation_window]
+
+    start_idx, end_idx = find_matches(words_to_be_annotated, sequence, occurrence_index)
 
     try:
         if entity is None:
@@ -452,37 +460,8 @@ def delete_annotation(
     # distinguish between different occurrences of the words in the text.
     sequence = state.text.data[state.annotation_window]
 
-    # normalizing, because some llms are heavily biased towards specific characters like
-    # the ascii apostrophe although they are technically able to output the correct one.
-    def normalize(string: str) -> str:
-        return unicodedata.normalize("NFC", string).replace("‘", "'").replace("’", "'")
+    start_idx, end_idx = find_matches(words_to_be_annotated, sequence, occurrence_index)
 
-    words_to_be_annotated = normalize(words_to_be_annotated)
-    sequence = normalize(sequence)
-
-    word_matches = [
-        m.span() for m in re.finditer(re.escape(words_to_be_annotated), sequence)
-    ]
-
-    if not word_matches:
-        raise ValueError(
-            f"No match found for the given words_to_be_annotated "
-            f"'{words_to_be_annotated}' in the current annotation window."
-            "(Did you use the correct characters when specifying the words?)"
-        )
-
-    if occurrence_index < 0:
-        raise ValueError(f"occurrence_index '{occurrence_index}' must be non negative.")
-
-    if occurrence_index >= len(word_matches):
-        raise ValueError(
-            f"occurrence_index '{occurrence_index}' must be less than "
-            f"number of matches: {len(word_matches)}."
-        )
-
-    start_idx, end_idx = word_matches[occurrence_index]
-
-    # deleting an annotation
     try:
         current = state.annotate(start_idx, end_idx, None)
     except ValueError as e:
