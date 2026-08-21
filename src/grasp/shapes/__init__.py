@@ -211,23 +211,14 @@ class ShapeIndex:
             metadata={"model": model.model},
         )
 
-        build_params = build_params or EmbeddingBuildParams()
-        EmbeddingIndex.build(
-            data,
-            embedding_path,
-            index_dir,
-            metric=build_params.metric,
-            precision=build_params.precision,
-        )
+        EmbeddingIndex.build(data, embedding_path, index_dir)
 
         info: dict = {"indexed_classes": len(samples)}
         if total_classes is not None:
             info["total_classes"] = total_classes
         dump_json(info, os.path.join(output_dir, "info.json"))
 
-        params = build_embedding_search_params(
-            embedding, build_params, search_params, logger
-        )
+        params = build_embedding_search_params(embedding, build_params, search_params)
         write_search_params(params, index_dir)
         logger.info(f"Search params: {params.model_dump_json()}")
 

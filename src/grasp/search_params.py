@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 from pydantic import BaseModel, ValidationError
@@ -16,12 +16,19 @@ class SearchParamsBase(BaseModel):
     # subclasses declare `type` as a Literal, which doubles as the discriminator
     # in the persisted search params and in SEARCH_PARAMS_TYPES
 
-    # parameters to pass to the index's search function
+    # fields that are persisted but describe something other than the search
+    # itself; excluded from the search kwargs and never taken from configs
+    non_search_fields: ClassVar[set[str]] = set()
+
+    # parameters to pass to the index's search function; None means "leave to
+    # search-rdf", so those are dropped instead of passed explicitly
     def search_kwargs(self) -> dict[str, Any]:
-        raise NotImplementedError
+        return self.model_dump(exclude=self.non_search_fields, exclude_none=True)
 
 
 class EmbeddingSearchParams(SearchParamsBase):
+    non_search_fields: ClassVar[set[str]] = {"type", "build"}
+
     type: Literal["embedding"] = "embedding"
     min_score: float | None = 0.0
     rerank: float | None = 2.0
@@ -29,15 +36,6 @@ class EmbeddingSearchParams(SearchParamsBase):
     # how the params above were derived at build time; informational only,
     # cannot be set from a config
     build: dict[str, Any] | None = None
-
-    def search_kwargs(self) -> dict[str, Any]:
-        kwargs = {
-            "min_score": self.min_score,
-            "exact": self.exact,
-            "rerank": self.rerank,
-        }
-        # None means "leave to search-rdf", so don't pass it explicitly
-        return {key: value for key, value in kwargs.items() if value is not None}
 
 
 # union of all index types supporting search params; extend this together with
@@ -47,9 +45,6 @@ SearchParams = EmbeddingSearchParams
 SEARCH_PARAMS_TYPES: dict[str, type[SearchParams]] = {
     "embedding": EmbeddingSearchParams,
 }
-
-# fields describing the build rather than the search, never taken from configs
-NON_SEARCH_FIELDS = {"type", "build"}
 
 
 # search params class for an index type, None if it has no params
@@ -70,10 +65,6 @@ class EmbeddingBuildParams(BaseModel):
     min_score_samples: int = 4096
     seed: int = 22
 
-    # passed through to EmbeddingIndex.build
-    metric: str | None = None
-    precision: str | None = None
-
 
 # Percentile of the random item-item similarity distribution that can be used as
 # a min-score floor. The score at this percentile is the similarity that only
@@ -83,11 +74,6 @@ class EmbeddingBuildParams(BaseModel):
 # Values above the tail start cutting genuine matches because the random
 # distribution is narrow (p50 to p90 spans only ~0.1 cosine).
 DEFAULT_MIN_SCORE_PERCENTILE = 75.0
-
-# metrics and precisions for which scores are not cosine similarities in [0, 1],
-# so a min score derived from the float embeddings does not carry over
-NON_COSINE_METRICS = {"l2", "hamming"}
-NON_COSINE_PRECISIONS = {"int8", "binary"}
 
 
 def estimate_embedding_min_score(
@@ -118,16 +104,6 @@ def estimate_embedding_min_score(
     return float(np.percentile(scores, percentile)) + margin
 
 
-# why the index's scores are not cosine similarities in [0, 1], if they aren't
-def non_cosine_scores(build: EmbeddingBuildParams) -> str | None:
-    if build.metric in NON_COSINE_METRICS:
-        return f"metric={build.metric}"
-    elif build.precision in NON_COSINE_PRECISIONS:
-        return f"precision={build.precision}"
-    else:
-        return None
-
-
 # search params to persist for a freshly built embedding index; min_score is
 # derived from the embeddings if a percentile is configured, and params set
 # explicitly in `search` take precedence over the derived ones
@@ -135,20 +111,11 @@ def build_embedding_search_params(
     embeddings: np.ndarray,
     build: EmbeddingBuildParams | None = None,
     search: EmbeddingSearchParams | None = None,
-    logger: logging.Logger | None = None,
 ) -> EmbeddingSearchParams:
     build = build or EmbeddingBuildParams()
     params = EmbeddingSearchParams()
 
-    scale = non_cosine_scores(build)
-    if scale is not None and logger is not None:
-        logger.warning(
-            f"The index is built with {scale}, so its scores are not cosine "
-            f"similarities in [0, 1]; min_score has to be given on the "
-            f"index's own scale and cannot be derived from a percentile"
-        )
-
-    if build.min_score_percentile is not None and scale is None:
+    if build.min_score_percentile is not None:
         derived = estimate_embedding_min_score(
             embeddings,
             num_samples=build.min_score_samples,
@@ -168,7 +135,7 @@ def build_embedding_search_params(
 
 # override only the fields explicitly set on `override`
 def merge_search_params(base: SearchParams, override: SearchParams) -> SearchParams:
-    update = override.model_dump(exclude_unset=True, exclude=NON_SEARCH_FIELDS)
+    update = override.model_dump(exclude_unset=True, exclude=override.non_search_fields)
     if not update:
         return base
 
@@ -205,7 +172,7 @@ def resolve_search_params(
     params = base if base is not None else cls()
 
     if override:
-        invalid = NON_SEARCH_FIELDS.intersection(override)
+        invalid = cls.non_search_fields.intersection(override)
         if invalid:
             raise ValueError(
                 f"Cannot set {sorted(invalid)} in the search params for "

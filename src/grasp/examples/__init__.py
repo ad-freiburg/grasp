@@ -160,20 +160,11 @@ class ExampleIndex:
             metadata={"model": model.model},
         )
 
-        build_params = build_params or EmbeddingBuildParams()
-        EmbeddingIndex.build(
-            data,
-            embedding_path,
-            index_dir,
-            metric=build_params.metric,
-            precision=build_params.precision,
-        )
+        EmbeddingIndex.build(data, embedding_path, index_dir)
 
         dump_json({"description": description}, os.path.join(output_dir, "info.json"))
 
-        params = build_embedding_search_params(
-            embedding, build_params, search_params, logger
-        )
+        params = build_embedding_search_params(embedding, build_params, search_params)
         write_search_params(params, index_dir)
         logger.info(f"Search params: {params.model_dump_json()}")
 

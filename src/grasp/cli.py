@@ -120,20 +120,6 @@ def add_embedding_args(parser: argparse.ArgumentParser) -> None:
         help="Batch size for embedding",
     )
     group.add_argument(
-        "--emb-metric",
-        type=str,
-        choices=["cosine", "inner_product", "ip", "l2", "hamming"],
-        default=None,
-        help="Distance metric of the index",
-    )
-    group.add_argument(
-        "--emb-precision",
-        type=str,
-        choices=["float32", "bfloat16", "float16", "int8", "binary"],
-        default=None,
-        help="Precision the index stores embeddings in",
-    )
-    group.add_argument(
         "--min-score-percentile",
         type=float,
         nargs="?",
@@ -193,8 +179,6 @@ def get_embedding_build_params(args: argparse.Namespace) -> EmbeddingBuildParams
         min_score_margin=args.min_score_margin,
         min_score_samples=args.min_score_samples,
         seed=args.min_score_seed,
-        metric=args.emb_metric,
-        precision=args.emb_precision,
     )
 
 
