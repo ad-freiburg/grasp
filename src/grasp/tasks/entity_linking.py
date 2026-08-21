@@ -1,5 +1,4 @@
 import re
-import unicodedata
 from typing import Any
 
 from pydantic import BaseModel
@@ -358,9 +357,7 @@ so always keep that in mind and adjust the occurrence_index accordingly.""",
 
 
 def find_matches(
-    words_to_be_annotated: str,
-    sequence: str,
-    occurrence_index: int
+    words_to_be_annotated: str, sequence: str, occurrence_index: int
 ) -> tuple[int, int]:
     # normalizing, because some llms are heavily biased towards specific characters like
     # the ascii apostrophe although they are technically able to output the correct one.
