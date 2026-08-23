@@ -155,7 +155,7 @@ class GraspConfig(BaseModel):
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
-    clap_model: str = "clapcap"
+    clap_model: str | None = None
 
     # optional task specific parameters
     # map[task_name, map[param_name, param_value]]

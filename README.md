@@ -317,7 +317,7 @@ docker run --rm \
   -e HF_HOME=/hf \
   -v $HF_HOME:/hf \
   -v $PWD/my_config.yaml:/grasp/server.yaml \
-  grasp serve server.yaml
+  grasp serve configs/serve.yaml
 ```
 
 ### Configure GRASP

@@ -186,9 +186,12 @@ def generate(
     # save the raw input, in case an image is attached
     raw_input = input
 
+    # setup task first, so tasks can configure based on input
+    # (e.g. auto-setup accesses self.input in function_definitions)
+    text_input = task.setup(raw_input)
+
     enable_load = Modality.IMAGE in config.get_default_model.modality and config.load_user_input
 
-    # setup functions (after setup so tasks can configure based on input)
     fns = kg_functions(
         managers,
         config.fn_set,
@@ -203,8 +206,6 @@ def generate(
     audio_inputs: list[str] = []
 
     if isinstance(raw_input, dict):
-        text_input = raw_input.get("input", "")
-
         raw_images = raw_input.get("image_input")
         if raw_images is None:
             raw_images = raw_input.get("image_url")
@@ -219,8 +220,6 @@ def generate(
             raw_audio = [raw_audio]
         if isinstance(raw_audio, list):
             audio_inputs = [x for x in raw_audio if isinstance(x, str) and x.strip()]
-    else:
-        text_input = raw_input
 
     normalized_images: list[str] = []
     for image in image_urls:
@@ -234,8 +233,6 @@ def generate(
     if image_urls or audio_inputs:
         media_inputs = [*image_urls, *audio_inputs]
     media_hint = media_reference_hint(len(image_urls), len(audio_inputs))
-
-    text_input = task.setup(text_input)
 
     yield {"type": "input", "input": text_input}
 

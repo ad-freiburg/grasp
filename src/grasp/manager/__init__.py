@@ -547,6 +547,7 @@ class KgManager:
             matched_label=matched_via,
         )
 
+    @staticmethod
     def get_embedding_model_key(index: EmbeddingIndex) -> str:
         assert index.model is not None, "Embedding index must have model metadata"
         provider = index.provider or "sentence-transformer"
@@ -631,7 +632,13 @@ class KgManager:
             kwargs = {}
             if index.index_type == "embedding":
                 assert isinstance(index, EmbeddingIndex)
-                kwargs["embedding"] = self.embed_query(index, query, query_type)
+                embedding = self.embed_query(index, query, query_type, self.embedding_models)
+                kwargs["embedding"] = embedding
+                params = kg_index.search_params or EmbeddingSearchParams()
+                assert isinstance(params, EmbeddingSearchParams)
+                kwargs["min_score"] = params.min_score
+                kwargs["exact"] = params.exact
+                kwargs["rerank"] = params.rerank
             else:
                 kwargs["query"] = query
 
