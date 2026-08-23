@@ -25,21 +25,22 @@ from grasp.multimodal.utils import (
     IMAGE_ANALYSIS_TOOL_SCHEMA,
     AUDIO_ANALYSIS_TOOL_SCHEMA,
     unwrap_json_string_payload,
+    MAX_IMAGE_DIMENSION,
 )
 from search_rdf.model.embedding import OpenClipModel
 
 
-def load(input: str, modality: str) -> dict:
+def load(input: str, modality: str, max_image_dimension: int) -> dict:
     modality_type = guess_modality_type(input)
 
     if modality == Modality.IMAGE:
         if modality_type == ModalityTypes.BASE64:
             return {"type": "image_url", "image_url": {"url": input}}
         elif modality_type == ModalityTypes.URL:
-            data = image_url_to_base64(input)
+            data = image_url_to_base64(input, max_image_dimension)
             return {"type": "image_url", "image_url": {"url": data}}
         elif modality_type == ModalityTypes.FILE:
-            data = image_file_to_base64(input)
+            data = image_file_to_base64(input, max_image_dimension)
             return {"type": "image_url", "image_url": {"url": data}}
     elif modality == Modality.AUDIO:
         if modality_type == ModalityTypes.BASE64:
@@ -74,11 +75,11 @@ def verify(
     if input_image_url.startswith("data"):  # base64 url
         input_image = convert_base64_to_np_array(input_image_url)
     elif input_image_url.startswith("http"):
-        input_image = convert_base64_to_np_array(image_url_to_base64(input_image_url))
+        input_image = convert_base64_to_np_array(image_url_to_base64(input_image_url, MAX_IMAGE_DIMENSION))
     if entity_image_url.startswith("data"):  # base64 url
         entity_image = convert_base64_to_np_array(entity_image_url)
     elif entity_image_url.startswith("http"):
-        entity_image = convert_base64_to_np_array(image_url_to_base64(entity_image_url))
+        entity_image = convert_base64_to_np_array(image_url_to_base64(entity_image_url, MAX_IMAGE_DIMENSION))
 
     if input_image is None or entity_image is None:
         raise ValueError("input could not be loaded properly for comparison")
@@ -265,7 +266,7 @@ def analyze(
                 "No configured vision model matches the requested models"
             )
 
-        image_payload = load(input, modality)
+        image_payload = load(input, modality, config.max_image_dimension)
         image_url = image_payload["image_url"]["url"]
 
         return analyze_image(image_url, prompt, selected_models, config.answer_in_free_text)
@@ -273,7 +274,7 @@ def analyze(
     if modality == Modality.AUDIO:
         audio_models = config.get_audio_models
         if audio_models:
-            audio_url = load(input, modality)
+            audio_url = load(input, modality, config.max_image_dimension)
             return analyze_audio(
                 audio_url,
                 audio_models[0],
