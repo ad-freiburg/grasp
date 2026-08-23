@@ -335,7 +335,7 @@ def generate(
         args = {"kg": config.force_examples, "page": 1}
         if not config.random_examples:
             name = "search_example"
-            args["query"] = input
+            args["query"] = text_input
 
         tool_call = ToolCall(
             id=uuid.uuid4().hex,
