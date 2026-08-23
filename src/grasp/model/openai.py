@@ -17,7 +17,6 @@ from grasp.model.base import (
     check_api_response,
     strip_none,
 )
-from sympy import false
 
 
 def coerce_nullable_strings(value: Any, spec: dict) -> Any:
