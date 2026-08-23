@@ -83,7 +83,8 @@ from grasp.utils import (
 )
 from grasp.multimodal.utils import (
     Modality,
-    guess_modality_type,
+    audio_base64_to_file,
+    convert_base64_to_np_array,
 )
 
 
@@ -563,7 +564,7 @@ class KgManager:
         modality: Modality,
         models: dict[str, EmbeddingModel],
     ) -> list[float]:
-        from grasp.multimodal.functions import load  # avoid circular import
+        from grasp.multimodal.functions import load  # avoid circular import (multimodal.functions itself imports grasp.manager)
         model_key = self.get_embedding_model_key(index)
         model = models[model_key]
 
@@ -578,8 +579,8 @@ class KgManager:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
         elif modality == Modality.IMAGE:
-            input_type = guess_modality_type(query)
-            image = load(query, modality, input_type)
+            image_payload = load(query, modality)
+            image = convert_base64_to_np_array(image_payload["image_url"]["url"])
             if isinstance(model, OpenClipModel):
                 return model.embed_image([image])[0].tolist()
             elif isinstance(model, HuggingFaceImageModel):
@@ -588,12 +589,15 @@ class KgManager:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
         elif modality == Modality.AUDIO:
-            input_type = guess_modality_type(query)
-            audio = load(query, modality, input_type)
-            if isinstance(model, ClapCapModel):
-                return model.embed_audio([audio])[0].tolist()
-            else:
-                raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
+            audio_payload = load(query, modality)
+            data = audio_payload["input_audio"]["data"]
+            format = audio_payload["input_audio"]["format"]
+            tmp_path = audio_base64_to_file(data, suffix=f".{format}")
+            try:
+                return model.embed_audio([tmp_path])[0].tolist()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
         else:
             raise ValueError(
                 f"Unsupported querytype '{modality}'"

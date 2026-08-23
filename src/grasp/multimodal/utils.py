@@ -7,13 +7,14 @@ from enum import Enum
 from urllib.request import Request, urlopen
 from PIL import Image
 import numpy as np
+from grasp.configs import Modality
 from grasp.utils import FunctionCallException
 
-
-class Modality(str, Enum):
-    IMAGE = "image"
-    AUDIO = "audio"
-    TEXT = "text"
+_IMAGE_EXTENSION_MAP = {
+    "jpg": "jpeg",
+    "jpe": "jpeg",
+    "tif": "tiff",
+}
 
 
 class ModalityTypes(str, Enum):
@@ -35,8 +36,9 @@ def image_file_to_base64(path: str) -> str:
     with open(path, "rb") as file:
         image_bytes = file.read()
 
-    extention = os.path.splitext(path)[1].lower()
-    content_type = "image/" + extention.lstrip(".")
+    extention = os.path.splitext(path)[1].lower().lstrip(".")
+    extention = _IMAGE_EXTENSION_MAP.get(extention, extention)
+    content_type = "image/" + extention
 
     return rescale_image(image_bytes, content_type)
 
@@ -214,8 +216,6 @@ _AUDIO_FORMAT_MAP = {
 
 
 def unwrap_json_string_payload(raw: str) -> str:
-    print("Raw text:")
-    print(raw)
     text = (raw or "").strip()
 
     if text.startswith("{") and text.endswith("}"):
@@ -230,8 +230,6 @@ def unwrap_json_string_payload(raw: str) -> str:
                     return first_string
         except json.JSONDecodeError:
             pass
-    print("Edited Text:")
-    print(text)
     return text
 
 
