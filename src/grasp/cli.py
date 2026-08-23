@@ -892,11 +892,11 @@ def run_grasp(args: argparse.Namespace) -> None:
         if args.image_input is not None:
             for image in args.image_input:
                 if image.startswith("http"):
-                    image_b64 = image_url_to_base64(image)
+                    image_b64 = image_url_to_base64(image, config.max_image_dimension)
                 elif image.startswith("data:"):
                     image_b64 = image
                 else:
-                    image_b64 = image_file_to_base64(image)
+                    image_b64 = image_file_to_base64(image, config.max_image_dimension)
                 image_urls.append(image_b64)
         if args.audio_input is not None:
             audio_inputs = [audio for audio in args.audio_input if isinstance(audio, str) and audio.strip()]

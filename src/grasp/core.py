@@ -129,6 +129,7 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
+        manager.max_image_dimension = config.max_image_dimension
         models = manager.load_models(
             models,
             embedding_model=config.embedding_model,
@@ -227,7 +228,7 @@ def generate(
     normalized_images: list[str] = []
     for image in image_urls:
         if image.startswith("http"):
-            normalized_images.append(image_url_to_base64(image))
+            normalized_images.append(image_url_to_base64(image, config.max_image_dimension))
         else:
             normalized_images.append(image)
 

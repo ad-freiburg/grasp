@@ -201,6 +201,8 @@ class GraspConfig(BaseModel):
     notes_only_for_feedback: bool = False
     load_user_input: bool = False
     answer_in_free_text: bool = False
+    # maximum image dimension (longest side in pixels) before rescaling
+    max_image_dimension: int = 1024
 
     @property
     def sparql_request_timeout(self) -> tuple[float, float]:

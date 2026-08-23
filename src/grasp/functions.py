@@ -929,6 +929,7 @@ def call_function(
         return json.dumps(load(
             extract_user_input(fn_args["input"], user_input),
             fn_args["modality"],
+            config.max_image_dimension,
         ))
 
     elif fn_name == "analyze":

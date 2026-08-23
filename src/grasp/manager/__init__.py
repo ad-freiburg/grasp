@@ -130,6 +130,7 @@ class KgManager:
         self.embedding_models: dict[str, EmbeddingModel] = {}
         self.shapes: Shapes | None = None
         self.shape_config: ShapeConfig | None = None
+        self.max_image_dimension: int = 1024
 
         self.search_cache = LRUCache(maxsize=SEARCH_CACHE_MAX_SIZE)
         self.search_lock = RLock()
@@ -579,7 +580,7 @@ class KgManager:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
         elif modality == Modality.IMAGE:
-            image_payload = load(query, modality)
+            image_payload = load(query, modality, self.max_image_dimension)
             image = convert_base64_to_np_array(image_payload["image_url"]["url"])
             if isinstance(model, OpenClipModel):
                 return model.embed_image([image])[0].tolist()
@@ -589,7 +590,7 @@ class KgManager:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
         elif modality == Modality.AUDIO:
-            audio_payload = load(query, modality)
+            audio_payload = load(query, modality, self.max_image_dimension)
             data = audio_payload["input_audio"]["data"]
             format = audio_payload["input_audio"]["format"]
             tmp_path = audio_base64_to_file(data, suffix=f".{format}")

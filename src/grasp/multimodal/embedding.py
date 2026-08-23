@@ -1,3 +1,4 @@
+from grasp.multimodal.utils import MAX_IMAGE_DIMENSION
 from search_rdf import EmbeddingIndex
 from search_rdf.model import (
     HuggingFaceImageModel,
@@ -24,6 +25,7 @@ def embed_query(
     query: str,
     modality: Modality,
     models: dict[str, EmbeddingModel],
+    max_image_dimension: int = MAX_IMAGE_DIMENSION,
 ) -> list[float]:
     model_key = get_embedding_model_key(index)
     model = models[model_key]
@@ -39,7 +41,7 @@ def embed_query(
             raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
     elif modality == Modality.IMAGE:
-        image = load(query, modality)
+        image = load(query, modality, max_image_dimension)
         if isinstance(model, OpenClipModel):
             return model.embed_image(image)[0].tolist()
         elif isinstance(model, HuggingFaceImageModel):
@@ -48,7 +50,7 @@ def embed_query(
             raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
     elif modality == Modality.AUDIO:
-        audio = load(query, modality)
+        audio = load(query, modality, max_image_dimension)
         if isinstance(model, ClapCapModel):
             return model.embed_audio(audio)[0].tolist()
         else:

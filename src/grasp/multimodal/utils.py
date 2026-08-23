@@ -26,7 +26,7 @@ class ModalityTypes(str, Enum):
 MAX_IMAGE_DIMENSION = 1024  # Max Image Resolution
 
 
-def image_file_to_base64(path: str) -> str:
+def image_file_to_base64(path: str, max_dimension: int) -> str:
     """
     Converts a local image path into a base64 encoded image_url
     """
@@ -40,10 +40,10 @@ def image_file_to_base64(path: str) -> str:
     extention = _IMAGE_EXTENSION_MAP.get(extention, extention)
     content_type = "image/" + extention
 
-    return rescale_image(image_bytes, content_type)
+    return rescale_image(image_bytes, content_type, max_dimension)
 
 
-def image_url_to_base64(url: str) -> str:
+def image_url_to_base64(url: str, max_dimension: int) -> str:
     """
     Downloads and converts an external image into a base64 encoded image_url
     """
@@ -58,7 +58,7 @@ def image_url_to_base64(url: str) -> str:
     except Exception as e:
         raise FunctionCallException(f"Failed to download image from {url}: \n{e}") from e
 
-    return rescale_image(image_bytes, content_type)
+    return rescale_image(image_bytes, content_type, max_dimension)
 
 
 def audio_base64_to_file(string: str, suffix: str = ".wav") -> str:
@@ -115,15 +115,15 @@ def convert_base64_to_np_array(image_url: str) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(img_bytes)).convert("RGB"))
 
 
-def rescale_image(bytes: bytes, content_type: str) -> str:
+def rescale_image(bytes: bytes, content_type: str, max_dimension: int) -> str:
     img = Image.open(io.BytesIO(bytes))
     longest = max(img.width, img.height)
 
-    if longest <= MAX_IMAGE_DIMENSION:
+    if longest <= max_dimension:
         data = base64.b64encode(bytes).decode("utf-8")
         return f"data:{content_type};base64,{data}"
 
-    scale = MAX_IMAGE_DIMENSION / longest
+    scale = max_dimension / longest
     new_size = (int(img.width * scale), int(img.height * scale))
     img = img.resize(new_size, resample=Image.Resampling.LANCZOS)
     buffer = io.BytesIO()
