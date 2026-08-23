@@ -103,7 +103,7 @@ def system_instructions(
     if rules:
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
-    if task.config.get_vision_models:
+    if task.config.get_vision_models or task.config.get_audio_models:
         rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality and task.config.load_user_input)
         blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
         vision_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_vision_models]
@@ -199,6 +199,9 @@ def generate(
         config.search_k,
         config.search_max_pages,
         enable_load=enable_load,
+        enable_analyze=bool(
+            config.get_vision_models or config.get_audio_models
+        ),
     )
     fns.extend(task.function_definitions())
 
