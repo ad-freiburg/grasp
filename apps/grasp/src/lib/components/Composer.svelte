@@ -23,7 +23,7 @@
   const MAX_FILE_SIZE_BYTES = 1024 * 1024;
   const MAX_COLUMNS = 100;
   const MAX_FILE_SIZE_LABEL = '1 MB';
-  const MAX_IMAGE_BYTES = 50 * 1048;
+  const MAX_IMAGE_DIMENSION = 1024;
   const MAX_SELECTED_PDF_PAGES = 5;
   const PDF_RENDER_SCALE = 1.5;
 
@@ -629,12 +629,44 @@
     });
   }
 
-  function getDataUrlByteSize(dataUrl) {
-    const parts = dataUrl.split(',', 2);
-    if (parts.length < 2) return Number.POSITIVE_INFINITY;
-    const payload = parts[1];
-    const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
-    return Math.floor((payload.length * 3) / 4) - padding;
+  async function imageToScaledDataUrl(file, maxDim = MAX_IMAGE_DIMENSION) {
+    const originalDataUrl = await fileToDataUrl(file);
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`Failed to load image ${file.name}.`));
+      image.src = originalDataUrl;
+    });
+
+    const longest = Math.max(img.width, img.height);
+    if (longest <= maxDim) {
+      return originalDataUrl;
+    }
+
+    const scale = maxDim / longest;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+      throw new Error(`Failed to scale image ${file.name}.`);
+    }
+    context.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        async (blob) => {
+          if (!blob) {
+            reject(new Error(`Failed to scale image ${file.name}.`));
+            return;
+          }
+          const dataUrl = await fileToDataUrl(blob);
+          resolve(dataUrl);
+        },
+        'image/jpeg',
+        0.85
+      );
+    });
   }
 
   async function canvasToJpegDataUrl(canvas, quality) {
@@ -655,38 +687,27 @@
   }
 
   async function renderPdfPageToJpeg(page) {
-    let scale = PDF_RENDER_SCALE;
-    let quality = 0.82;
+    const baseViewport = page.getViewport({ scale: 1 });
+    const longest = Math.max(baseViewport.width, baseViewport.height);
+    const baseScale = longest > 0 ? MAX_IMAGE_DIMENSION / longest : 1;
+    const scale = Math.min(PDF_RENDER_SCALE, baseScale);
 
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d', { alpha: false });
-      if (!context) {
-        throw new Error('Failed to create PDF rendering context.');
-      }
-      canvas.width = Math.max(1, Math.floor(viewport.width));
-      canvas.height = Math.max(1, Math.floor(viewport.height));
-
-      await page.render({ canvasContext: context, viewport }).promise;
-      const dataUrl = await canvasToJpegDataUrl(canvas, quality);
-      const byteSize = getDataUrlByteSize(dataUrl);
-      if (byteSize <= MAX_IMAGE_BYTES) {
-        return {
-          dataUrl,
-          byteSize,
-          width: canvas.width,
-          height: canvas.height
-        };
-      }
-
-      quality = Math.max(0.35, quality - 0.1);
-      scale = Math.max(0.4, scale * 0.82);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+      throw new Error('Failed to create PDF rendering context.');
     }
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
 
-    throw new Error(
-      `Unable to reduce PDF page below ${MAX_IMAGE_BYTES} bytes. Try a simpler document.`
-    );
+    await page.render({ canvasContext: context, viewport }).promise;
+    const dataUrl = await canvasToJpegDataUrl(canvas, 0.82);
+    return {
+      dataUrl,
+      width: canvas.width,
+      height: canvas.height
+    };
   }
 
   async function loadPdfModule() {
@@ -711,12 +732,7 @@
     const warnings = [];
     for (const file of files) {
       try {
-        const dataUrl = await fileToDataUrl(file);
-        if (getDataUrlByteSize(dataUrl) > MAX_IMAGE_BYTES) {
-          throw new Error(
-            `${file.name} exceeds the ${Math.floor(MAX_IMAGE_BYTES / 1024)}KB image limit.`
-          );
-        }
+        const dataUrl = await imageToScaledDataUrl(file);
         next.push({
           id: createMediaId('image'),
           name: file.name,
