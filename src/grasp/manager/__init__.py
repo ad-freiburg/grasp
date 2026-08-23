@@ -33,7 +33,10 @@ from grasp.manager.utils import (
     merge_prefixes,
     try_load_search_index,
 )
-from grasp.search_params import resolve_index_search_params
+from grasp.search_params import (
+    EmbeddingSearchParams,
+    resolve_index_search_params,
+)
 from grasp.shapes import (
     Shapes,
     load_setup_description,
