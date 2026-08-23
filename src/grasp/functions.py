@@ -73,7 +73,8 @@ def kg_functions(
     list_k: int,
     search_k: int,
     search_max_pages: int,
-    enable_load: bool = False
+    enable_load: bool = False,
+    enable_analyze: bool = False,
 ) -> list[dict]:
     assert fn_set in [
         "base",
@@ -183,70 +184,75 @@ list(kg="wikidata", property="wdt:P19")""",
                 "additionalProperties": False,
             },
             "strict": True,
-        }, {
-            "name": "analyze",
-            "description": (
-                "Analyze multimodal input. Supported modalities are image and audio. "
-                "For images, provide a prompt describing what visual information should be extracted. "
-                "For audio, the function can generate an acoustic description or answer an audio-related prompt. "
-                "This function routes internally to the correct helper function depending on modality."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": (
-                            "The media input to analyze. "
-                            "This can be a normalized data URL from load(), a public URL, "
-                            "a raw base64 string, or a local file path depending on input_type."
-                        ),
-                    },
-                    "modality": {
-                        "type": "string",
-                        "enum": ["image", "audio"],
-                        "description": (
-                            "The modality to analyze. "
-                            "Use 'image' for visual analysis and 'audio' for acoustic analysis."
-                        ),
-                    },
-                    "kg": {
-                        "type": ["string", "null"],
-                        "enum": [*kgs, None],
-                        "description": (
-                            "Optional knowledge graph identifier. "
-                            "Required for audio analysis if a manager must be resolved via KG. "
-                            "Use null when no KG lookup is needed."
-                        ),
-                    },
-                    "prompt": {
-                        "type": ["string", "null"],
-                        "description": (
-                            "Task instruction for the analysis. "
-                            "For images, this should usually be a concrete visual question. "
-                            "For audio, this may be a question or null if a generic caption/description is enough."
-                        ),
-                    },
-                    "models": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": (
-                            "Choice of Models used for analysis ."
-                            "Available Models are given in the System Prompt. "
-                            "You can choose one or more models for an analysis. "
-                            "To safe resources you should utilise as few models here as possible "
-                            "and rather use them one after another if necessary."
-                        )
-                    }
-                },
-                "required": ["input", "modality", "kg", "prompt", "models"],
-                "additionalProperties": False,
-            },
-            "strict": True,
         }
     ]
+
+    if enable_analyze:
+        fns.append(
+            {
+                "name": "analyze",
+                "description": (
+                    "Analyze multimodal input. Supported modalities are image and audio. "
+                    "For images, provide a prompt describing what visual information should be extracted. "
+                    "For audio, the function can generate an acoustic description or answer an audio-related prompt. "
+                    "This function routes internally to the correct helper function depending on modality."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": (
+                                "The media input to analyze. "
+                                "This can be a normalized data URL from load(), a public URL, "
+                                "a raw base64 string, or a local file path depending on input_type."
+                            ),
+                        },
+                        "modality": {
+                            "type": "string",
+                            "enum": ["image", "audio"],
+                            "description": (
+                                "The modality to analyze. "
+                                "Use 'image' for visual analysis and 'audio' for acoustic analysis."
+                            ),
+                        },
+                        "kg": {
+                            "type": ["string", "null"],
+                            "enum": [*kgs, None],
+                            "description": (
+                                "Optional knowledge graph identifier. "
+                                "Required for audio analysis if a manager must be resolved via KG. "
+                                "Use null when no KG lookup is needed."
+                            ),
+                        },
+                        "prompt": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "Task instruction for the analysis. "
+                                "For images, this should usually be a concrete visual question. "
+                                "For audio, this may be a question or null if a generic caption/description is enough."
+                            ),
+                        },
+                        "models": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": (
+                                "Choice of Models used for analysis ."
+                                "Available Models are given in the System Prompt. "
+                                "You can choose one or more models for an analysis. "
+                                "To safe resources you should utilise as few models here as possible "
+                                "and rather use them one after another if necessary."
+                            )
+                        }
+                    },
+                    "required": ["input", "modality", "kg", "prompt", "models"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+        )
 
     if enable_load:
         fns.append(
