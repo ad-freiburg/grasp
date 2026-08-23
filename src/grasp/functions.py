@@ -42,6 +42,7 @@ from grasp.multimodal.functions import (
     load,
     Modality,
 )
+from grasp.multimodal.utils import extract_user_input
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -926,9 +927,8 @@ def call_function(
 
     elif fn_name == "load":
         return json.dumps(load(
-            fn_args["input"],
+            extract_user_input(fn_args["input"], user_input),
             fn_args["modality"],
-            user_input=user_input
         ))
 
     elif fn_name == "analyze":

@@ -9,7 +9,6 @@ from grasp.multimodal.functions import (
     load,
     Modality,
 )
-from grasp.multimodal.utils import guess_modality_type
 
 EmbeddingModel = HuggingFaceImageModel | OpenClipModel | SentenceTransformerModel | ClapCapModel
 
@@ -40,8 +39,7 @@ def embed_query(
             raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
     elif modality == Modality.IMAGE:
-        input_type = guess_modality_type(query)
-        image = load(query, modality, input_type)
+        image = load(query, modality)
         if isinstance(model, OpenClipModel):
             return model.embed_image(image)[0].tolist()
         elif isinstance(model, HuggingFaceImageModel):
@@ -50,10 +48,9 @@ def embed_query(
             raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
     elif modality == Modality.AUDIO:
-        input_type = guess_modality_type(query)
-        audio = load(query, modality, input_type)
+        audio = load(query, modality)
         if isinstance(model, ClapCapModel):
-            model.embed_audio(audio)[0].tolist()
+            return model.embed_audio(audio)[0].tolist()
         else:
             raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
     else:

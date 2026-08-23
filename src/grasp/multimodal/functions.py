@@ -29,8 +29,7 @@ from grasp.multimodal.utils import (
 from search_rdf.model.embedding import OpenClipModel
 
 
-def load(input: str, modality: str, user_input: list[str]) -> dict:
-    input = extract_user_input(input, user_input)
+def load(input: str, modality: str) -> dict:
     modality_type = guess_modality_type(input)
 
     if modality == Modality.IMAGE:
@@ -266,7 +265,7 @@ def analyze(
                 "No configured vision model matches the requested models"
             )
 
-        image_payload = load(input, modality, user_input)
+        image_payload = load(input, modality)
         image_url = image_payload["image_url"]["url"]
 
         return analyze_image(image_url, prompt, selected_models, config.answer_in_free_text)
@@ -274,7 +273,7 @@ def analyze(
     if modality == Modality.AUDIO:
         audio_models = config.get_audio_models
         if audio_models:
-            audio_url = load(input, modality, user_input)
+            audio_url = load(input, modality)
             return analyze_audio(
                 audio_url,
                 audio_models[0],
