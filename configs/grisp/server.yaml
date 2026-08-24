@@ -17,12 +17,15 @@ do_sample: env(DO_SAMPLE:true)
 
 skeleton_n: env(SKELETON_N:8)
 skeleton_top_k: env(SKELETON_TOP_K:3)
+skeleton_dedupe: env(SKELETON_DEDUPE:merge)
 
 selection_top_k: env(SELECTION_TOP_K:10)
 constrain: env(CONSTRAIN:true)
 backtrack: env(BACKTRACK:true)
 rerank: env(RERANK:true)
 check_empty: env(CHECK_EMPTY:true)
+
+fill_order: env(FILL_ORDER:triple-wise-entities-then-properties)
 
 skeleton_disable_adapter: env(SKELETON_DISABLE_ADAPTER:false)
 selection_disable_adapter: env(SELECTION_DISABLE_ADAPTER:false)

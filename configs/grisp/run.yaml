@@ -14,6 +14,7 @@ do_sample: env(DO_SAMPLE:true)
 
 skeleton_n: env(SKELETON_N:8)
 skeleton_top_k: env(SKELETON_TOP_K:3)
+skeleton_dedupe: env(SKELETON_DEDUPE:merge)
 
 selection_top_k: env(SELECTION_TOP_K:10)
 constrain: env(CONSTRAIN:true)

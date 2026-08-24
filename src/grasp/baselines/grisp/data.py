@@ -3,7 +3,7 @@ import os
 import random
 import re
 import string
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from logging import Logger
 from typing import Literal
 
@@ -29,10 +29,17 @@ from grasp.sparql.utils import (
     replace_unresolved_placeholders,
 )
 from grasp.tasks.sparql_qa.examples import SparqlQaSample
-from grasp.utils import format_list, get_available_knowledge_graphs
+from grasp.utils import format_list, get_available_knowledge_graphs, ordered_unique
 
 BOI = "<iri>"
 EOI = "</iri>"
+
+# a placeholder may hold several wordings of the same item, separated by SEP,
+# which are searched one after the other
+SEP = "<sep>"
+
+# cap on the wordings per placeholder, so merging a large beam stays cheap
+MAX_PLACEHOLDER_QUERIES = 3
 
 BOR = "<rep>"
 EOR = "</rep>"
@@ -64,6 +71,8 @@ IGNORE_INDEX = -100
 Messages = list[dict[str, str]]
 AlternativeGroups = dict[ObjType, list[Alternative]]
 OrderedAlternatives = list[tuple[Alternative, ObjType, str | None]]
+# wordings of the placeholder being resolved, per object type, with variants
+Queries = dict[ObjType, list[tuple[str, str | None]]]
 
 # order in which a skeleton's natural-language placeholders are resolved. All
 # orders reduce to a fixed permutation of placeholder indices computed once per
@@ -163,8 +172,17 @@ def extract_value_from_nl_iri(nl_iri: dict) -> str:
     return nl_iri["value"][len(BOI) : -len(EOI)].strip()
 
 
-def extract_query_and_variant_from_nl_iri(nl_iri: dict) -> tuple[str, str | None]:
-    query = extract_value_from_nl_iri(nl_iri)
+def split_values(value: str) -> list[str]:
+    values = [part.strip() for part in value.split(SEP) if part.strip()]
+    return values or [""]
+
+
+def extract_values_from_nl_iri(nl_iri: dict) -> list[str]:
+    return split_values(extract_value_from_nl_iri(nl_iri))
+
+
+def extract_query_and_variant(value: str) -> tuple[str, str | None]:
+    query = value
     variant: str | None = None
 
     m = re.search(r" \(([^)]*)\)$", query)
@@ -176,24 +194,58 @@ def extract_query_and_variant_from_nl_iri(nl_iri: dict) -> tuple[str, str | None
     return query, variant
 
 
+# each wording with its own variant hint, since wordings need not agree on it
+def extract_queries_and_variants_from_nl_iri(
+    nl_iri: dict,
+) -> list[tuple[str, str | None]]:
+    return [
+        extract_query_and_variant(value) for value in extract_values_from_nl_iri(nl_iri)
+    ]
+
+
+# only the first wording is shown, so prompts stay single-wording like the
+# skeletons the model writes
+def display_nl_iri(nl_iri: dict) -> str:
+    return f"{BOI}{extract_values_from_nl_iri(nl_iri)[0]}{EOI}"
+
+
+# per-placeholder state: alternatives left to try, which wording to search
+# next, the constraint shared by all wordings, and identifiers already offered
+@dataclass
+class Candidates:
+    obj_types: list[ObjType]
+    identifier_maps: dict[ObjType, dict[str, list[str]] | None]
+    alternatives: OrderedAlternatives = field(default_factory=list)
+    next_query: int = 0
+    seen: set[str] = field(default_factory=set)
+
+
 @dataclass
 class Info:
     prefix: str
     sparql: str
-    query: str
-    variant: str | None
-    value: str
+    queries: list[str]
+    variants: list[str | None]
+    values: list[str]
 
+    @property
+    def num_queries(self) -> int:
+        return len(self.values)
+
+    # one entry per wording, so index i is the same wording for every type
     def build_queries(
         self,
         obj_types: dict[ObjType, bool],
-    ) -> dict[ObjType, tuple[str, str | None]]:
+    ) -> Queries:
         queries = {}
         for obj_type, supports_variants in obj_types.items():
-            if supports_variants and self.variant is not None:
-                queries[obj_type] = (self.query, self.variant)
-            else:
-                queries[obj_type] = (self.value, None)
+            pairs = []
+            for query, variant, value in zip(self.queries, self.variants, self.values):
+                if supports_variants and variant is not None:
+                    pairs.append((query, variant))
+                else:
+                    pairs.append((value, None))
+            queries[obj_type] = pairs
         return queries
 
 
@@ -390,7 +442,7 @@ class Skeleton:
             # resolved placeholders are substituted; not-yet-resolved ones are
             # left as their natural-language token (only possible in the partial
             # case, since require_done guarantees all are filled otherwise)
-            sparql += filled.get(j, str(nl_iri["value"]))
+            sparql += filled.get(j, display_nl_iri(nl_iri))
             start = byte_end
 
         sparql += self.sparql_encoded[start:].decode()
@@ -425,12 +477,12 @@ class Skeleton:
             if byte_start >= cur_start:
                 break
             prefix += self.sparql_encoded[start:byte_start].decode()
-            prefix += filled.get(i, str(nl_iri["value"]))
+            prefix += filled.get(i, display_nl_iri(nl_iri))
             start = byte_end
         prefix += self.sparql_encoded[start:cur_start].decode()
 
-        query, variant = extract_query_and_variant_from_nl_iri(cur)
-        value = extract_value_from_nl_iri(cur)
+        values = extract_values_from_nl_iri(cur)
+        queries_and_variants = extract_queries_and_variants_from_nl_iri(cur)
 
         # tail: everything after the current placeholder, again with resolved
         # placeholders substituted and unresolved ones left as natural language
@@ -441,17 +493,18 @@ class Skeleton:
             if byte_start <= cur_start:
                 continue
             tail += self.sparql_encoded[start:byte_start].decode()
-            tail += filled.get(i, str(nl_iri["value"]))
+            tail += filled.get(i, display_nl_iri(nl_iri))
             start = byte_end
         tail += self.sparql_encoded[start:].decode()
 
-        sparql = prefix + f"{BOR}{value}{EOR}" + tail
+        # the marked placeholder shows its first wording too
+        sparql = prefix + f"{BOR}{values[0]}{EOR}" + tail
         return Info(
             prefix=prefix,
             sparql=sparql,
-            query=query,
-            variant=variant,
-            value=value,
+            queries=[query for query, _ in queries_and_variants],
+            variants=[variant for _, variant in queries_and_variants],
+            values=values,
         )
 
     def add_selection(self, selection: Selection, manager: KgManager) -> None:
@@ -477,6 +530,36 @@ class Skeleton:
         selection = self.selections.pop()
         self.identifiers.pop()
         return selection
+
+
+# fold two skeletons that differ only in placeholder wording into one carrying
+# both; None if they do not line up
+def merge_skeletons(
+    base: Skeleton,
+    other: Skeleton,
+    parser: LR1Parser,
+    fill_order: FillOrder = "left-to-right",
+) -> Skeleton | None:
+    if len(base.nl_iris) != len(other.nl_iris):
+        return None
+
+    parts = []
+    start = 0
+    for base_iri, other_iri in zip(base.nl_iris, other.nl_iris):
+        byte_start, byte_end = base_iri["byte_span"]
+        parts.append(base.sparql_encoded[start:byte_start].decode())
+        values = ordered_unique(
+            extract_values_from_nl_iri(base_iri) + extract_values_from_nl_iri(other_iri)
+        )
+        parts.append(f"{BOI}{SEP.join(values[:MAX_PLACEHOLDER_QUERIES])}{EOI}")
+        start = byte_end
+
+    parts.append(base.sparql_encoded[start:].decode())
+
+    try:
+        return Skeleton.parse("".join(parts), parser, fill_order)
+    except Exception:
+        return None
 
 
 def get_skeleton_prompt(
@@ -507,7 +590,7 @@ for wikidata properties."""
 
 def ordered_alternatives(
     alternative_groups: AlternativeGroups,
-    queries: dict[ObjType, tuple[str, str | None]],
+    queries: Queries,
 ) -> OrderedAlternatives:
     return ordered_alternatives_with_interleave(
         alternative_groups,
@@ -518,10 +601,14 @@ def ordered_alternatives(
 
 def ordered_alternatives_with_interleave(
     alternative_groups: AlternativeGroups,
-    queries: dict[ObjType, tuple[str, str | None]],
+    queries: Queries,
     interleave: bool = False,
 ) -> OrderedAlternatives:
-    variants = {obj_type: variant for obj_type, (_, variant) in queries.items()}
+    # the variant hint comes from the first wording that gives one
+    variants = {
+        obj_type: next((variant for _, variant in pairs if variant is not None), None)
+        for obj_type, pairs in queries.items()
+    }
 
     entities = [
         (alternative, ObjType.ENTITY, variants.get(ObjType.ENTITY))
@@ -586,15 +673,16 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
     return top_k_string
 
 
-def find_alternative_groups(
+# object types the placeholder can take and, per type, the identifiers the
+# constraint allows (None means unconstrained). Independent of the wording and
+# costs an endpoint round trip, so it is derived once and reused by all wordings.
+def find_candidate_ids(
     manager: KgManager,
     sparql: str,
-    queries: dict[ObjType, tuple[str, str | None]],
-    top_k: int,
     logger: Logger,
     skip_constraint: bool = False,
     max_candidates: int | None = None,
-) -> AlternativeGroups:
+) -> tuple[list[ObjType], dict[ObjType, dict[str, list[str]] | None]]:
     # prefix left of the current placeholder, with any unresolved placeholders
     # turned into variables so it parses
     prefix = replace_unresolved_placeholders(sparql.split(BOR, 1)[0])
@@ -658,10 +746,23 @@ def find_alternative_groups(
             "Skipping constraint-based IRI filtering, full search will be performed"
         )
 
+    return obj_types, identifier_maps
+
+
+# alternatives for one wording, within what the constraint allows
+def search_alternatives(
+    manager: KgManager,
+    obj_types: list[ObjType],
+    identifier_maps: dict[ObjType, dict[str, list[str]] | None],
+    queries: Queries,
+    query_index: int,
+    top_k: int,
+    logger: Logger,
+) -> AlternativeGroups:
     alternative_groups = {}
     for obj_type in obj_types:
         assert obj_type in queries, f"Missing query for object type {obj_type}"
-        query, _ = queries[obj_type]
+        query, _ = queries[obj_type][query_index]
         logger.debug(f"Searching with query '{query}' in '{obj_type.index_name}' index")
         alternatives = manager.search_index(
             obj_type.index_name,
@@ -678,6 +779,34 @@ def find_alternative_groups(
         + format_alternatives(ordered_alternatives(alternative_groups, queries))
     )
     return alternative_groups
+
+
+# lookup and search for the first wording, all the training data prep needs
+def find_alternative_groups(
+    manager: KgManager,
+    sparql: str,
+    queries: Queries,
+    top_k: int,
+    logger: Logger,
+    skip_constraint: bool = False,
+    max_candidates: int | None = None,
+) -> AlternativeGroups:
+    obj_types, identifier_maps = find_candidate_ids(
+        manager,
+        sparql,
+        logger,
+        skip_constraint=skip_constraint,
+        max_candidates=max_candidates,
+    )
+    return search_alternatives(
+        manager,
+        obj_types,
+        identifier_maps,
+        queries,
+        0,
+        top_k,
+        logger,
+    )
 
 
 def get_selection_prompt_and_options(

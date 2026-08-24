@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from logging import Logger
-from typing import Generator
+from typing import Generator, Literal
 
 import torch
 from grammar_utils.parse import LR1Parser  # type: ignore
@@ -31,24 +31,28 @@ from grasp.baselines.grisp.data import (
     RESULT_UNAVAILABLE,
     RESULT_UNRESOLVED,
     VALIDATION_OPTIONS,
+    Candidates,
     FillOrder,
     OracleSkeletonUnavailable,
     OrderedAlternatives,
     Skeleton,
     count_alternatives,
-    find_alternative_groups,
+    find_candidate_ids,
     get_improvement_prompt,
     get_selection_prompt_and_options,
     get_skeleton_prompt,
     get_validation_prompt,
     gold_sparql_to_nl_skeleton,
+    merge_skeletons,
     ordered_alternatives_with_interleave,
+    search_alternatives,
 )
 from grasp.baselines.grisp.train import GRISPTrainConfig
 from grasp.baselines.grisp.utils import (
     find_best_checkpoint,
     load_sparql_parser,
     set_chat_template,
+    skeleton_wording_key,
 )
 from grasp.configs import KgConfig
 from grasp.manager import KgManager, load_kg_manager
@@ -237,6 +241,11 @@ class GRISPRunConfig(BaseModel):
 
     skeleton_n: int = 8
     skeleton_top_k: int = 3
+    # deduplication of generated skeletons before the top k are kept: "exact"
+    # keeps the first candidate of each distinct string, "merge" folds skeletons
+    # that differ only in placeholder wording into one candidate holding all of
+    # their wordings, which are then searched one after the other.
+    skeleton_dedupe: Literal["exact", "merge"] = "merge"
 
     selection_max_time: float = 60.0
     selection_top_k: int = 10
@@ -353,8 +362,9 @@ def generate_skeletons_from_prompt(
             ),
         )
 
-    skeletons = []
-    seen = set()
+    skeletons: list[Skeleton] = []
+    # deduplication key -> index of the skeleton it was first seen on
+    seen: dict = {}
     for i in range(len(outputs["sequences"])):
         token_ids = outputs["sequences"][i]
         decoded_token_ids = token_ids[prompt_length:]
@@ -366,17 +376,35 @@ def generate_skeletons_from_prompt(
         else:
             logger.debug(f"Generated skeleton:\n{decoded}")
 
-        if decoded in seen:
-            logger.debug("Already seen skeleton, skipping")
-            continue
-
         try:
             skeleton = Skeleton.parse(decoded, parser, cfg.fill_order)  # type: ignore
         except Exception as e:
             logger.warning(f"Failed to parse skeleton, skipping: {e}")
             continue
 
-        seen.add(decoded)
+        if cfg.skeleton_dedupe == "merge":
+            # placeholders merge one to one, so the key keeps document order
+            key = skeleton_wording_key(skeleton.sparql_parse)
+        else:
+            key = decoded
+
+        if key in seen:
+            if cfg.skeleton_dedupe == "merge":
+                merged = merge_skeletons(
+                    skeletons[seen[key]],
+                    skeleton,
+                    parser,
+                    cfg.fill_order,
+                )
+                if merged is not None:
+                    skeletons[seen[key]] = merged
+                    logger.debug(f"Merged wordings into:\n{merged.nl_sparql}")
+                    continue
+
+            logger.debug("Already seen skeleton, skipping")
+            continue
+
+        seen[key] = len(skeletons)
         skeletons.append(skeleton)
 
     # only take top k skeletons, others are just for logging
@@ -587,7 +615,7 @@ def select_iris(
 ) -> Generator[dict, None, SelectionOutcome]:
     start = time.monotonic()
     # init empty memo
-    memo: dict[str, OrderedAlternatives] = {}
+    memo: dict[str, Candidates] = {}
 
     # deepest set of selections reached; preserved across backtracking so a
     # partial (unresolved) skeleton still carries the items it managed to fill.
@@ -655,22 +683,41 @@ def select_iris(
         # keyed on the full query, not just the prefix, since the constraint now
         # depends on resolved neighbours on both sides of the current placeholder
         if info.sparql not in memo:
-            alternative_groups = find_alternative_groups(
+            obj_types, identifier_maps = find_candidate_ids(
                 manager,
                 info.sparql,
-                queries,
-                cfg.selection_top_k,
                 logger,
                 skip_constraint=not cfg.constrain,
                 max_candidates=MAX_IRIS,
             )
-            memo[info.sparql] = ordered_alternatives_with_interleave(
-                alternative_groups,
-                queries,
-                interleave=not cfg.rerank,
-            )
+            memo[info.sparql] = Candidates(obj_types, identifier_maps)
 
-        alternatives = memo[info.sparql]
+        candidates = memo[info.sparql]
+
+        # the next wording is searched only once the current one is used up, so
+        # the combination the best skeleton proposed is explored first
+        while not candidates.alternatives and candidates.next_query < info.num_queries:
+            alternative_groups = search_alternatives(
+                manager,
+                candidates.obj_types,
+                candidates.identifier_maps,
+                queries,
+                candidates.next_query,
+                cfg.selection_top_k,
+                logger,
+            )
+            candidates.next_query += 1
+            candidates.alternatives = [
+                alternative
+                for alternative in ordered_alternatives_with_interleave(
+                    alternative_groups,
+                    queries,
+                    interleave=not cfg.rerank,
+                )
+                if alternative[0].identifier not in candidates.seen
+            ]
+
+        alternatives = candidates.alternatives
         ranking = None
 
         if cfg.rerank:
@@ -693,8 +740,10 @@ def select_iris(
             "index": skeleton.replaced,
             "prefix": info.prefix,
             "sparql": info.sparql,
-            "query": info.query,
-            "variant": info.variant,
+            "query": info.queries[0],
+            "variant": info.variants[0],
+            "queries": info.queries,
+            "variants": info.variants,
             "alternatives": [
                 {
                     "identifier": alternative.get_identifier(),
@@ -718,7 +767,12 @@ def select_iris(
                 ranked_alts.append(alternatives[index])
 
             alternatives = ranked_alts
-            memo[info.sparql] = alternatives
+            candidates.alternatives = alternatives
+
+        # a used-up wording is only a dead end once none are left
+        if len(alternatives) == 0 and candidates.next_query < info.num_queries:
+            logger.debug("Alternatives used up, trying the next wording")
+            continue
 
         if len(alternatives) == 0:
             if skeleton.replaced == 0:
@@ -746,7 +800,8 @@ def select_iris(
         # just try out next alternative in order
         alternative, obj_type, variant = alternatives[0]
         alternatives = alternatives[1:]
-        memo[info.sparql] = alternatives
+        candidates.alternatives = alternatives
+        candidates.seen.add(alternative.identifier)
         if not alternative.variants:
             # just to be sure to have no parsing errors
             variant = None

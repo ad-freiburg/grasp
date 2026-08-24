@@ -8,7 +8,11 @@ from torch.utils.data import Sampler
 from transformers import PreTrainedTokenizerBase
 from universal_ml_utils.io import load_json
 
+from grasp.sparql.utils import parse_to_string
 from grasp.utils import read_resource
+
+# placeholders are replaced by this when a skeleton is normalized
+BLANK_PLACEHOLDER = "<IRI>"
 
 
 def load_sparql_grammar() -> tuple[str, str]:
@@ -20,6 +24,42 @@ def load_sparql_grammar() -> tuple[str, str]:
 def load_sparql_parser() -> LR1Parser:
     sparql_grammar, sparql_lexer = load_sparql_grammar()
     return LR1Parser(sparql_grammar, sparql_lexer)
+
+
+# copy with variables renamed to ?var0, ?var1, ... by first appearance, so the
+# join structure survives, and optionally with placeholders blanked
+def normalize_skeleton_parse(
+    parse: dict,
+    var_map: dict[str, str],
+    blank_placeholders: bool = True,
+) -> dict:
+    name = parse["name"]
+    value = parse.get("value")
+    children = parse.get("children")
+
+    if name in ("VAR1", "VAR2") and value is not None:
+        if value not in var_map:
+            var_map[value] = f"?var{len(var_map)}"
+        return {"name": name, "value": var_map[value]}
+
+    elif name == "NL_IRI" and blank_placeholders:
+        return {"name": name, "value": BLANK_PLACEHOLDER}
+
+    normalized: dict = {"name": name}
+    if value is not None:
+        normalized["value"] = value
+    if children is not None:
+        normalized["children"] = [
+            normalize_skeleton_parse(child, var_map, blank_placeholders)
+            for child in children
+        ]
+    return normalized
+
+
+# blanked skeleton in document order: skeletons sharing it differ only in
+# wording and variable names, so their placeholders line up one to one
+def skeleton_wording_key(parse: dict) -> str:
+    return parse_to_string(normalize_skeleton_parse(parse, {}, True))
 
 
 def set_chat_template(tokenizer: PreTrainedTokenizerBase) -> PreTrainedTokenizerBase:
