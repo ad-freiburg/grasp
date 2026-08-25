@@ -236,7 +236,7 @@ differently in the target ontology.
 by establishing high-confidence matches, regardless of their position in the hierarchy, \
 with obvious matches based on strict lexical similarities (e.g., exact label matches, \
 identical local names, or unambiguous synonyms). These initial 1:1 correspondences will \
-serve as your structural anchors for the rest of the process. \
+serve as your structural anchors for the rest of the process.
 3. Leverage the established anchors to explore their structural neighborhood. \
 Use the provided functions to compare the superclasses, subclasses, domains, and ranges \
 of your anchored entities. Use this structural context to discover new, less obvious mappings \
@@ -258,6 +258,11 @@ def rules() -> list[str]:
         "Precision over Recall: If you cannot find a suitable reference entity in the target graph,"
         "leave the source entity unmatched. It is better to set fewer but fully logically "
         "consistent correspondences than more but less robust equivalences.",
+        "Lexical anchor mappings: For exact lexical matches (e.g., identical local names or labels "
+        "like 'Person' and 'Person'), treat them as high probability matches. Do not reject exact string "
+        "matches due to minor structural or modeling differences, unless they are clear and "
+        "unambiguous homonyms (e.g., 'Title' as a book vs. 'Title' as a degree) or they cause "
+        "hard logical contradictions.",
         "Batch over Iteration: To improve efficiency and avoid hitting context limits, "
         "favor batch-retrieval SPARQL queries over repetitive individual searches when "
         "executing manual SPARQL queries for identifying patterns across multiple entities",
@@ -471,18 +476,32 @@ def add_1_to_1_correspondence(
             existing_source_corr = state.get_correspondence(full_iri_source)
             existing_target_corr = state.get_correspondence(full_iri_target)
 
+            entity_1 = None
+            entity_2 = None
+            entity_3 = None
+
             if existing_source_corr is not None:
-                return (
-                    f"Collision Error: The source entity {entity_source} is already mapped to"
-                    f"{existing_source_corr.entity_target.entity}. If you want to change this mapping, "
-                    "you must set 'overwrite' to True."
-                    )
+                entity_1 = entity_source
+                entity_2 = existing_source_corr.entity_target.entity
+                entity_3 = entity_target
+
             if existing_target_corr is not None:
+                entity_1 = entity_target
+                entity_2 = existing_target_corr.entity_source.entity
+                entity_3 = entity_source
+
+            if existing_source_corr or existing_target_corr:
                 return (
-                    f"Collision Error: The target entity {entity_target} is already mapped to"
-                    f"{existing_target_corr.entity_source.entity}. If you want to change this mapping, "
-                    "you must set 'overwrite' to True."
-                    )
+                    f"Mapping Conflict detected: The entity '{entity_1}' has already been mapped to "
+                    f"'{entity_2}', but you proposed a new mapping to '{entity_3}'.\n\n"
+                    "Do not default to keeping the existing mapping. Treat both candidates as hypotheses and evaluate them from scratch:\n"
+                    f"- Option A (Current):   '{entity_1}' ≡ '{entity_2}'\n"
+                    f"- Option B (New candidate): '{entity_1}' ≡ '{entity_3}'\n\n"
+                    "Compare both semantically and structurally. Which target entity is genuinely the better conceptual match?\n"
+                    "- If Option B is superior: Re-submit by calling `set_correspondence(..., overwrite=True)`.\n"
+                    "- If Option A is superior: It will be automatically retained. Find a different valid match for the unmapped entity or leave it unmapped."
+                )
+
         else:
             # clear out whatever the source/target entities were previously
             # mapped to - otherwise the previous correspondence's other side
@@ -673,9 +692,7 @@ title vs. Title as an academic degree. Do not overthink minor nuances.
             filler_3 = "it has no appropriate match"
         instructions += f"""\
 Align the following {filler_1} from the source ontology {task_input.source_kg} \
-with {filler_2} from the target ontology {task_input.target_kg} or verify {filler_3}. \
-Remember the rules: injectivity, strict equivalence, precision over recall:
-
+with {filler_2} from the target ontology {task_input.target_kg} or verify {filler_3}:
 """
         if task_input.description:
             instructions += f"Context: {task_input.description}\n\n"
