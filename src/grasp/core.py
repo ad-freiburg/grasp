@@ -36,6 +36,7 @@ from grasp.utils import (
 )
 from grasp.multimodal.utils import (
     image_url_to_base64,
+    is_multimodal_payload,
     media_reference_hint,
 )
 
@@ -187,9 +188,13 @@ def generate(
     # save the raw input, in case an image is attached
     raw_input = input
 
-    # setup task first, so tasks can configure based on input
-    # (e.g. auto-setup accesses self.input in function_definitions)
-    text_input = task.setup(raw_input)
+    # Keep media transport separate from the task's native input type.
+    task_input = raw_input["input"] if is_multimodal_payload(raw_input) else raw_input
+
+    # Setup task first, so tasks can configure based on input
+    # (e.g. auto-setup accesses self.input in function_definitions).
+    print(task_input)
+    text_input = task.setup(task_input)
 
     enable_load = Modality.IMAGE in config.get_default_model.modality and config.load_user_input
 
@@ -211,7 +216,7 @@ def generate(
 
     if isinstance(raw_input, dict):
         raw_images = raw_input.get("image_input")
-        if raw_images is None:
+        if not raw_images:
             raw_images = raw_input.get("image_url")
 
         if isinstance(raw_images, str):
