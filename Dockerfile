@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1 \
   GRASP_INDEX_DIR=/opt/grasp
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg &&\
+    apt-get install -y --no-install-recommends ffmpeg build-essential &&\
     rm -rf /var/lib/apt/lists/*
 
 # Copy files
