@@ -640,6 +640,7 @@ def select_iris(
             if not cfg.check_empty:
                 break
 
+            result = None
             try:
                 # reject empty queries
                 sparql = skeleton.materialize()
@@ -650,7 +651,6 @@ def select_iris(
                     request_timeout=(3.5, 6.0),
                     read_timeout=3.0,
                 )
-                logger.debug(f"Result:\n{manager.format_sparql_result(result)}")
                 reject = result.is_empty
             except SPARQLExecuteException as e:
                 logger.warning(f"Error executing final SPARQL to check emptiness:\n{e}")
@@ -658,6 +658,13 @@ def select_iris(
             except Exception as e:
                 logger.warning(f"Unexpected error executing final SPARQL:\n{e}")
                 reject = True
+
+            # formatting is log-only, a failure must not make a result look empty
+            if result is not None:
+                try:
+                    logger.debug(f"Result:\n{manager.format_sparql_result(result)}")
+                except Exception as e:
+                    logger.warning(f"Error formatting final SPARQL result:\n{e}")
 
             if not reject:
                 yield {"type": "validation", "result": "passed"}

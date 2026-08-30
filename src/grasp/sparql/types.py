@@ -85,8 +85,13 @@ class Binding:
 
     @staticmethod
     def from_dict(data: dict) -> "Binding":
+        # virtuoso emits the pre-2013 "typed-literal" where the spec uses "literal"
+        typ = data["type"]
+        if typ == "typed-literal":
+            typ = "literal"
+
         return Binding(
-            typ=data["type"],
+            typ=typ,
             value=data["value"],
             datatype=data.get("datatype"),
             lang=data.get("xml:lang"),
