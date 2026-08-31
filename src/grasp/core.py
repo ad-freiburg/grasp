@@ -10,7 +10,7 @@ from openai import APIConnectionError
 from universal_ml_utils.io import load_json
 from universal_ml_utils.logging import get_logger
 
-from grasp.configs import GraspConfig
+from grasp.configs import GraspConfig, LLMConfig, Modality
 from grasp.examples import ExampleIndex
 from grasp.functions import call_function, kg_functions
 from grasp.manager import KgManager, format_kgs, load_kg_manager
@@ -20,7 +20,7 @@ from grasp.manager.utils import (
     get_common_sparql_prefixes,
 )
 from grasp.model import Message, Model, Response, ToolCall, get_model
-from grasp.tasks import get_task
+from grasp.tasks import get_task, multimodal_rules
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
 from grasp.tasks.feedback import format_feedback, generate_feedback
@@ -33,6 +33,11 @@ from grasp.utils import (
     format_prefixes,
     format_response,
     format_section,
+)
+from grasp.multimodal.utils import (
+    image_url_to_base64,
+    is_multimodal_payload,
+    media_reference_hint,
 )
 
 
@@ -99,6 +104,24 @@ def system_instructions(
     if rules:
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
+    if task.config.get_vision_models or task.config.get_audio_models:
+        rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality and task.config.load_user_input)
+        blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
+        vision_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_vision_models]
+        audio_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_audio_models]
+        blocks.append(
+            format_section(
+                "Vision Models to Choose from for 'analyze()'",
+                format_enumerate(vision_model_list)
+            ),
+        )
+        blocks.append(
+            format_section(
+                "Audio Models to Choose from for 'analyze()'",
+                format_enumerate(audio_model_list),
+            )
+        )
+
     return "\n\n".join(blocks)
 
 
@@ -107,7 +130,13 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
     managers: list[KgManager] = []
     for kg in config.knowledge_graphs:
         manager = load_kg_manager(kg)
-        models = manager.load_models(models, embedding_model=config.embedding_model)
+        manager.max_image_dimension = config.max_image_dimension
+        models = manager.load_models(
+            models,
+            embedding_model=config.embedding_model,
+            clip_model=config.clip_model,
+            clap_model=config.clap_model
+            )
         managers.append(manager)
 
     return managers, models
@@ -143,6 +172,7 @@ def generate(
     yield_output: bool = False,
     custom_model: Model | None = None,
 ) -> Generator[dict, None, dict]:
+
     if task_name != "sparql-qa" and task_name != "general-qa":
         # disable examples for tasks other than sparql-qa and general-qa
         # to avoid errors due to missing implementations
@@ -151,25 +181,71 @@ def generate(
         logger.debug(f"Disabling examples for {task_name} task")
     if task_name == "general-qa":
         config = deepcopy(config)
-        config.tool_choice = "auto"
         logger.debug("Setting tool choice to auto for general-qa task")
 
     task = get_task(task_name, managers, config, past_known)
 
-    input = task.setup(input)
+    # save the raw input, in case an image is attached
+    raw_input = input
 
-    # setup functions (after setup so tasks can configure based on input)
+    # Keep media transport separate from the task's native input type.
+    task_input = raw_input["input"] if is_multimodal_payload(raw_input) else raw_input
+
+    # Setup task first, so tasks can configure based on input
+    # (e.g. auto-setup accesses self.input in function_definitions).
+    print(task_input)
+    text_input = task.setup(task_input)
+
+    enable_load = Modality.IMAGE in config.get_default_model.modality and config.load_user_input
+
     fns = kg_functions(
         managers,
         config.fn_set,
         config.list_k,
         config.search_k,
         config.search_max_pages,
+        enable_load=enable_load,
+        enable_analyze=bool(
+            config.get_vision_models or config.get_audio_models
+        ),
     )
     fns.extend(task.function_definitions())
-    yield {"type": "input", "input": input}
 
-    model = custom_model or get_model(config)
+    image_urls: list[str] = []
+    audio_inputs: list[str] = []
+
+    if isinstance(raw_input, dict):
+        raw_images = raw_input.get("image_input")
+        if not raw_images:
+            raw_images = raw_input.get("image_url")
+
+        if isinstance(raw_images, str):
+            raw_images = [raw_images]
+        if isinstance(raw_images, list):
+            image_urls = [x for x in raw_images if isinstance(x, str) and x.strip()]
+
+        raw_audio = raw_input.get("audio_input")
+        if isinstance(raw_audio, str):
+            raw_audio = [raw_audio]
+        if isinstance(raw_audio, list):
+            audio_inputs = [x for x in raw_audio if isinstance(x, str) and x.strip()]
+
+    normalized_images: list[str] = []
+    for image in image_urls:
+        if image.startswith("http"):
+            normalized_images.append(image_url_to_base64(image, config.max_image_dimension))
+        else:
+            normalized_images.append(image)
+
+    image_urls = normalized_images
+    media_inputs: list[str] | None = None
+    if image_urls or audio_inputs:
+        media_inputs = [*image_urls, *audio_inputs]
+    media_hint = media_reference_hint(len(image_urls), len(audio_inputs))
+
+    yield {"type": "input", "input": text_input}
+
+    model = custom_model or get_model(config.get_default_model)
 
     feedback_notes = notes
     feedback_kg_notes = kg_notes
@@ -213,8 +289,37 @@ def generate(
 
     start = time.monotonic()
 
+    supports_image_input = Modality.IMAGE in config.get_default_model.modality
+
     # add user input
-    messages.append(Message.user(content=input))
+    if image_urls and config.load_user_input:
+        if not supports_image_input:
+            raise ValueError(
+                "Direct user-context loading is enabled, but the default model "
+                f"'{config.get_default_model.model}' does not support image inputs"
+            )
+
+        text_content = text_input + media_hint if audio_inputs else text_input
+        content = [{"type": "text", "text": text_content}]
+        content.extend(
+            {"type": "image_url", "image_url": {"url": image_url}}
+            for image_url in image_urls
+        )
+        messages.append(
+            Message(
+                role="user",
+                content=content,
+            )
+        )
+
+    elif image_urls or audio_inputs:
+        messages.append(
+            Message.user(
+                content=text_input + media_hint
+            )
+        )
+    else:
+        messages.append(Message.user(content=text_input))
 
     if (
         config.force_examples
@@ -227,7 +332,7 @@ def generate(
             managers,
             example_indices,  # type: ignore
             config.force_examples,
-            input,
+            text_input,
             config.random_examples,
             config.num_examples,
             task.known,
@@ -239,7 +344,7 @@ def generate(
         args = {"kg": config.force_examples, "page": 1}
         if not config.random_examples:
             name = "search_example"
-            args["query"] = input
+            args["query"] = text_input
 
         tool_call = ToolCall(
             id=uuid.uuid4().hex,
@@ -359,6 +464,7 @@ def generate(
                     task.known,
                     task,
                     example_indices,
+                    media_inputs,
                 )
             except Exception as e:
                 tool_call.error = str(e)
@@ -409,11 +515,17 @@ def generate(
 
         # provide feedback
         try:
-            inputs = [
-                message.content
-                for message in messages
-                if isinstance(message.content, str) and message.role == "user"
-            ]
+            inputs = []
+            for message in messages:
+                if message.role != "user":
+                    continue
+                c = message.content
+                if isinstance(c, str):
+                    inputs.append(c)
+                if isinstance(c, list):
+                    text = "".join(part.get("text", "") for part in c if part.get("type") == "text")
+                    inputs.append(text)
+
             feedback = generate_feedback(
                 model,
                 task,

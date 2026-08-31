@@ -9,10 +9,11 @@ from typing import Any, Iterable
 from cachetools import LRUCache
 from search_rdf import Data, EmbeddingIndex
 from search_rdf.model import (
-    HuggingFaceImageModel,
     OpenClipModel,
     SentenceTransformerModel,
+    HuggingFaceImageModel,
 )
+from grasp.multimodal.ClapCapModel import ClapCapModel
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
@@ -24,9 +25,7 @@ from grasp.manager.utils import (
     SearchIndex,
     format_index_meta,
     get_common_sparql_prefixes,
-    get_embedding_model_key,
     load_embedding_model,
-    load_image_from_url,
     load_index_description,
     load_info_sparql,
     load_kg_info,
@@ -34,7 +33,10 @@ from grasp.manager.utils import (
     merge_prefixes,
     try_load_search_index,
 )
-from grasp.search_params import resolve_index_search_params
+from grasp.search_params import (
+    EmbeddingSearchParams,
+    resolve_index_search_params,
+)
 from grasp.shapes import (
     Shapes,
     load_setup_description,
@@ -79,6 +81,12 @@ from grasp.utils import (
     get_index_dir,
     ordered_unique,
 )
+from grasp.multimodal.utils import (
+    Modality,
+    audio_base64_to_file,
+    convert_base64_to_np_array,
+)
+
 
 SEARCH_CACHE_MAX_SIZE = int(os.getenv("GRASP_SEARCH_CACHE_MAX_SIZE", "1024"))
 SEARCH_CACHE_MIN_MS = float(os.getenv("GRASP_SEARCH_CACHE_MIN_MS", "100"))
@@ -122,6 +130,7 @@ class KgManager:
         self.embedding_models: dict[str, EmbeddingModel] = {}
         self.shapes: Shapes | None = None
         self.shape_config: ShapeConfig | None = None
+        self.max_image_dimension: int = 1024
 
         self.search_cache = LRUCache(maxsize=SEARCH_CACHE_MAX_SIZE)
         self.search_lock = RLock()
@@ -130,6 +139,8 @@ class KgManager:
         self,
         models: dict[str, EmbeddingModel] | None = None,
         embedding_model: str | None = None,
+        clip_model: str | None = None,
+        clap_model: str | None = None,
     ) -> dict[str, EmbeddingModel]:
         if models is None:
             models = {}
@@ -154,6 +165,17 @@ class KgManager:
             )
 
         self.embedding_models = models
+
+        if clip_model:
+            self.clip_model = OpenClipModel(clip_model)
+        else:
+            self.clip_model = None
+
+        if clap_model:
+            self.clap_model = ClapCapModel(version=clap_model)
+        else:
+            self.clap_model = None
+
         return models
 
     def set_info_retrieval(self, enable: bool) -> None:
@@ -530,41 +552,56 @@ class KgManager:
             matched_label=matched_via,
         )
 
+    @staticmethod
+    def get_embedding_model_key(index: EmbeddingIndex) -> str:
+        assert index.model is not None, "Embedding index must have model metadata"
+        provider = index.provider or "sentence-transformer"
+        return f"{provider}/{index.model}"
+
     def embed_query(
         self,
         index: EmbeddingIndex,
         query: str,
-        query_type: str = "text",
+        modality: Modality,
+        models: dict[str, EmbeddingModel],
     ) -> list[float]:
-        model_key = get_embedding_model_key(index)
-        model = self.embedding_models[model_key]
+        from grasp.multimodal.functions import load  # avoid circular import (multimodal.functions itself imports grasp.manager)
+        model_key = self.get_embedding_model_key(index)
+        model = models[model_key]
 
-        if query_type == "text":
+        if modality == Modality.TEXT:
             if isinstance(model, SentenceTransformerModel):
                 return model.embed([query])[0].tolist()
             elif isinstance(model, OpenClipModel):
                 return model.embed_text([query])[0].tolist()
-            elif isinstance(model, HuggingFaceImageModel):
-                raise ValueError("Image embedding model does not support text queries")
+            elif isinstance(model, ClapCapModel):
+                return model.embed_text([query])[0].tolist()
             else:
-                raise ValueError(f"Unsupported embedding model type: {type(model)}")
+                raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
-        elif query_type == "image":
-            image = load_image_from_url(query)
+        elif modality == Modality.IMAGE:
+            image_payload = load(query, modality, self.max_image_dimension)
+            image = convert_base64_to_np_array(image_payload["image_url"]["url"])
             if isinstance(model, OpenClipModel):
                 return model.embed_image([image])[0].tolist()
             elif isinstance(model, HuggingFaceImageModel):
                 return model.embed([image])[0].tolist()
-            elif isinstance(model, SentenceTransformerModel):
-                raise ValueError(
-                    "SentenceTransformer model does not support image queries"
-                )
             else:
-                raise ValueError(f"Unsupported embedding model type: {type(model)}")
+                raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
+        elif modality == Modality.AUDIO:
+            audio_payload = load(query, modality, self.max_image_dimension)
+            data = audio_payload["input_audio"]["data"]
+            format = audio_payload["input_audio"]["format"]
+            tmp_path = audio_base64_to_file(data, suffix=f".{format}")
+            try:
+                return model.embed_audio([tmp_path])[0].tolist()
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
         else:
             raise ValueError(
-                f"Unsupported query_type '{query_type}', expected 'text' or 'image'"
+                f"Unsupported querytype '{modality}'"
             )
 
     def search_index(
@@ -573,7 +610,7 @@ class KgManager:
         query: str | None = None,
         k: int = 10,
         identifier_map: dict[str, list[str]] | None = None,
-        query_type: str = "text",
+        query_type: Modality = Modality.TEXT,
     ) -> list[Alternative]:
         start = time.monotonic()
         cache_key = None
@@ -603,7 +640,13 @@ class KgManager:
             kwargs = {}
             if index.index_type == "embedding":
                 assert isinstance(index, EmbeddingIndex)
-                kwargs["embedding"] = self.embed_query(index, query, query_type)
+                embedding = self.embed_query(index, query, query_type, self.embedding_models)
+                kwargs["embedding"] = embedding
+                params = kg_index.search_params or EmbeddingSearchParams()
+                assert isinstance(params, EmbeddingSearchParams)
+                kwargs["min_score"] = params.min_score
+                kwargs["exact"] = params.exact
+                kwargs["rerank"] = params.rerank
             else:
                 kwargs["query"] = query
 

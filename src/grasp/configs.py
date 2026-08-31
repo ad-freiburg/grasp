@@ -1,6 +1,14 @@
 from typing import Any, Literal
+from enum import Enum
 
 from pydantic import BaseModel, Field, conlist, model_validator
+
+
+class Modality(str, Enum):
+    TEXT = "text"
+    IMAGE = "image"
+    AUDIO = "audio"
+    GRASP = "grasp"
 
 
 class KgInfo(BaseModel):
@@ -92,7 +100,7 @@ class ModelConfig(BaseModel):
     seed: int | None = None
 
     # model parameters
-    model: str = "gpt-5.4-mini"
+    model: str
     model_provider: Literal[
         "openai/completions",
         "openai/responses",
@@ -120,7 +128,12 @@ class JudgeConfig(ModelConfig):
     knowledge_graph: KgConfig | None = None
 
 
-class GraspConfig(ModelConfig):
+class LLMConfig(ModelConfig):
+    modality: list[Modality]
+    description: str
+
+
+class GraspConfig(BaseModel):
     # function set, notes, and knowledge graphs
     fn_set: Literal[
         "base",
@@ -132,10 +145,17 @@ class GraspConfig(ModelConfig):
     ] = "search_filter"
     notes_file: str | None = None
 
+    seed: int | None = None
+
     knowledge_graphs: list[KgConfig] = [KgConfig(kg="wikidata")]
+
+    models: list[LLMConfig] = []
+    default_model: str = "grasp"
 
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+    clap_model: str | None = None
 
     # optional task specific parameters
     # map[task_name, map[param_name, param_value]]
@@ -179,10 +199,31 @@ class GraspConfig(ModelConfig):
     feedback: bool = False
     max_feedbacks: int = 2
     notes_only_for_feedback: bool = False
+    load_user_input: bool = False
+    answer_in_free_text: bool = False
+    # maximum image dimension (longest side in pixels) before rescaling
+    max_image_dimension: int = 1024
 
     @property
     def sparql_request_timeout(self) -> tuple[float, float]:
         return self.sparql_connection_timeout, self.sparql_query_timeout
+
+    @property
+    def get_default_model(self) -> LLMConfig:
+        grasp_models = [m for m in self.models if "grasp" in m.modality]
+        if not grasp_models:
+            raise ValueError(
+                "No GRASP model configured. Please add a model with modality including 'grasp'."
+            )
+        return grasp_models[0]
+
+    @property
+    def get_vision_models(self) -> list[LLMConfig]:
+        return [m for m in self.models if "image" in m.modality]
+
+    @property
+    def get_audio_models(self) -> list[LLMConfig]:
+        return [m for m in self.models if "audio" in m.modality]
 
 
 class SpeechToTextConfig(BaseModel):

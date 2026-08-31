@@ -60,6 +60,8 @@ class GraspTask(ABC):
 
     def setup(self, input: Any) -> str:
         # default is no state, and string input
+        if isinstance(input, dict):
+            input = input.get("text") or input.get("query") or input.get("input", "")
         assert isinstance(input, str), f"Input for {self.name} must be a string"
         return input
 

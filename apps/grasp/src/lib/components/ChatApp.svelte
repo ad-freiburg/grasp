@@ -218,7 +218,7 @@ let running = false;
           parsedInput &&
           typeof parsedInput === 'object' &&
           typeof parsedInput.task === 'string';
-        if (isValidRecord && PAYLOAD_INPUT_TASKS.has(parsedInput.task)) {
+        if (isValidRecord && PAYLOAD_INPUT_TASKS.has(parsedInput.task) && isValidTaskId(parsedInput.task)) {
           lastInputRecord = parsedInput;
         } else {
           sessionStore.removeItem(SESSION_STORAGE_KEYS.lastInput);
@@ -605,10 +605,32 @@ let running = false;
       if (!detail || detail.kind !== 'entity-linking' || !detail.payload) return;
       payloadInput = detail.payload;
     } else {
-      const question = typeof event.detail === 'string' ? event.detail : '';
-      const trimmedQuestion = question.trim();
-      if (!trimmedQuestion) return;
-      payloadInput = trimmedQuestion;
+      if (typeof event.detail === 'string') {
+        const trimmedQuestion = event.detail.trim();
+        if (!trimmedQuestion) return;
+        payloadInput = trimmedQuestion;
+      } else if (event.detail && typeof event.detail === 'object') {
+        const text =
+          typeof event.detail.input === 'string' ? event.detail.input.trim() : '';
+        const imageInput = Array.isArray(event.detail.image_input)
+          ? event.detail.image_input.filter((entry) => typeof entry === 'string' && entry.trim())
+          : [];
+        const audioInput = Array.isArray(event.detail.audio_input)
+          ? event.detail.audio_input.filter((entry) => typeof entry === 'string' && entry.trim())
+          : [];
+
+        if (!text && imageInput.length === 0 && audioInput.length === 0) {
+          return;
+        }
+
+        payloadInput = {
+          input: text,
+          image_input: imageInput,
+          audio_input: audioInput
+        };
+      } else {
+        return;
+      }
     }
     replaceUrlWithRoot();
 
@@ -764,7 +786,7 @@ let running = false;
   function persistLastInput(record) {
     const sessionStore = getSessionStorage();
     if (!sessionStore) return;
-    if (!record || !PAYLOAD_INPUT_TASKS.has(record.task)) {
+    if (!record || !PAYLOAD_INPUT_TASKS.has(record.task) || !isValidTaskId(record.task)) {
       sessionStore.removeItem(SESSION_STORAGE_KEYS.lastInput);
       return;
     }
@@ -981,7 +1003,7 @@ let running = false;
       if (sharedLastInput !== undefined) {
         const targetTask =
           typeof payload.task === 'string' ? payload.task : task;
-        if (sharedLastInput == null || !PAYLOAD_INPUT_TASKS.has(targetTask)) {
+        if (sharedLastInput == null || !PAYLOAD_INPUT_TASKS.has(targetTask) ||!isValidTaskId(targetTask)) {
           sessionStore?.removeItem(SESSION_STORAGE_KEYS.lastInput);
           lastInputRecord = null;
         } else {

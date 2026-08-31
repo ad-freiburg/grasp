@@ -23,11 +23,15 @@
   const MAX_FILE_SIZE_BYTES = 1024 * 1024;
   const MAX_COLUMNS = 100;
   const MAX_FILE_SIZE_LABEL = '1 MB';
+  const MAX_IMAGE_DIMENSION = 1024;
+  const MAX_SELECTED_PDF_PAGES = 5;
+  const PDF_RENDER_SCALE = 1.5;
 
   let textareaEl;
   let fileInputEl;
   let uploadButtonEl;
   let urlModalInputEl;
+  let mediaInputEl;
   let isMobile = false;
   let previousValue = '';
   let isCeaTask = false;
@@ -64,6 +68,13 @@
   let recordingStream = null;
   let audioChunks = [];
   let recordingMimeType = '';
+  let mediaError = '';
+  let isConvertingPdf = false;
+  let imageAttachments = [];
+  let audioAttachments = [];
+  let pdfPageAttachments = [];
+  let mediaCounter = 0;
+  let isDragOver = false;
 
   const INACTIVITY_MESSAGE_PREFIX = 'connection closed due to inactivity';
 
@@ -105,13 +116,15 @@
         !isCancelling &&
         !isRecording &&
         !isTranscribing
-      : trimmed.length > 0 &&
+      : (trimmed.length > 0 || hasMediaAttachments) &&
+      !pdfSelectionRequiredError &&
       !disabled &&
       connected &&
       !isRunning &&
       !isCancelling &&
       !isRecording &&
-      !isTranscribing;
+      !isTranscribing &&
+      !isConvertingPdf;
   $: isSttTask = STT_TASKS.includes(task);
   $: canRecord = sttEnabled &&
     isSttTask &&
@@ -140,6 +153,19 @@
     ? `${ceaSummary.columns} ${ceaSummary.columns === 1 ? 'column' : 'columns'}`
     : '';
   $: hasPreviousCea = Boolean(ceaPreviousPayload) && Boolean(ceaPreviousSummary);
+  $: selectedPdfPages = pdfPageAttachments.filter((page) => page.selected);
+  $: selectedPdfPageCount = selectedPdfPages.length;
+  $: selectedImagePayloads = [
+    ...imageAttachments.map((item) => item.dataUrl),
+    ...selectedPdfPages.map((item) => item.dataUrl)
+  ];
+  $: selectedAudioPayloads = audioAttachments.map((item) => item.dataUrl);
+  $: hasMediaAttachments =
+    selectedImagePayloads.length > 0 || selectedAudioPayloads.length > 0;
+  $: pdfSelectionRequiredError =
+    pdfPageAttachments.length > 0 && selectedPdfPageCount === 0
+      ? `Select at least one PDF page (maximum ${MAX_SELECTED_PDF_PAGES}).`
+      : '';
 
   $: if (isCeaTask) {
     if (initialCeaPayload && initialCeaPayload !== appliedInitialCeaRef) {
@@ -162,6 +188,8 @@
   $: if (lastTask !== task) {
     if (lastTask === 'cea') {
       clearCeaSelection({ preservePrevious: true });
+    } else if (task === 'cea') {
+      clearMediaAttachments();
     }
     lastTask = task;
   }
@@ -234,7 +262,12 @@
       clearCeaSelection({ preservePrevious: true });
       return;
     }
-    dispatch('submit', trimmed);
+    const multimodalPayload = {
+      input: trimmed,
+      image_input: selectedImagePayloads,
+      audio_input: selectedAudioPayloads
+    };
+    dispatch('submit', multimodalPayload);
   }
 
   function cancel() {
@@ -247,6 +280,8 @@
     dispatch('reset');
     if (isCeaTask) {
       clearCeaSelection();
+    } else {
+      clearMediaAttachments();
     }
     if (isElTask) {
       clearElState();
@@ -516,6 +551,366 @@
       isTranscribing = false;
       focusInput();
     }
+  }
+
+  function createMediaId(prefix) {
+    mediaCounter += 1;
+    return `${prefix}-${Date.now()}-${mediaCounter}`;
+  }
+
+  function clearMediaInput(input) {
+    if (input) {
+      input.value = '';
+    }
+  }
+
+  function clearMediaError() {
+    mediaError = '';
+  }
+
+  function clearMediaAttachments() {
+    imageAttachments = [];
+    audioAttachments = [];
+    pdfPageAttachments = [];
+    isConvertingPdf = false;
+    isDragOver = false;
+    mediaError = '';
+    clearMediaInput(mediaInputEl);
+  }
+
+  function openMediaDialog() {
+    if (isCeaTask || disabled || isRunning || isCancelling || isConvertingPdf) return;
+    mediaInputEl?.click();
+  }
+
+  function removeImageAttachment(id) {
+    imageAttachments = imageAttachments.filter((item) => item.id !== id);
+  }
+
+  function removeAudioAttachment(id) {
+    audioAttachments = audioAttachments.filter((item) => item.id !== id);
+  }
+
+  function clearPdfAttachments() {
+    pdfPageAttachments = [];
+    clearMediaInput(mediaInputEl);
+  }
+
+  function removePdfPageAttachment(id) {
+    pdfPageAttachments = pdfPageAttachments.filter((item) => item.id !== id);
+  }
+
+  function togglePdfPageSelection(id) {
+    const target = pdfPageAttachments.find((page) => page.id === id);
+    if (!target) return;
+    if (!target.selected && selectedPdfPageCount >= MAX_SELECTED_PDF_PAGES) {
+      mediaError = `You can select up to ${MAX_SELECTED_PDF_PAGES} PDF pages.`;
+      return;
+    }
+    clearMediaError();
+    pdfPageAttachments = pdfPageAttachments.map((page) =>
+      page.id === id ? { ...page, selected: !page.selected } : page
+    );
+  }
+
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error(`Failed to read file ${file.name}.`));
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        if (!result) {
+          reject(new Error(`Failed to read file ${file.name}.`));
+          return;
+        }
+        resolve(result);
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function imageToScaledDataUrl(file, maxDim = MAX_IMAGE_DIMENSION) {
+    const originalDataUrl = await fileToDataUrl(file);
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error(`Failed to load image ${file.name}.`));
+      image.src = originalDataUrl;
+    });
+
+    const longest = Math.max(img.width, img.height);
+    if (longest <= maxDim) {
+      return originalDataUrl;
+    }
+
+    const scale = maxDim / longest;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+      throw new Error(`Failed to scale image ${file.name}.`);
+    }
+    context.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        async (blob) => {
+          if (!blob) {
+            reject(new Error(`Failed to scale image ${file.name}.`));
+            return;
+          }
+          const dataUrl = await fileToDataUrl(blob);
+          resolve(dataUrl);
+        },
+        'image/jpeg',
+        0.85
+      );
+    });
+  }
+
+  async function canvasToJpegDataUrl(canvas, quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        async (blob) => {
+          if (!blob) {
+            reject(new Error('Failed to render PDF page to image.'));
+            return;
+          }
+          const dataUrl = await fileToDataUrl(blob);
+          resolve(dataUrl);
+        },
+        'image/jpeg',
+        quality
+      );
+    });
+  }
+
+  async function renderPdfPageToJpeg(page) {
+    const baseViewport = page.getViewport({ scale: 1 });
+    const longest = Math.max(baseViewport.width, baseViewport.height);
+    const baseScale = longest > 0 ? MAX_IMAGE_DIMENSION / longest : 1;
+    const scale = Math.min(PDF_RENDER_SCALE, baseScale);
+
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+      throw new Error('Failed to create PDF rendering context.');
+    }
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+
+    await page.render({ canvasContext: context, viewport }).promise;
+    const dataUrl = await canvasToJpegDataUrl(canvas, 0.82);
+    return {
+      dataUrl,
+      width: canvas.width,
+      height: canvas.height
+    };
+  }
+
+  async function loadPdfModule() {
+    const pdfjs = await import('pdfjs-dist/build/pdf.mjs');
+    const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+    pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+    return pdfjs;
+  }
+
+  function classifyMediaFile(file) {
+    const fileType = typeof file?.type === 'string' ? file.type.toLowerCase() : '';
+    const fileName = typeof file?.name === 'string' ? file.name.toLowerCase() : '';
+    if (fileType.startsWith('image/')) return 'image';
+    if (fileType === 'application/pdf' || /\.pdf$/i.test(fileName)) return 'pdf';
+    if (fileType.startsWith('audio/')) return 'audio';
+    if (/\.(mp3|wav|ogg|webm|m4a|flac)$/i.test(fileName)) return 'audio';
+    return 'unsupported';
+  }
+
+  async function appendImageFiles(files) {
+    const next = [];
+    const warnings = [];
+    for (const file of files) {
+      try {
+        const dataUrl = await imageToScaledDataUrl(file);
+        next.push({
+          id: createMediaId('image'),
+          name: file.name,
+          type: file.type,
+          dataUrl
+        });
+      } catch (error) {
+        warnings.push(error?.message ?? `Failed to load ${file.name}.`);
+      }
+    }
+    if (next.length > 0) {
+      imageAttachments = [...imageAttachments, ...next];
+    }
+    return warnings;
+  }
+
+  async function appendAudioFiles(files) {
+    const next = [];
+    const warnings = [];
+    for (const file of files) {
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        next.push({
+          id: createMediaId('audio'),
+          name: file.name,
+          type: file.type || 'audio/*',
+          dataUrl
+        });
+      } catch (error) {
+        warnings.push(error?.message ?? `Failed to load ${file.name}.`);
+      }
+    }
+    if (next.length > 0) {
+      audioAttachments = [...audioAttachments, ...next];
+    }
+    return warnings;
+  }
+
+  async function appendPdfFiles(files) {
+    if (!files.length) return [];
+    const warnings = [];
+    const pages = [];
+    let selectedCount = selectedPdfPageCount;
+
+    isConvertingPdf = true;
+    try {
+      const pdfjs = await loadPdfModule();
+      for (const file of files) {
+        try {
+          const data = await file.arrayBuffer();
+          const loadingTask = pdfjs.getDocument({ data });
+          const pdf = await loadingTask.promise;
+          for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+            const page = await pdf.getPage(pageNumber);
+            const rendered = await renderPdfPageToJpeg(page);
+            const canSelect = selectedCount < MAX_SELECTED_PDF_PAGES;
+            pages.push({
+              id: createMediaId('pdf-page'),
+              fileName: file.name,
+              name: `${file.name} page ${pageNumber}`,
+              pageNumber,
+              selected: canSelect,
+              ...rendered
+            });
+            if (canSelect) {
+              selectedCount += 1;
+            }
+          }
+        } catch (error) {
+          warnings.push(error?.message ?? `Failed to convert ${file.name}.`);
+        }
+      }
+      if (pages.length > 0) {
+        pdfPageAttachments = [...pdfPageAttachments, ...pages];
+      }
+    } finally {
+      isConvertingPdf = false;
+    }
+
+    return warnings;
+  }
+
+  async function processMediaFiles(fileLikeList) {
+    const files = Array.from(fileLikeList ?? []);
+    if (!files.length) return;
+    clearMediaError();
+
+    const images = [];
+    const audio = [];
+    const pdfs = [];
+    const unsupported = [];
+
+    for (const file of files) {
+      const kind = classifyMediaFile(file);
+      if (kind === 'image') {
+        images.push(file);
+      } else if (kind === 'audio') {
+        audio.push(file);
+      } else if (kind === 'pdf') {
+        pdfs.push(file);
+      } else {
+        unsupported.push(file.name || 'unnamed file');
+      }
+    }
+
+    const warnings = [];
+    if (unsupported.length > 0) {
+      warnings.push(
+        `Unsupported media type discarded: ${unsupported.join(', ')}.`
+      );
+    }
+
+    warnings.push(...(await appendImageFiles(images)));
+    warnings.push(...(await appendAudioFiles(audio)));
+    warnings.push(...(await appendPdfFiles(pdfs)));
+
+    mediaError = warnings.filter(Boolean).join(' ');
+  }
+
+  async function handleMediaInputChange(event) {
+    const files = Array.from(event.target.files ?? []);
+    clearMediaInput(event.target);
+    if (!files.length) return;
+    await processMediaFiles(files);
+  }
+
+  function isMediaInputBlocked() {
+    return isCeaTask || disabled || isRunning || isCancelling || isConvertingPdf;
+  }
+
+  function handleMediaDragEnter(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    if (isMediaInputBlocked()) return;
+    isDragOver = true;
+  }
+
+  function handleMediaDragOver(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    if (isMediaInputBlocked()) return;
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  }
+
+  function handleMediaDragLeave(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && event.currentTarget?.contains?.(nextTarget)) {
+      return;
+    }
+    isDragOver = false;
+  }
+
+  async function handleMediaDrop(event) {
+    if (isCeaTask) return;
+    event.preventDefault();
+    isDragOver = false;
+    if (isMediaInputBlocked()) return;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (!files.length) return;
+    await processMediaFiles(files);
+  }
+
+  async function handleMediaPaste(event) {
+    if (isMediaInputBlocked()) return;
+    const clipboardData = event.clipboardData;
+    if (!clipboardData) return;
+    const fromItems = Array.from(clipboardData.items ?? [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    const files = fromItems.length > 0 ? fromItems : Array.from(clipboardData.files ?? []);
+    if (!files.length) return;
+    event.preventDefault();
+    await processMediaFiles(files);
   }
 
   onDestroy(() => {
@@ -1208,16 +1603,139 @@
           {/if}
         </div>
       {:else}
-        <textarea
-          id="composer-input"
-          class="composer__input"
-          placeholder={inputPlaceholder}
-          bind:value
-          bind:this={textareaEl}
-          rows="1"
-          on:keydown={onKeydown}
-          on:input={autoResize}
-        ></textarea>
+        <div class="composer__multimodal-fieldset">
+          <div
+            class="composer__multimodal-input-row"
+            class:composer__multimodal-input-row--drag-over={isDragOver}
+            role="group"
+            aria-label="Message input with media attachments"
+            on:dragenter={handleMediaDragEnter}
+            on:dragover={handleMediaDragOver}
+            on:dragleave={handleMediaDragLeave}
+            on:drop={handleMediaDrop}
+          >
+            <button
+              type="button"
+              class="composer__media-plus"
+              on:click={openMediaDialog}
+              disabled={disabled || isRunning || isCancelling || isConvertingPdf}
+              aria-label="Attach media"
+              title="Attach media"
+            >
+              +
+            </button>
+            <textarea
+              id="composer-input"
+              class="composer__input"
+              placeholder={inputPlaceholder}
+              bind:value
+              bind:this={textareaEl}
+              rows="1"
+              on:keydown={onKeydown}
+              on:input={autoResize}
+              on:paste={handleMediaPaste}
+            ></textarea>
+          </div>
+          <input
+            class="composer__file-input"
+            type="file"
+            accept="image/*,audio/*,application/pdf,.pdf,.mp3,.wav,.ogg,.webm,.m4a,.flac"
+            multiple
+            bind:this={mediaInputEl}
+            on:change={handleMediaInputChange}
+            disabled={disabled || isRunning || isCancelling || isConvertingPdf}
+          />
+          {#if isConvertingPdf}
+            <p class="composer__media-status">Converting PDF pages...</p>
+          {/if}
+          {#if hasMediaAttachments || pdfPageAttachments.length > 0}
+            <div class="composer__media-toolbar">
+              <button
+                type="button"
+                class="composer__upload-trigger"
+                on:click={clearMediaAttachments}
+                disabled={disabled || isRunning || isCancelling || isConvertingPdf}
+              >
+                Clear media
+              </button>
+            </div>
+          {/if}
+
+          {#if imageAttachments.length > 0}
+            <div class="composer__media-section">
+              <p class="composer__media-title">Images ({imageAttachments.length})</p>
+              <ul class="composer__media-list">
+                {#each imageAttachments as item (item.id)}
+                  <li class="composer__media-item">
+                    <span class="composer__media-name">{item.name}</span>
+                    <button
+                      type="button"
+                      class="composer__media-remove"
+                      on:click={() => removeImageAttachment(item.id)}
+                      disabled={disabled || isRunning || isCancelling}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+
+          {#if audioAttachments.length > 0}
+            <div class="composer__media-section">
+              <p class="composer__media-title">Audio ({audioAttachments.length})</p>
+              <ul class="composer__media-list">
+                {#each audioAttachments as item (item.id)}
+                  <li class="composer__media-item">
+                    <span class="composer__media-name">{item.name}</span>
+                    <button
+                      type="button"
+                      class="composer__media-remove"
+                      on:click={() => removeAudioAttachment(item.id)}
+                      disabled={disabled || isRunning || isCancelling}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/if}
+
+          {#if pdfPageAttachments.length > 0}
+            <div class="composer__media-section">
+              <div class="composer__pdf-header">
+                <p class="composer__media-title">
+                  PDF pages selected {selectedPdfPageCount}/{MAX_SELECTED_PDF_PAGES}
+                </p>
+                <button
+                  type="button"
+                  class="composer__media-remove"
+                  on:click={clearPdfAttachments}
+                  disabled={disabled || isRunning || isCancelling || isConvertingPdf}
+                >
+                  Remove PDF
+                </button>
+              </div>
+              <div class="composer__pdf-grid">
+                {#each pdfPageAttachments as page (page.id)}
+                  <button
+                    type="button"
+                    class="composer__pdf-page"
+                    class:composer__pdf-page--selected={page.selected}
+                    on:click={() => togglePdfPageSelection(page.id)}
+                    disabled={(!page.selected && selectedPdfPageCount >= MAX_SELECTED_PDF_PAGES) || disabled || isRunning || isCancelling}
+                    aria-pressed={page.selected}
+                  >
+                    <img src={page.dataUrl} alt={`${page.fileName} page ${page.pageNumber}`} loading="lazy" />
+                    <span>Page {page.pageNumber}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        </div>
       {/if}
       {#if showReloadAction}
         <div class="composer__input-actions">
@@ -1314,6 +1832,12 @@
     </div>
     {#if sttError}
       <p class="composer__error" role="alert">{sttError}</p>
+    {/if}
+    {#if mediaError}
+      <p class="composer__error" role="alert">{mediaError}</p>
+    {/if}
+    {#if pdfSelectionRequiredError}
+      <p class="composer__error" role="alert">{pdfSelectionRequiredError}</p>
     {/if}
   </div>
 
@@ -1505,14 +2029,183 @@
     resize: none;
     min-height: 2.5rem;
     max-height: 10rem;
-    border-radius: var(--radius-sm);
-    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: calc(var(--radius-sm) - 2px);
+    border: none;
     padding: var(--spacing-sm) var(--spacing-md);
     font: inherit;
     line-height: 1.4;
     color: var(--text-primary);
     background: #fff;
     caret-color: var(--color-uni-blue);
+  }
+
+  .composer__multimodal-fieldset {
+    flex: 1;
+    display: grid;
+    gap: var(--spacing-xs);
+  }
+
+  .composer__multimodal-input-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--spacing-xs);
+    border: 1px solid rgba(52, 74, 154, 0.25);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    padding: 6px;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+
+  .composer__multimodal-input-row--drag-over {
+    border-color: var(--color-uni-blue);
+    box-shadow: 0 0 0 2px rgba(52, 74, 154, 0.18);
+    background: rgba(52, 74, 154, 0.03);
+  }
+
+  .composer__media-plus {
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(52, 74, 154, 0.28);
+    background: var(--surface-base);
+    color: var(--color-uni-blue);
+    font: inherit;
+    font-size: 1.2rem;
+    font-weight: 700;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+
+  .composer__media-plus:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 12px rgba(52, 74, 154, 0.16);
+  }
+
+  .composer__media-plus:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .composer__media-toolbar {
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  .composer__media-status {
+    margin: 0;
+    font-size: 0.78rem;
+    color: var(--text-subtle);
+  }
+
+  .composer__media-section {
+    border: 1px solid rgba(52, 74, 154, 0.2);
+    border-radius: var(--radius-sm);
+    padding: var(--spacing-xs);
+    background: rgba(52, 74, 154, 0.04);
+    display: grid;
+    gap: var(--spacing-xs);
+  }
+
+  .composer__media-title {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .composer__media-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 4px;
+  }
+
+  .composer__media-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-xs);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .composer__media-name {
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .composer__media-remove {
+    border: 1px solid rgba(193, 0, 42, 0.2);
+    color: var(--color-uni-red);
+    background: rgba(193, 0, 42, 0.08);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    padding: 0.2rem 0.45rem;
+    cursor: pointer;
+  }
+
+  .composer__media-remove:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .composer__pdf-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-xs);
+    flex-wrap: wrap;
+  }
+
+  .composer__pdf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: var(--spacing-xs);
+  }
+
+  .composer__pdf-page {
+    border: 1px solid rgba(0, 0, 0, 0.14);
+    border-radius: var(--radius-sm);
+    background: #fff;
+    padding: 4px;
+    display: grid;
+    gap: 4px;
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    text-align: left;
+  }
+
+  .composer__pdf-page img {
+    width: 100%;
+    height: 104px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+  }
+
+  .composer__pdf-page:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .composer__pdf-page--selected {
+    border-color: rgba(52, 74, 154, 0.85);
+    box-shadow: inset 0 0 0 1px rgba(52, 74, 154, 0.5);
+    background: rgba(52, 74, 154, 0.1);
   }
 
   .composer__input:focus {

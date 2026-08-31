@@ -5,15 +5,31 @@ model_api_key: env(MODEL_API_KEY:null)
 model_kwargs:
   # for OpenAI models
   reasoning:
-    effort: env(REASONING_EFFORT:null)
-    summary: env(REASONING_SUMMARY:null)
-  text:
-    verbosity: env(VERBOSITY:low)
-  # for Anthropic models
-  # thinking:
-  #   type: adaptive
-  # output_config:
-  #   effort: env(THINKING_EFFORT:medium)
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, image]
+    category: vision
+    description: "Multimodal model from Google built for strong long-context and production inference, good for vision tasks"
+  - model: env(MODEL:nuextract3-llmlb)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+    model_api_key: env(OPENWEBUI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, image]
+    description: "A lightweicht OCR Model for Document analysis"
+  - model: env(MODEL:gpt-audio-1.5)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, audio]
+    description: "OpenAIs small audio model for Audio analysis"
 
 tool_choice: env(TOOL_CHOICE:auto)
 
@@ -27,7 +43,7 @@ sparql_connection_timeout: env(SPARQL_CONNECTION_TIMEOUT:6.0)
 sparql_query_timeout: env(SPARQL_QUERY_TIMEOUT:30.0)
 sparql_read_timeout: env(SPARQL_READ_TIMEOUT:10.0)
 
-fn_set: env(FN_SET:all)
+fn_set: env(FN_SET:search_extended)
 list_k: env(LIST_K:10)
 search_k: env(SEARCH_K:10)
 result_max_rows: env(RESULT_MAX_ROWS:10)

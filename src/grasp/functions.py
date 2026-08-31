@@ -3,6 +3,7 @@ import time
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Iterable
+import json
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
@@ -32,7 +33,16 @@ from grasp.sparql.utils import (
     parse_string,
     wrap_iri,
 )
-from grasp.utils import FunctionCallException, format_enumerate, format_list
+from grasp.utils import (
+    FunctionCallException,
+    format_enumerate, format_list,
+)
+from grasp.multimodal.functions import (
+    analyze,
+    load,
+    Modality,
+)
+from grasp.multimodal.utils import extract_user_input
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -40,10 +50,22 @@ if TYPE_CHECKING:
 # maximum number of results for constraining with sub indices
 MAX_RESULTS = 131072
 
-MODALITY_QUERY_TYPES = {
-    "text": [("text", "textual search query")],
-    "image": [("image", "URL pointing to an image")],
+MODALITY_QUERY_TYPES: dict[Modality, list[tuple[str, str]]] = {
+    Modality.TEXT: [(Modality.TEXT.value, "textual search query")],
+    Modality.IMAGE: [(Modality.IMAGE.value, "URL pointing to an image")],
+    Modality.AUDIO: [(Modality.AUDIO.value, "URL or path pointing to an audio file")],
 }
+
+
+def _parse_query_type(fn_args: dict) -> Modality:
+    raw = fn_args.get("query_type", Modality.TEXT.value)
+    try:
+        return Modality(raw)
+    except ValueError:
+        raise FunctionCallException(
+            f"Unknown query_type '{raw}', expected one of: "
+            + ", ".join(m.value for m in Modality)
+        )
 
 
 def kg_functions(
@@ -52,6 +74,8 @@ def kg_functions(
     list_k: int,
     search_k: int,
     search_max_pages: int,
+    enable_load: bool = False,
+    enable_analyze: bool = False,
 ) -> list[dict]:
     assert fn_set in [
         "base",
@@ -73,7 +97,7 @@ def kg_functions(
                 continue
             known_modalities.update(idx.index.modality)
 
-    assert all(mod in MODALITY_QUERY_TYPES for mod in known_modalities), (
+    assert all(Modality(mod) in MODALITY_QUERY_TYPES for mod in known_modalities), (
         f"Unknown modality in {known_modalities}"
     )
     index_names = sorted(known_indices)
@@ -161,8 +185,114 @@ list(kg="wikidata", property="wdt:P19")""",
                 "additionalProperties": False,
             },
             "strict": True,
-        },
+        }
     ]
+
+    if enable_analyze:
+        fns.append(
+            {
+                "name": "analyze",
+                "description": (
+                    "Analyze multimodal input. Supported modalities are image and audio. "
+                    "For images, provide a prompt describing what visual information should be extracted. "
+                    "For audio, the function can generate an acoustic description or answer an audio-related prompt. "
+                    "This function routes internally to the correct helper function depending on modality."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": (
+                                "The media input to analyze. "
+                                "This can be a normalized data URL from load(), a public URL, "
+                                "a raw base64 string, or a local file path depending on input_type."
+                            ),
+                        },
+                        "modality": {
+                            "type": "string",
+                            "enum": ["image", "audio"],
+                            "description": (
+                                "The modality to analyze. "
+                                "Use 'image' for visual analysis and 'audio' for acoustic analysis."
+                            ),
+                        },
+                        "kg": {
+                            "type": ["string", "null"],
+                            "enum": [*kgs, None],
+                            "description": (
+                                "Optional knowledge graph identifier. "
+                                "Required for audio analysis if a manager must be resolved via KG. "
+                                "Use null when no KG lookup is needed."
+                            ),
+                        },
+                        "prompt": {
+                            "type": ["string", "null"],
+                            "description": (
+                                "Task instruction for the analysis. "
+                                "For images, this should usually be a concrete visual question. "
+                                "For audio, this may be a question or null if a generic caption/description is enough."
+                            ),
+                        },
+                        "models": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": (
+                                "Choice of Models used for analysis ."
+                                "Available Models are given in the System Prompt. "
+                                "You can choose one or more models for an analysis. "
+                                "To safe resources you should utilise as few models here as possible "
+                                "and rather use them one after another if necessary."
+                            )
+                        }
+                    },
+                    "required": ["input", "modality", "kg", "prompt", "models"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+        )
+
+    if enable_load:
+        fns.append(
+            {
+                "name": "load",
+                "description": (
+                    "Load and normalize multimodal input for downstream analysis. "
+                    "Supported modalities are image and audio. "
+                    "Use this tool when visual or acoustic inspection of the original media "
+                    "is required. The function returns a normalized payload suitable for analyze()."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "input": {
+                            "type": "string",
+                            "description": (
+                                "The raw media input. "
+                                "For datatype 'url', provide a public HTTP(S) URL. "
+                                "For datatype 'base64', provide a base64 string or data URL. "
+                                "For datatype 'file', provide a local file path. "
+                                "load() can NOT be used on USER_INPUT"
+                            ),
+                        },
+                        "modality": {
+                            "type": "string",
+                            "enum": ["image", "audio"],
+                            "description": (
+                                "The modality of the input. "
+                                "Use 'image' for visual media and 'audio' for acoustic media."
+                            ),
+                        },
+                    },
+                    "required": ["input", "modality"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+        )
 
     if fn_set == "base":
         return fns
@@ -457,7 +587,7 @@ query="restaurant", index="literals", page=1)""",
             )
 
     # prepare query type arg
-    query_types = [typ for mod in known_modalities for typ in MODALITY_QUERY_TYPES[mod]]
+    query_types = [typ for mod in known_modalities for typ in MODALITY_QUERY_TYPES[Modality(mod)]]
     query_type_prop = {
         "type": "string",
         "enum": sorted(qt for qt, _ in query_types),
@@ -632,6 +762,7 @@ def call_function(
     known: set[str],
     task: "GraspTask | None" = None,
     example_indices: dict | None = None,
+    user_input: list[str] | None = None,
 ) -> str:
     if fn_name == "execute":
         return execute_sparql(
@@ -669,7 +800,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
@@ -681,7 +812,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
@@ -693,7 +824,7 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
         )
@@ -708,7 +839,7 @@ def call_function(
             {"subject": fn_args["entity"]},
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
@@ -749,7 +880,7 @@ def call_function(
             {"property": fn_args["property"]},
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
@@ -768,7 +899,7 @@ def call_function(
             fn_args.get("constraints"),
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
@@ -786,12 +917,34 @@ def call_function(
             fn_args["query"],
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            _parse_query_type(fn_args),
             config.know_before_use,
             config.sparql_request_timeout,
             config.sparql_read_timeout,
             page=fn_args.get("page") or 1,
             max_pages=config.search_max_pages,
+        )
+
+    elif fn_name == "load":
+        return json.dumps(load(
+            extract_user_input(fn_args["input"], user_input),
+            fn_args["modality"],
+            config.max_image_dimension,
+        ))
+
+    elif fn_name == "analyze":
+        manager = None
+        kg = fn_args["kg"]
+        if kg is not None:
+            manager, _ = find_manager(managers, kg)
+        return analyze(
+            input=fn_args["input"],
+            modality=fn_args["modality"],
+            models=fn_args["models"],
+            config=config,
+            manager=manager,
+            prompt=fn_args["prompt"],
+            user_input=user_input,
         )
 
     elif fn_name in {"search_shape", "get_shape"}:
@@ -960,7 +1113,7 @@ def search_entity(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
@@ -989,7 +1142,7 @@ def search_property(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
@@ -1018,7 +1171,7 @@ def search_literal(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
@@ -1473,7 +1626,7 @@ def search_with_constraints(
     constraints: dict[str, str | None] | None,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     request_timeout: float | tuple[float, float] | None = None,
     read_timeout: float | None = None,
     page: int = 1,
@@ -1581,7 +1734,7 @@ def paginate_results(
     if more:
         items = items[: k * max_pages]
     total_pages = max(1, math.ceil(len(items) / k))
-    page_items = items[(page - 1) * k : page * k]
+    page_items = items[(page - 1) * k: page * k]
     return page_items, total_pages, more
 
 
@@ -1612,7 +1765,7 @@ def search_with_filter(
     query: str,
     k: int,
     known: set[str],
-    query_type: str = "text",
+    query_type: Modality = Modality.TEXT,
     know_before_use: bool = False,
     request_timeout: float | tuple[float, float] | None = None,
     read_timeout: float | None = None,
