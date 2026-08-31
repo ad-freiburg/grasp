@@ -4,6 +4,11 @@ WORKDIR /grasp
 ENV PYTHONUNBUFFERED=1 \
   GRASP_INDEX_DIR=/opt/grasp
 
+# Install C build toolchain (required for search-rdf Rust/maturin compilation)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy files
 COPY . .
 
