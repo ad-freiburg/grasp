@@ -9,11 +9,13 @@ from grasp.baselines.grisp.data import (
     Skeleton,
     display_nl_iri,
     extract_queries_and_variants_from_nl_iri,
+    IGNORE_INDEX,
     extract_values_from_nl_iri,
     get_option_token_ids,
     merge_skeletons,
     search_alternatives,
     split_values,
+    tokenize_messages,
     tokenize_option_answer,
 )
 from grasp.baselines.grisp.utils import load_sparql_parser
@@ -268,9 +270,11 @@ class FakeTokenizer:
         self,
         word_boundary: bool = False,
         prefix: tuple[str, ...] = (),
+        generation_keyword: bool = False,
     ) -> None:
         self.word_boundary = word_boundary
         self.prefix = prefix
+        self.chat_template = "{% generation %}" if generation_keyword else "{{ x }}"
         self.vocab: dict[str, int] = {"<unk>": self.unk_token_id}
         self.renders = 0
         # a sentencepiece vocab holds both variants, so the bare letter resolves
@@ -294,6 +298,7 @@ class FakeTokenizer:
         return_dict: bool = False,
         add_generation_prompt: bool = False,
         enable_thinking: bool = False,
+        return_assistant_tokens_mask: bool = False,
     ) -> dict | list[int]:
         self.renders += 1
         tokens = ["<s>"]
@@ -308,7 +313,14 @@ class FakeTokenizer:
         input_ids = [self.id_for(t) for t in tokens]
         if not return_dict:
             return input_ids
-        return {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
+        enc = {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
+        if return_assistant_tokens_mask:
+            # the assistant turn is everything after the last role token
+            start = len(tokens) - len(tokens[::-1][: tokens[::-1].index("assistant")])
+            enc["assistant_masks"] = [
+                1 if i >= start else 0 for i in range(len(tokens))
+            ]
+        return enc
 
 
 class TestOptionTokenIds:
@@ -367,3 +379,44 @@ class TestOptionTokenIds:
         assert output["input_ids"][output["answer_pos"]] == (
             tokenizer.convert_tokens_to_ids("B")
         )
+
+
+class TestMessageMasking:
+    def messages(self) -> list[dict]:
+        return [
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "the user question"},
+            {"role": "assistant", "content": "the answer"},
+        ]
+
+    def labelled(self, tokenizer: FakeTokenizer, mask_inputs: bool) -> tuple[int, int]:
+        out = tokenize_messages(self.messages(), tokenizer, mask_inputs)
+        labels = out["labels"]
+        return sum(1 for x in labels if x != IGNORE_INDEX), len(labels)
+
+    def test_only_the_assistant_turn_is_labelled_without_generation_keyword(self):
+        # templates lacking {% generation %} take the manual-label fallback
+        tokenizer = FakeTokenizer()
+        assert "{% generation %}" not in tokenizer.chat_template
+        n_labelled, n_tokens = self.labelled(tokenizer, mask_inputs=True)
+        # "the answer" is two content words, everything before it is prompt
+        assert n_labelled == 2
+        assert n_labelled < n_tokens
+
+    def test_only_the_assistant_turn_is_labelled_with_generation_keyword(self):
+        tokenizer = FakeTokenizer(generation_keyword=True)
+        assert "{% generation %}" in tokenizer.chat_template
+        n_labelled, _ = self.labelled(tokenizer, mask_inputs=True)
+        assert n_labelled == 2
+
+    def test_both_masking_paths_agree(self):
+        without = self.labelled(FakeTokenizer(), mask_inputs=True)
+        with_keyword = self.labelled(
+            FakeTokenizer(generation_keyword=True), mask_inputs=True
+        )
+        assert without == with_keyword
+
+    def test_mask_inputs_false_labels_everything(self):
+        tokenizer = FakeTokenizer()
+        n_labelled, n_tokens = self.labelled(tokenizer, mask_inputs=False)
+        assert n_labelled == n_tokens

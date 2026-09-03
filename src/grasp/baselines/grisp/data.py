@@ -1058,13 +1058,13 @@ def tokenize_messages(
     if "{% generation %}" not in chat_temp or all(m == 0 for m in mask):
         # invalid assitant tokens mask, fallback to computing labels
         # manually
-        prompt_ids = tokenizer.apply_chat_template(
+        prompt_enc: dict = tokenizer.apply_chat_template(
             messages[:-1],
             add_generation_prompt=True,
             return_dict=True,
             enable_thinking=False,
-        )
-        prompt_len = len(prompt_ids)
+        )  # type: ignore
+        prompt_len = len(prompt_enc["input_ids"])
         non_prompt_ids = enc["input_ids"][prompt_len:]
         labels = [IGNORE_INDEX] * prompt_len + non_prompt_ids
     else:
