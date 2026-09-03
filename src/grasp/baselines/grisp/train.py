@@ -435,8 +435,23 @@ def main(args: argparse.Namespace) -> None:
         config.num_workers = 0
 
     train_data, val_data = load_datasets(config, tokenizer, logger)
+    pad_token_id = next(
+        (
+            token_id
+            for token_id in (
+                tokenizer.pad_token_id,
+                tokenizer.eos_token_id,
+                tokenizer.unk_token_id,
+            )
+            if token_id is not None
+        ),
+        None,
+    )
+    assert pad_token_id is not None, (
+        "Tokenizer has neither a pad, eos nor unk token to pad with"
+    )
     collator = GRISPCollator(
-        tokenizer.pad_token_id,  # type: ignore
+        pad_token_id,  # type: ignore
         config.max_length,
         args.log_level,
     )
