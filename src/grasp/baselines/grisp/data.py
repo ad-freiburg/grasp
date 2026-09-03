@@ -4,6 +4,7 @@ import random
 import re
 import string
 from dataclasses import dataclass, field
+from functools import lru_cache
 from logging import Logger
 from typing import Literal
 
@@ -646,7 +647,7 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
 
     grouped = {}
 
-    for label, (alternative, obj_type, variant) in zip(ALT_LABELS, alternatives):
+    for label, (alternative, obj_type, _) in zip(ALT_LABELS, alternatives):
         alt = alternative.get_selection_string(
             show_matched_label=False,
             include_variants=[],
@@ -1116,6 +1117,42 @@ def tokenize_and_log(
     return output
 
 
+# option letter ids as the chat template renders them; sentencepiece tokenizers
+# mark a word boundary, so llama-2 puts "▁A" (319) in the assistant turn while
+# convert_tokens_to_ids("A") gives 29909, which never occurs there
+@lru_cache(maxsize=None)
+def get_option_token_ids(
+    tokenizer: PreTrainedTokenizerBase,
+    options: tuple[str, ...],
+) -> tuple[int, ...]:
+    probe = [{"role": "user", "content": "?"}]
+
+    def render(letter: str) -> list[int]:
+        enc: dict = tokenizer.apply_chat_template(  # type: ignore
+            probe + [{"role": "assistant", "content": letter}],
+            return_dict=True,
+            enable_thinking=False,
+        )
+        return enc["input_ids"]
+
+    # the letter sits wherever two different letters make the render diverge,
+    # which also skips any tokens the template inserts first (e.g. Qwen3's
+    # empty <think> block). Probed with fixed labels since options can be a
+    # single element when there are no alternatives to choose from.
+    first, second = render(ALT_LABELS[0]), render(ALT_LABELS[1])
+    position = next(
+        (i for i in range(min(len(first), len(second))) if first[i] != second[i]),
+        None,
+    )
+    assert position is not None, "Chat template renders all option letters alike"
+
+    token_ids = tuple(render(option)[position] for option in options)
+    assert all(t is not None and t != tokenizer.unk_token_id for t in token_ids), (
+        f"Option letters not single tokens: {options}"
+    )
+    return token_ids
+
+
 def tokenize_option_answer(
     messages: Messages,
     options: list[str],
@@ -1135,10 +1172,7 @@ def tokenize_option_answer(
         return_dict=True,
         enable_thinking=False,
     )  # type: ignore
-    option_token_ids = [tokenizer.convert_tokens_to_ids(o) for o in options]
-    assert all(
-        t is not None and t != tokenizer.unk_token_id for t in option_token_ids
-    ), f"Option letters not single tokens: {options}"
+    option_token_ids = list(get_option_token_ids(tokenizer, tuple(options)))
 
     located = messages[-1]["content"]
     assert located in options, (

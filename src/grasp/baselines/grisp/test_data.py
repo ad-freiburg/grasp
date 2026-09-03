@@ -10,9 +10,11 @@ from grasp.baselines.grisp.data import (
     display_nl_iri,
     extract_queries_and_variants_from_nl_iri,
     extract_values_from_nl_iri,
+    get_option_token_ids,
     merge_skeletons,
     search_alternatives,
     split_values,
+    tokenize_option_answer,
 )
 from grasp.baselines.grisp.utils import load_sparql_parser
 from grasp.sparql.types import Alternative, ObjType
@@ -251,4 +253,117 @@ class TestSearchAlternatives:
             "has part",
             10,
             identifier_map,
+        )
+
+
+# stand-in for a chat tokenizer: one token per role and per content word, with
+# ids assigned per token string. word_boundary mimics sentencepiece, which marks
+# a word start ("▁A"), so a letter's id differs from its standalone id; prefix
+# mimics templates that open the assistant turn with extra tokens, e.g. Qwen3's
+# empty <think> block.
+class FakeTokenizer:
+    unk_token_id = 0
+
+    def __init__(
+        self,
+        word_boundary: bool = False,
+        prefix: tuple[str, ...] = (),
+    ) -> None:
+        self.word_boundary = word_boundary
+        self.prefix = prefix
+        self.vocab: dict[str, int] = {"<unk>": self.unk_token_id}
+        self.renders = 0
+        # a sentencepiece vocab holds both variants, so the bare letter resolves
+        # to an id that simply never shows up at a word start
+        if word_boundary:
+            for letter in "AB":
+                self.id_for(letter)
+
+    def id_for(self, token: str) -> int:
+        return self.vocab.setdefault(token, len(self.vocab))
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        return self.id_for(token)
+
+    def word(self, token: str) -> str:
+        return f"▁{token}" if self.word_boundary else token
+
+    def apply_chat_template(
+        self,
+        messages: list[dict],
+        return_dict: bool = False,
+        add_generation_prompt: bool = False,
+        enable_thinking: bool = False,
+    ) -> dict | list[int]:
+        self.renders += 1
+        tokens = ["<s>"]
+        for message in messages:
+            tokens.append(message["role"])
+            if message["role"] == "assistant":
+                tokens.extend(self.prefix)
+            tokens.extend(self.word(w) for w in message["content"].split())
+        if add_generation_prompt:
+            tokens.append("assistant")
+
+        input_ids = [self.id_for(t) for t in tokens]
+        if not return_dict:
+            return input_ids
+        return {"input_ids": input_ids, "attention_mask": [1] * len(input_ids)}
+
+
+class TestOptionTokenIds:
+    def messages(self, located: str) -> list[dict]:
+        return [
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": located},
+        ]
+
+    def test_byte_level_ids_match_standalone(self):
+        tokenizer = FakeTokenizer()
+        ids = get_option_token_ids(tokenizer, ("A", "B", "C"))
+        assert list(ids) == [tokenizer.convert_tokens_to_ids(o) for o in "ABC"]
+
+    def test_word_boundary_ids_come_from_the_render(self):
+        tokenizer = FakeTokenizer(word_boundary=True)
+        ids = get_option_token_ids(tokenizer, ("A", "B", "C"))
+        assert list(ids) == [tokenizer.convert_tokens_to_ids(f"▁{o}") for o in "ABC"]
+        # the bare letters are in the vocab but never rendered at a word start
+        assert all(
+            tokenizer.convert_tokens_to_ids(o) not in ids for o in "AB"
+        )
+
+    def test_tokens_before_the_answer_are_skipped(self):
+        tokenizer = FakeTokenizer(prefix=("<think>", "</think>"))
+        ids = get_option_token_ids(tokenizer, ("A", "B"))
+        assert list(ids) == [tokenizer.convert_tokens_to_ids(o) for o in "AB"]
+
+    def test_single_option(self):
+        tokenizer = FakeTokenizer(word_boundary=True)
+        assert get_option_token_ids(tokenizer, ("A",)) == (
+            tokenizer.convert_tokens_to_ids("▁A"),
+        )
+
+    def test_cached_per_tokenizer_and_options(self):
+        tokenizer = FakeTokenizer()
+        get_option_token_ids(tokenizer, ("A", "B"))
+        renders = tokenizer.renders
+        get_option_token_ids(tokenizer, ("A", "B"))
+        assert tokenizer.renders == renders
+        # a different option set is a different key
+        get_option_token_ids(tokenizer, ("A", "B", "C"))
+        assert tokenizer.renders > renders
+
+    def test_answer_located_with_word_boundary_tokenizer(self):
+        tokenizer = FakeTokenizer(word_boundary=True)
+        options = ["A", "B", "C"]
+        output = tokenize_option_answer(self.messages("C"), options, tokenizer)
+        located_id = tokenizer.convert_tokens_to_ids("▁C")
+        assert output["input_ids"][output["answer_pos"]] == located_id
+        assert output["option_token_ids"][options.index("C")] == located_id
+
+    def test_answer_located_after_template_prefix(self):
+        tokenizer = FakeTokenizer(prefix=("<think>", "</think>"))
+        output = tokenize_option_answer(self.messages("B"), ["A", "B"], tokenizer)
+        assert output["input_ids"][output["answer_pos"]] == (
+            tokenizer.convert_tokens_to_ids("B")
         )
