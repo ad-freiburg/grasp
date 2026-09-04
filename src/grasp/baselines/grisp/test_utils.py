@@ -1,4 +1,8 @@
+import json
+import os
+
 from grasp.baselines.grisp.utils import (
+    find_best_checkpoint,
     load_sparql_parser,
     normalize_skeleton_parse,
     skeleton_wording_key,
@@ -69,3 +73,44 @@ class TestSkeletonWordingKey:
         assert self.wording_key(
             "SELECT ?x WHERE { ?x <iri>a</iri> ?y }"
         ) != self.wording_key("SELECT ?x WHERE { ?x <iri>a</iri> <iri>b</iri> }")
+
+
+class TestFindBestCheckpoint:
+    def write(self, directory: str, step: int, metrics: dict) -> None:
+        checkpoint = os.path.join(directory, f"checkpoint-{step}")
+        os.makedirs(checkpoint)
+        state = {"global_step": step, "log_history": [{"step": step, **metrics}]}
+        with open(os.path.join(checkpoint, "trainer_state.json"), "w") as f:
+            json.dump(state, f)
+
+    def test_selects_the_lowest_balanced_loss(self, tmp_path):
+        directory = str(tmp_path)
+        self.write(directory, 10, {"eval_balanced_loss": 0.4, "eval_loss": 0.1})
+        self.write(directory, 20, {"eval_balanced_loss": 0.2, "eval_loss": 0.9})
+        assert find_best_checkpoint(directory) == os.path.join(
+            directory, "checkpoint-20"
+        )
+
+    def test_falls_back_to_eval_loss_for_older_runs(self, tmp_path):
+        directory = str(tmp_path)
+        self.write(directory, 10, {"eval_loss": 0.4})
+        self.write(directory, 20, {"eval_loss": 0.2})
+        assert find_best_checkpoint(directory) == os.path.join(
+            directory, "checkpoint-20"
+        )
+
+    def test_entries_from_other_steps_are_ignored(self, tmp_path):
+        directory = str(tmp_path)
+        checkpoint = os.path.join(directory, "checkpoint-20")
+        os.makedirs(checkpoint)
+        state = {
+            "global_step": 20,
+            "log_history": [
+                {"step": 10, "eval_balanced_loss": 0.9},
+                {"step": 20, "loss": 0.5},
+                {"step": 20, "eval_balanced_loss": 0.2},
+            ],
+        }
+        with open(os.path.join(checkpoint, "trainer_state.json"), "w") as f:
+            json.dump(state, f)
+        assert find_best_checkpoint(directory) == checkpoint

@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import yaml
 from peft import AutoPeftModelForCausalLM, LoraConfig, PeftModel, get_peft_model
 from pydantic import BaseModel
-from torch.utils.data import ConcatDataset, Dataset, Sampler
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Sampler
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -20,6 +20,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+from transformers.trainer_utils import EvalLoopOutput
 from universal_ml_utils.configuration import load_config
 from universal_ml_utils.io import load_json
 from universal_ml_utils.logging import get_logger
@@ -324,6 +325,35 @@ def advance_dataset(
         i += 1
 
 
+EVAL_SUM_KEYS = ("ntp_loss", "ntp_n", "rce_loss", "rce_n")
+
+
+def eval_loss_metrics(sums: dict[str, float]) -> dict[str, float]:
+    # Turns the summed numerators and denominators of a whole eval pass into
+    # the reported losses. A task missing from the eval set is left out rather
+    # than counted as zero.
+    totals = {
+        # per token, comparable across models and to the training loss
+        "ntp_loss": (sums["ntp_loss"], sums["ntp_n"]),
+        # per row, the loss over the option letters only
+        "rce_loss": (sums["rce_loss"], sums["rce_n"]),
+        # the training loss' normalization, applied over the whole eval set
+        "loss": (
+            sums["ntp_loss"] + sums["rce_loss"],
+            sums["ntp_n"] + sums["rce_n"],
+        ),
+    }
+    metrics = {name: loss / n for name, (loss, n) in totals.items() if n > 0}
+
+    # what checkpoints are selected on: both tasks weighted equally, so the
+    # thousands of ntp tokens cannot drown out the one row per rce sample
+    per_task = [metrics[name] for name in ("ntp_loss", "rce_loss") if name in metrics]
+    if per_task:
+        metrics["balanced_loss"] = sum(per_task) / len(per_task)
+
+    return metrics
+
+
 class GRISPTrainer(Trainer):
     def __init__(self, *args, epochs_trained: int = 0, **kwargs):
         super().__init__(*args, **kwargs)
@@ -331,6 +361,9 @@ class GRISPTrainer(Trainer):
         # compute_loss normalizes per micro-batch, so let Trainer re-apply its
         # /gradient_accumulation_steps division (else loss/grads scale with it).
         self.model_accepts_loss_kwargs = False
+        # set by evaluation_loop to collect the loss breakdown over a whole
+        # eval pass; None while training so compute_loss skips the bookkeeping
+        self.eval_sums: dict[str, torch.Tensor] | None = None
 
     def _get_train_sampler(self, dataset: Dataset | None = None) -> Sampler:  # type: ignore
         if dataset is None:
@@ -377,6 +410,7 @@ class GRISPTrainer(Trainer):
             n_ntp = (shift_labels != IGNORE_INDEX).sum().to(logits.dtype)
             total_loss = total_loss + ntp
             total_n = total_n + n_ntp
+            self.add_eval_sums(ntp, n_ntp, "ntp")
 
         # restricted-CE rows (selection + validation). Drop those whose answer
         # position fell beyond the (possibly truncated) sequence; indexing them
@@ -403,9 +437,67 @@ class GRISPTrainer(Trainer):
             )
             total_loss = total_loss + sel
             total_n = total_n + n_sel
+            self.add_eval_sums(sel, n_sel, "rce")
 
         loss = total_loss / total_n.clamp(min=1)
         return (loss, outputs) if return_outputs else loss
+
+    def add_eval_sums(
+        self,
+        loss: torch.Tensor,
+        n: torch.Tensor,
+        kind: str,
+    ) -> None:
+        if self.eval_sums is None:
+            return
+
+        # in float64, since the bf16 per-batch scalars would lose too much
+        # precision when summed over a whole eval pass
+        self.eval_sums[f"{kind}_loss"] += loss.detach().double()
+        self.eval_sums[f"{kind}_n"] += n.detach().double()
+
+    def evaluation_loop(
+        self,
+        dataloader: DataLoader,
+        description: str,
+        prediction_loss_only: bool | None = None,
+        ignore_keys: list[str] | None = None,
+        metric_key_prefix: str = "eval",
+    ) -> EvalLoopOutput:
+        # Trainer averages the per-batch losses, which weights a batch of
+        # single-token restricted-CE rows the same as a batch of hundreds of
+        # next-token-prediction tokens. Since val is a ConcatDataset of one
+        # dataset per task and eval iterates it in order, batches end up
+        # task-homogeneous and eval_loss silently becomes a per-task mean,
+        # unlike the token-weighted training loss. Accumulate the numerators
+        # and denominators over the whole pass instead and normalize once.
+        self.eval_sums = {
+            key: torch.zeros((), device=self.args.device, dtype=torch.float64)
+            for key in EVAL_SUM_KEYS
+        }
+        try:
+            output = super().evaluation_loop(
+                dataloader,
+                description,
+                prediction_loss_only,
+                ignore_keys,
+                metric_key_prefix,
+            )
+            reduced: dict[str, torch.Tensor] = self.accelerator.reduce(
+                self.eval_sums,
+                reduction="sum",
+            )  # type: ignore
+            sums = {key: value.item() for key, value in reduced.items()}
+        finally:
+            self.eval_sums = None
+
+        metrics = output.metrics
+        assert metrics is not None, "Evaluation produced no metrics"
+
+        for name, value in eval_loss_metrics(sums).items():
+            metrics[f"{metric_key_prefix}_{name}"] = value
+
+        return output
 
 
 def main(args: argparse.Namespace) -> None:
@@ -548,7 +640,8 @@ def main(args: argparse.Namespace) -> None:
         bf16=True,
         report_to=report_to,
         run_name=run_name,
-        metric_for_best_model="eval_loss",
+        metric_for_best_model="eval_balanced_loss",
+        greater_is_better=False,
         gradient_checkpointing=config.gradient_checkpointing,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         torch_compile=config.do_compile,

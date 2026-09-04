@@ -99,15 +99,17 @@ def find_best_checkpoint(run_directory: str) -> str | None:
         state = load_json(path)
         global_step = state["global_step"]
 
-        log_entry = next(
-            (
-                entry
-                for entry in state["log_history"]
-                if entry["step"] == global_step and entry.get("eval_loss") is not None
-            ),
+        # the metric training selects on, falling back to the plain eval loss
+        # for runs from before the per-task breakdown was logged
+        keys = ("eval_balanced_loss", "eval_loss")
+        log_entry, key = next(
+            (entry, key)
+            for entry in state["log_history"]
+            if entry["step"] == global_step
+            for key in keys
+            if entry.get(key) is not None
         )
-        # sort by eval loss
-        return log_entry["eval_loss"]
+        return log_entry[key]
 
     return find_checkpoint(run_directory, best_ckpt_key)
 
