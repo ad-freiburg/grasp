@@ -1,18 +1,21 @@
-model: Qwen/Qwen3.6-27B
-model_endpoint: env(MODEL_ENDPOINT:http://localhost:8337/v1)
+model: qwen-3.5-397b-llmlb
 model_provider: openai/completions
-model_api_key: dummy
+model_endpoint: https://openwebui.uni-freiburg.de/api
+model_api_key: env(UFR_API_KEY)
+model_timeout: 300
+
+# HF-recommended non-thinking decoding params. Only temperature/top_p are
+# standard OpenAI fields; the rest must go through extra_body for vLLM.
 model_kwargs:
-  temperature: 0.4
+  temperature: 0.7
   top_p: 0.8
-  presence_penalty: 1.5
   extra_body:
     top_k: 20
     min_p: 0.0
+    presence_penalty: 1.5
     repetition_penalty: 1.0
     chat_template_kwargs:
       enable_thinking: false
-      preserve_thinking: false
 
 tool_choice: env(TOOL_CHOICE:auto)
 
