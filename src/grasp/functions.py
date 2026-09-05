@@ -910,6 +910,11 @@ def call_shape_function(
                 "for on-the-fly computation."
             )
 
+        # computing a shape builds SPARQL around the class term, so a non-IRI
+        # argument would only fail later as an opaque parse error
+        if binding is None or binding.typ != "uri":
+            return format_iri_or_literal_error(iri_arg)
+
         from grasp.build.shapes import (
             collect_iris,
             compute_shape,

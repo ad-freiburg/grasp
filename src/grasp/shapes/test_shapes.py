@@ -15,11 +15,13 @@ from grasp.build.shapes import (
     compute_shape,
     emit_pseudo_shex,
 )
-from grasp.configs import ShapeConfig
+from grasp.configs import GraspConfig, ShapeConfig
+from grasp.functions import call_shape_function
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer, WikidataPropertyNormalizer
-from grasp.shapes import ShapeSample, Target, TargetClass, TargetLiteral
+from grasp.shapes import Shapes, ShapeSample, Target, TargetClass, TargetLiteral
 from grasp.sparql.types import AskResult, SelectResult
+from grasp.sparql.utils import load_iri_and_literal_parser
 
 
 def attach_normalizers(
@@ -947,3 +949,41 @@ def test_per_class_queries_are_not_iri_filtered() -> None:
     )
     assert "ISIRI" not in query
     assert "<https://gptkb.org/concept/C0>" in query
+
+
+class TestGetShapeIriGuard:
+    def make_shape_manager(self) -> Mock:
+        m = make_manager()
+        m.kg = "test"
+        m.iri_literal_parser = load_iri_and_literal_parser()
+        m.shape_config = ShapeConfig()
+        return m
+
+    def call(self, manager: Mock, iri: str) -> str:
+        shapes = Shapes(instance_pattern="?instance a {CLASS} .")
+        return call_shape_function(
+            "get_shape",
+            {"iri": iri},
+            shapes,
+            manager,
+            GraspConfig(),
+        )
+
+    def test_non_iri_argument_is_rejected_before_building_sparql(self) -> None:
+        # a bare label parses as a literal, and wrapping it in <> would only
+        # fail later as an opaque lexer error
+        manager = self.make_shape_manager()
+        result = self.call(manager, "airmail stamps")
+
+        assert "is not a valid IRI" in result
+        manager.execute_sparql.assert_not_called()
+
+    def test_iri_argument_reaches_computation(self) -> None:
+        manager = self.make_shape_manager()
+        manager.execute_sparql.side_effect = Exception("boom")
+
+        result = self.call(manager, "http://ex.org/Human")
+
+        # got past the guard and into compute_shape
+        assert "failed to compute on the fly" in result
+        assert manager.execute_sparql.called
