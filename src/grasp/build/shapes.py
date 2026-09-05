@@ -46,6 +46,9 @@ def distinct_members(pattern: str, class_term: str = "?class") -> str:
     cp = bind_pattern(pattern, class_term)
     inner = "\n".join(f"      {line}" for line in cp.strip().splitlines())
     project = "?class ?instance" if class_term == "?class" else "?instance"
+    # a class is always an IRI; filtering here also prunes before the DISTINCT
+    if class_term == "?class":
+        inner += "\n      FILTER(ISIRI(?class))"
     return (
         f"  {{\n"
         f"    SELECT DISTINCT {project} WHERE {{\n"
@@ -56,12 +59,14 @@ def distinct_members(pattern: str, class_term: str = "?class") -> str:
 
 
 def build_total_entities_query(pattern: str) -> str:
+    # ordered so that max_classes keeps the biggest classes, not an arbitrary cut
     return (
         f"SELECT ?class (COUNT(*) AS ?totalEntities)\n"
         f"WHERE {{\n"
         f"{distinct_members(pattern)}\n"
         f"}}\n"
-        f"GROUP BY ?class"
+        f"GROUP BY ?class\n"
+        f"ORDER BY DESC(?totalEntities)"
     )
 
 
@@ -307,7 +312,8 @@ class NormalizedMaps:
 
 def build_schema_class_query(pattern: str) -> str:
     cp = wrap_pattern(bind_pattern(pattern))
-    return f"SELECT DISTINCT ?class\nWHERE {{\n{cp}\n}}"
+    # same IRI-only rule as the instance path; no count here to order by
+    return f"SELECT DISTINCT ?class\nWHERE {{\n{cp}\n  FILTER(ISIRI(?class))\n}}"
 
 
 def build_schema_profile_query(pattern: str, class_iri: str) -> str:

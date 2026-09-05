@@ -2,6 +2,9 @@ from unittest.mock import Mock
 
 from grasp.build.shapes import (
     ClassMaps,
+    build_per_class_property_frequency_query,
+    build_schema_class_query,
+    build_total_entities_query,
     ClassProfile,
     DirectedMaps,
     PropertyFreq,
@@ -918,3 +921,29 @@ class TestShapeSampleQueries:
         )
         s2 = ShapeSample.model_validate(s.model_dump())
         assert s2 == s
+
+
+def test_class_discovery_only_considers_iri_classes() -> None:
+    # literal objects of a typing predicate are not classes, and fail to
+    # parse once wrapped in <>
+    query = build_total_entities_query("?instance gkp:P0 {CLASS}")
+    assert "FILTER(ISIRI(?class))" in query
+
+    schema_query = build_schema_class_query("{CLASS} rdfs:subClassOf ?super")
+    assert "FILTER(ISIRI(?class))" in schema_query
+
+
+def test_class_discovery_ranks_by_instance_count() -> None:
+    # max_classes slices this result, so the order decides what gets profiled
+    query = build_total_entities_query("?instance gkp:P0 {CLASS}")
+    assert "ORDER BY DESC(?totalEntities)" in query
+    assert query.index("GROUP BY ?class") < query.index("ORDER BY DESC(?totalEntities)")
+
+
+def test_per_class_queries_are_not_iri_filtered() -> None:
+    # the class term is a concrete IRI here, so the filter would be dead weight
+    query = build_per_class_property_frequency_query(
+        "?instance gkp:P0 {CLASS}", "https://gptkb.org/concept/C0"
+    )
+    assert "ISIRI" not in query
+    assert "<https://gptkb.org/concept/C0>" in query
