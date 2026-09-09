@@ -62,13 +62,6 @@ class PotentialCorrespondences(BaseModel):
     candidates: list[Entity]
 
 
-class LogMapValidationResult(BaseModel):
-    valid: bool
-    message: str
-    repair: list[Correspondence] = []
-    unknown: list[Correspondence] = []
-
-
 class AlignmentTaskInput(BaseModel):
     unmatched_entities: list[Entity] = []
     potential_correspondences: list[PotentialCorrespondences] = []
@@ -88,10 +81,6 @@ class AlignmentState:
         self.task_input: AlignmentTaskInput | None = None
         # mapping from each processed entity IRI to its correspondence object
         self.correspondences: dict[str, Correspondence] = AlignmentState.__global_correspondences
-        # set by the "stop" branch of call_function() right before returning,
-        # and read right after by OmTask.done() - lets done() block a stop
-        # attempt that call_function() already warned about
-        self.stop_blocked = False
 
     def add_1_to_1_correspondence(self, correspondence: Correspondence):
         self.correspondences[correspondence.entity_source.identifier] = correspondence
@@ -288,98 +277,6 @@ def rules() -> list[str]:
     ]
 
 
-def _post_alignment_to_logmap(state: AlignmentState, server_url: str) -> LogMapValidationResult:
-    unique_correspondences = list({id(c): c for c in state.correspondences.values()}.values())
-    response = requests.post(
-        f"{server_url}/validate",
-        json=[c.model_dump() for c in unique_correspondences],
-        timeout=30,
-    )
-    response.raise_for_status()
-    return LogMapValidationResult(**response.json())
-
-
-def check_alignment_with_logmap(state: AlignmentState, server_url: str) -> str | None:
-    """
-    Sends the current, deduplicated alignment to the LogMap server for a
-    consistency/conflict check. Returns feedback text to surface to the LLM if
-    the check failed or could not be performed, or None if it passed cleanly.
-    """
-    try:
-        result = _post_alignment_to_logmap(state, server_url)
-    except requests.RequestException as e:
-        return f"LogMap check could not be performed: {e}"
-
-    if not result.valid:
-        return f"LogMap check failed: {result.message}"
-
-    return result.message
-
-
-def _try_validate_with_logmap(
-    state: AlignmentState, server_url: str
-) -> LogMapValidationResult | None:
-    """
-    Re-validates the current alignment with LogMap. Returns None if the check
-    could not be performed at all (network error, malformed JSON, schema
-    mismatch, unexpected top-level JSON type, LogMap server down, ...) -
-    callers should fail open in that case (i.e. not treat the alignment as
-    invalid), since we cannot actually tell.
-    """
-    try:
-        return _post_alignment_to_logmap(state, server_url)
-    except Exception:
-        return None
-
-
-def _resolve_flagged(
-    state: AlignmentState, flagged: list[Correspondence]
-) -> list[Correspondence]:
-    """
-    Given LogMap-flagged correspondences (`result.unknown + result.repair`),
-    resolves each to the actual, currently-live `Correspondence` object in
-    `state` (deduplicated) - filtering out anything that no longer reflects
-    the current alignment (e.g. one side has since been reassigned or
-    removed by a later, unrelated `set_correspondence`/`delete_correspondence`
-    call).
-    """
-    resolved: list[Correspondence] = []
-    seen: set[tuple[str, str]] = set()
-    for c in flagged:
-        key = (c.entity_source.identifier, c.entity_target.identifier)
-        if key in seen:
-            continue
-        current = state.get_correspondence(c.entity_source.identifier)
-        if current is None or current is not state.get_correspondence(c.entity_target.identifier):
-            continue
-        seen.add(key)
-        resolved.append(current)
-    return resolved
-
-
-def cleanup_invalid_correspondences(state: AlignmentState, server_url: str) -> list[Correspondence]:
-    """
-    Safety fallback for when the LLM's run ends (cleanly or not - stuck in a
-    loop, out of steps, API error, ...) despite unresolved logical conflicts
-    or unknown-entity correspondences: re-checks the final alignment with
-    LogMap and silently drops any correspondence still flagged as unknown or
-    in need of repair, without relying on the LLM having read or acted on the
-    check's message.
-    """
-    result = _try_validate_with_logmap(state, server_url)
-    if result is None:
-        # fail open - see _try_validate_with_logmap. Unlike
-        # check_alignment_with_logmap, this runs from OmTask.output(), which
-        # core.py calls unguarded, with no surrounding try/except.
-        return []
-
-    removed = _resolve_flagged(state, result.unknown + result.repair)
-    for c in removed:
-        state.remove_correspondence(c.entity_source.identifier, c.entity_target.identifier)
-
-    return removed
-
-
 def entity_exists_in_kg(manager: KgManager, iri: str) -> bool:
     # subject and object position cover classes/instances; predicate position
     # is needed too since a property may appear only there (e.g. used in
@@ -470,7 +367,6 @@ def add_1_to_1_correspondence(
         known: set[str],
         know_before_use: bool = True,
         overwrite: bool = False,
-        logmap_server_url: str | None = None,
         ) -> str:
 
     try:
@@ -525,29 +421,7 @@ def add_1_to_1_correspondence(
 
         correspondence = Correspondence(entity_source=entity_object_source, entity_target=entity_object_target)
         state.add_1_to_1_correspondence(correspondence)
-        success_message = f"Aligned {entity_source} from {kg_source} with {entity_target} from {kg_target}."
-
-        if logmap_server_url is None:
-            return success_message
-
-        result = _try_validate_with_logmap(state, logmap_server_url)
-        if result is None:
-            # LogMap unreachable/broken right now - fail open, keep the
-            # correspondence as set rather than blocking on it
-            return f"{success_message}\nLogMap check could not be performed right now."
-
-        if result.valid:
-            return f"{success_message}\n{result.message}"
-
-        # if logmap result is not valid, there is a logical conflict
-        # connected to the new correspondence or the involved iris
-        # aren't correct
-        state.discard_correspondence_of(full_iri_source)
-        return (
-            f"Did not align {entity_source} with {entity_target}: setting this correspondence "
-            "triggers a logical conflict according to LogMap.\n"
-            f"LogMap's message: {result.message}\n"
-            )
+        return f"Aligned {entity_source} from {kg_source} with {entity_target} from {kg_target}."
 
     except ValueError as e:
         raise FunctionCallException(str(e)) from e
@@ -557,7 +431,6 @@ def delete_correspondence(
         entity1: str,
         entity2: str,
         state: AlignmentState,
-        logmap_server_url: str | None = None
         ) -> str:
     correspondence1 = state.get_correspondence(entity1)
     correspondence2 = state.get_correspondence(entity2)
@@ -567,14 +440,7 @@ def delete_correspondence(
             "Notice you have to use the full IRI as entity reference."
             )
     state.remove_correspondence(entity1, entity2)
-    message = f"Deleted correspondence between {entity1} and {entity2}"
-
-    if logmap_server_url is not None:
-        feedback = check_alignment_with_logmap(state, logmap_server_url)
-        if feedback is not None:
-            message += f"\n{feedback}"
-
-    return message
+    return f"Deleted correspondence between {entity1} and {entity2}"
 
 
 def call_function(
@@ -592,7 +458,6 @@ def call_function(
     assert not example_indices, "Example indices are not supported for OM task"
 
     om_kwargs = config.task_kwargs.get("om", {})
-    logmap_server_url = om_kwargs.get("logmap_server_url")
 
     if fn_name == "set_correspondence":
         if state is None:
@@ -606,43 +471,20 @@ def call_function(
 
         return add_1_to_1_correspondence(
             managers, kg1, kg2, ent1, ent2, state, known,
-            know_before_use, overwrite, logmap_server_url,
+            know_before_use, overwrite
         )
 
     elif fn_name == "delete_correspondence":
         return delete_correspondence(
             fn_args["source_entity"],
             fn_args["target_entity"],
-            state, logmap_server_url
+            state
             )
 
     elif fn_name == "show_correspondences":
         return state.format(num=fn_args.get("num"))
 
     elif fn_name == "stop":
-        conflicts = []
-        if logmap_server_url is not None:
-            result = _try_validate_with_logmap(state, logmap_server_url)
-            if result is not None and not result.valid:
-                conflicts = _resolve_flagged(state, result.unknown + result.repair)
-
-        if conflicts:
-            # block the stop: OmTask.done() checks this flag right after this
-            # call returns and will report "not done" as long as it is set,
-            # keeping the conversation going instead of ending it here
-            state.stop_blocked = True
-            listing = "\n".join(
-                f"- {c.entity_source.entity} = {c.entity_target.entity}" for c in conflicts
-            )
-            return (
-                "Cannot stop yet: the following correspondence(s) would be silently discarded "
-                f"because they still lead to a logical conflict according to LogMap:\n{listing}\n\n"
-                "Resolve the conflict first - check whether these correspondences are "
-                "themselves incorrect, or whether other, already-established correspondences "
-                "are causing it - and only then call `stop` again."
-            )
-
-        state.stop_blocked = False
         return "Stopping"
 
     else:
@@ -801,9 +643,6 @@ class OmTask(GraspTask, FeedbackTask):
         return functions(self.managers)
 
     def output(self, messages: list[Message]) -> dict:
-        logmap_server_url = self.config.task_kwargs.get("om", {}).get("logmap_server_url")
-        if logmap_server_url is not None:
-            cleanup_invalid_correspondences(self.state, logmap_server_url)
         return self.state.to_dict()
 
     def call_function(
@@ -824,12 +663,7 @@ class OmTask(GraspTask, FeedbackTask):
         )
 
     def done(self, fn_name: str) -> bool:
-        # call_function() (the "stop" branch, executed just before done() is
-        # checked for this same tool call) sets state.stop_blocked if there
-        # is still an unresolved LogMap conflict - in that case, report "not
-        # done" so the conversation continues instead of ending here despite
-        # the correspondence(s) not actually having been discarded yet.
-        return fn_name == "stop" and not self.state.stop_blocked
+        return fn_name == "stop"
 
     @property
     def default_input_field(self) -> str | None:
