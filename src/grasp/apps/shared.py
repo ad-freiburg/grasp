@@ -31,7 +31,7 @@ def display_name_from_file(path) -> str:
     return f"{name} ({info})" if info else name
 
 
-def _mtime(path) -> float:
+def mtime(path) -> float:
     try:
         return os.path.getmtime(path)
     except OSError:
@@ -39,7 +39,7 @@ def _mtime(path) -> float:
 
 
 @st.cache_data
-def load_model_outputs(output_file: str, _mtime: float) -> dict:
+def load_model_outputs(output_file: str, mtime: float) -> dict:
     outputs_list = load_jsonl(output_file)
     outputs_dict = {}
 
@@ -57,7 +57,7 @@ def load_model_outputs(output_file: str, _mtime: float) -> dict:
 
 def try_load_model_outputs(path) -> dict:
     try:
-        return load_model_outputs(str(path), _mtime(path))
+        return load_model_outputs(str(path), mtime(path))
     except Exception as e:
         logger.warning(f"Failed to load model outputs from {path}: {e}")
         return {}
@@ -72,13 +72,13 @@ def try_load_json(path, default=None):
 
 
 @st.cache_data
-def load_rank_json(path: str, _mtime: float) -> dict:
+def load_rank_json(path: str, mtime: float) -> dict:
     return load_json(path)
 
 
 def try_load_rank_json(path) -> dict:
     try:
-        return load_rank_json(str(path), _mtime(path))
+        return load_rank_json(str(path), mtime(path))
     except Exception as e:
         logger.warning(f"Failed to load ranking file {path}: {e}")
         return {}
@@ -186,7 +186,7 @@ _TABLE_SEP_RE = re.compile(r"^\s*\|(\s*:?-+:?\s*\|)+\s*$")
 _RESULT_SUMMARY_RE = re.compile(r"^Got (?:result|(?:more than )?[\d,]+ rows?).*")
 
 
-def _parse_markdown_table(text: str) -> tuple[pd.DataFrame, str] | None:
+def parse_markdown_table(text: str) -> tuple[pd.DataFrame, str] | None:
     if not isinstance(text, str) or "|" not in text:
         return None
 
@@ -223,7 +223,7 @@ def _parse_markdown_table(text: str) -> tuple[pd.DataFrame, str] | None:
     return None
 
 
-def _split_result_summary(text: str) -> tuple[str | None, str]:
+def split_result_summary(text: str) -> tuple[str | None, str]:
     lines = text.splitlines()
     if not lines:
         return None, text
@@ -243,11 +243,11 @@ def render_sparql_result(result_data) -> None:
         return
 
     text = str(result_data)
-    summary, text = _split_result_summary(text)
+    summary, text = split_result_summary(text)
     if summary:
         st.markdown(f"**{summary}**")
 
-    table = _parse_markdown_table(text)
+    table = parse_markdown_table(text)
     if table is not None:
         df, preamble = table
         if preamble:

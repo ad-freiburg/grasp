@@ -12,9 +12,10 @@ from universal_ml_utils.ops import flatten
 
 from grasp.configs import GraspConfig
 from grasp.search_params import (
-    EmbeddingSearchParams,
+    EmbeddingBuildParams,
+    SearchParams,
     build_embedding_search_params,
-    load_search_params,
+    resolve_index_search_params,
     write_search_params,
 )
 
@@ -39,14 +40,14 @@ class ExampleIndex:
         model: SentenceTransformerModel,
         samples: list[Sample],
         description: str | None = None,
-        search_params: EmbeddingSearchParams | None = None,
+        search_params: SearchParams | None = None,
     ) -> None:
         self.model = model
         self.data = data
         self.index = index
         self.samples = samples
         self.description = description
-        self.search_params = search_params or EmbeddingSearchParams()
+        self.search_params = search_params
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -61,18 +62,19 @@ class ExampleIndex:
         **kwargs: Any,
     ) -> list:
         embedding = self.model.embed([question])[0]
-        p = self.search_params
-        merged = {
-            "min_score": p.min_score,
-            "exact": p.exact,
-            "rerank": p.rerank,
-            **kwargs,
-        }
-        matches = self.index.search(embedding, k, **merged)
+        params = (
+            {} if self.search_params is None else self.search_params.search_kwargs()
+        )
+        matches = self.index.search(embedding, k, **{**params, **kwargs})
         return [self.samples[id] for id, _, _ in matches]
 
     @classmethod
-    def load(cls, dir: str, model: SentenceTransformerModel) -> "ExampleIndex":
+    def load(
+        cls,
+        dir: str,
+        model: SentenceTransformerModel,
+        search_params: dict | None = None,
+    ) -> "ExampleIndex":
         data = Data.load(os.path.join(dir, "data"))
         embedding_path = os.path.join(dir, "data", "embedding.safetensors")
         index_dir = os.path.join(dir, "index")
@@ -93,10 +95,19 @@ class ExampleIndex:
         if os.path.exists(info_path):
             description = load_json(info_path).get("description")
 
-        search_params = load_search_params(index_dir)
-        assert search_params is None or isinstance(search_params, EmbeddingSearchParams)
-
-        return ExampleIndex(data, index, model, samples, description, search_params)
+        return ExampleIndex(
+            data,
+            index,
+            model,
+            samples,
+            description,
+            resolve_index_search_params(
+                index.index_type,
+                index_dir,
+                search_params,
+                name="examples",
+            ),
+        )
 
     @classmethod
     def build(
@@ -108,6 +119,8 @@ class ExampleIndex:
         overwrite: bool = False,
         log_level: str | int | None = None,
         description: str = "",
+        build_params: EmbeddingBuildParams | None = None,
+        search_params: SearchParams | None = None,
     ) -> None:
         logger = get_logger("EXAMPLE INDEX BUILD", log_level)
 
@@ -151,15 +164,9 @@ class ExampleIndex:
 
         dump_json({"description": description}, os.path.join(output_dir, "info.json"))
 
-        params = build_embedding_search_params(embedding)
+        params = build_embedding_search_params(embedding, build_params, search_params)
         write_search_params(params, index_dir)
-        if params.calibration is None:
-            logger.info(
-                f"Index too small to calibrate min_score; "
-                f"using default {params.min_score:.3f}"
-            )
-        else:
-            logger.info(f"Calibrated min_score={params.min_score:.3f}")
+        logger.info(f"Search params: {params.model_dump_json()}")
 
         end = time.monotonic()
         logger.info(f"Example index built in {end - start:.2f} seconds")
@@ -196,6 +203,6 @@ def load_example_indices(
 
         assert model is not None, "Model must be provided to load example indices"
 
-        indices[kg.kg] = index_cls.load(kg.examples, model)
+        indices[kg.kg] = index_cls.load(kg.examples.path, model, kg.examples.params)
 
     return indices

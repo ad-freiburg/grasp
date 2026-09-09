@@ -8,7 +8,12 @@ from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import flatten
 
 from grasp.manager.utils import get_auto_index_type, load_data
-from grasp.search_params import build_embedding_search_params, write_search_params
+from grasp.search_params import (
+    EmbeddingBuildParams,
+    SearchParams,
+    build_embedding_search_params,
+    write_search_params,
+)
 from grasp.utils import get_index_dir
 
 
@@ -22,6 +27,8 @@ def build_index(
     embedding_dim: int | None = None,
     log_level: str | int | None = None,
     overwrite: bool = False,
+    build_params: EmbeddingBuildParams | None = None,
+    search_params: SearchParams | None = None,
 ) -> None:
     logger = get_logger("GRASP INDEX", log_level)
 
@@ -67,15 +74,9 @@ def build_index(
 
         EmbeddingIndex.build(data, embedding_path, index_dir)
 
-        params = build_embedding_search_params(embeddings)
+        params = build_embedding_search_params(embeddings, build_params, search_params)
         write_search_params(params, index_dir)
-        if params.calibration is None:
-            logger.info(
-                f"Index too small to calibrate min_score; "
-                f"using default {params.min_score:.3f}"
-            )
-        else:
-            logger.info(f"Calibrated min_score={params.min_score:.3f}")
+        logger.info(f"Search params: {params.model_dump_json()}")
 
     else:
         raise ValueError(f"Unknown index type: {index_type}")

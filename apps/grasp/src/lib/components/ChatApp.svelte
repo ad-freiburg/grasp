@@ -101,6 +101,7 @@ let histories = [];
 let task = initialTaskSeed || TASKS[0].id;
 let knowledgeGraphs = new Map();
 let sttEnabled = false;
+let shareEnabled = false;
 let past = null;
 let connectionStatus = 'initial';
 let statusMessage = '';
@@ -355,6 +356,8 @@ let running = false;
       if (!response.ok) return;
       const data = await response.json();
       sttEnabled = Boolean(data && data.speech_to_text);
+      // the server only registers /save and /load when a share dir is set
+      shareEnabled = Boolean(data && data.share);
     } catch (error) {
       console.warn('Failed to load server config', error);
     }
@@ -1111,6 +1114,7 @@ let running = false;
           {cancelling}
           composerOffset={composerOffset}
           shareConversation={createShareLink}
+          {shareEnabled}
           {selectedKgs}
         />
       {/if}

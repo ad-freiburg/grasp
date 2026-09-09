@@ -15,6 +15,7 @@
   export let cancelling = false;
   export let composerOffset = 0;
   export let shareConversation = null;
+  export let shareEnabled = false;
   export let selectedKgs = [];
 
   let listEl;
@@ -356,6 +357,7 @@
                 <OutputMessage
                   {message}
                   {shareConversation}
+                  {shareEnabled}
                   shareDisabled={Boolean(message?.shareLocked)}
                 />
               </li>

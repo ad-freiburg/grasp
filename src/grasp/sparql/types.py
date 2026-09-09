@@ -85,8 +85,13 @@ class Binding:
 
     @staticmethod
     def from_dict(data: dict) -> "Binding":
+        # virtuoso emits the pre-2013 "typed-literal" where the spec uses "literal"
+        typ = data["type"]
+        if typ == "typed-literal":
+            typ = "literal"
+
         return Binding(
-            typ=data["type"],
+            typ=typ,
             value=data["value"],
             datatype=data.get("datatype"),
             lang=data.get("xml:lang"),
@@ -354,11 +359,11 @@ class Selection:
 def group_selections(
     selections: list[Selection],
 ) -> dict[ObjType, list[tuple[Alternative, list[str]]]]:
-    def _key(sel: Selection) -> tuple[str, str]:
+    def key(sel: Selection) -> tuple[str, str]:
         return sel.alternative.identifier, sel.obj_type.name
 
     grouped = {}
-    for _, group in groupby(sorted(selections, key=_key), key=_key):
+    for _, group in groupby(sorted(selections, key=key), key=key):
         selections = list(group)
         obj_type = selections[0].obj_type
 

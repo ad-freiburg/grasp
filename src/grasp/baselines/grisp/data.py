@@ -3,7 +3,8 @@ import os
 import random
 import re
 import string
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 from logging import Logger
 from typing import Literal
 
@@ -29,10 +30,17 @@ from grasp.sparql.utils import (
     replace_unresolved_placeholders,
 )
 from grasp.tasks.sparql_qa.examples import SparqlQaSample
-from grasp.utils import format_list, get_available_knowledge_graphs
+from grasp.utils import format_list, get_available_knowledge_graphs, ordered_unique
 
 BOI = "<iri>"
 EOI = "</iri>"
+
+# a placeholder may hold several wordings of the same item, separated by SEP,
+# which are searched one after the other
+SEP = "<sep>"
+
+# cap on the wordings per placeholder, so merging a large beam stays cheap
+MAX_PLACEHOLDER_QUERIES = 3
 
 BOR = "<rep>"
 EOR = "</rep>"
@@ -64,6 +72,8 @@ IGNORE_INDEX = -100
 Messages = list[dict[str, str]]
 AlternativeGroups = dict[ObjType, list[Alternative]]
 OrderedAlternatives = list[tuple[Alternative, ObjType, str | None]]
+# wordings of the placeholder being resolved, per object type, with variants
+Queries = dict[ObjType, list[tuple[str, str | None]]]
 
 # order in which a skeleton's natural-language placeholders are resolved. All
 # orders reduce to a fixed permutation of placeholder indices computed once per
@@ -163,8 +173,17 @@ def extract_value_from_nl_iri(nl_iri: dict) -> str:
     return nl_iri["value"][len(BOI) : -len(EOI)].strip()
 
 
-def extract_query_and_variant_from_nl_iri(nl_iri: dict) -> tuple[str, str | None]:
-    query = extract_value_from_nl_iri(nl_iri)
+def split_values(value: str) -> list[str]:
+    values = [part.strip() for part in value.split(SEP) if part.strip()]
+    return values or [""]
+
+
+def extract_values_from_nl_iri(nl_iri: dict) -> list[str]:
+    return split_values(extract_value_from_nl_iri(nl_iri))
+
+
+def extract_query_and_variant(value: str) -> tuple[str, str | None]:
+    query = value
     variant: str | None = None
 
     m = re.search(r" \(([^)]*)\)$", query)
@@ -176,24 +195,69 @@ def extract_query_and_variant_from_nl_iri(nl_iri: dict) -> tuple[str, str | None
     return query, variant
 
 
+# each wording with its own variant hint, since wordings need not agree on it
+def extract_queries_and_variants_from_nl_iri(
+    nl_iri: dict,
+) -> list[tuple[str, str | None]]:
+    return [
+        extract_query_and_variant(value) for value in extract_values_from_nl_iri(nl_iri)
+    ]
+
+
+# one wording only, so prompts stay single-wording like the skeletons the model
+# writes; index 0 is the best-scoring beam's
+def display_nl_iri(nl_iri: dict, index: int = 0) -> str:
+    values = extract_values_from_nl_iri(nl_iri)
+    return f"{BOI}{values[min(index, len(values) - 1)]}{EOI}"
+
+
+# per-placeholder state: alternatives left to try, which wording to search
+# next, the constraint shared by all wordings, and identifiers already offered
+@dataclass
+class Candidates:
+    obj_types: list[ObjType]
+    identifier_maps: dict[ObjType, dict[str, list[str]] | None]
+    alternatives: OrderedAlternatives = field(default_factory=list)
+    next_query: int = 0
+    seen: set[str] = field(default_factory=set)
+
+
 @dataclass
 class Info:
-    prefix: str
     sparql: str
-    query: str
-    variant: str | None
-    value: str
+    # one render per wording of the marked placeholder
+    sparqls: list[str]
+    queries: list[str]
+    variants: list[str | None]
+    values: list[str]
 
+    @property
+    def num_queries(self) -> int:
+        return len(self.values)
+
+    # the candidates are searched one wording at a time, so the prompt has to
+    # show the wording they came from or the model matches against the wrong one
+    def sparql_for_query(self, index: int) -> str:
+        return self.sparqls[index]
+
+    # everything before the marked placeholder, from that same render
+    def prefix_for_query(self, index: int) -> str:
+        return self.sparqls[index].split(BOR)[0]
+
+    # one entry per wording, so index i is the same wording for every type
     def build_queries(
         self,
         obj_types: dict[ObjType, bool],
-    ) -> dict[ObjType, tuple[str, str | None]]:
+    ) -> Queries:
         queries = {}
         for obj_type, supports_variants in obj_types.items():
-            if supports_variants and self.variant is not None:
-                queries[obj_type] = (self.query, self.variant)
-            else:
-                queries[obj_type] = (self.value, None)
+            pairs = []
+            for query, variant, value in zip(self.queries, self.variants, self.values):
+                if supports_variants and variant is not None:
+                    pairs.append((query, variant))
+                else:
+                    pairs.append((value, None))
+            queries[obj_type] = pairs
         return queries
 
 
@@ -204,9 +268,10 @@ class Skeleton:
         parser: LR1Parser,
         fill_order: FillOrder = "left-to-right",
         order: list[int] | None = None,
+        beams: list[list[set[int]]] | None = None,
     ) -> "Skeleton":
         sparql_parse = parser.parse(sparql)
-        return Skeleton(sparql, sparql_parse, parser, fill_order, order)
+        return Skeleton(sparql, sparql_parse, parser, fill_order, order, beams)
 
     def __init__(
         self,
@@ -215,11 +280,16 @@ class Skeleton:
         parser: LR1Parser | None = None,
         fill_order: FillOrder = "left-to-right",
         order: list[int] | None = None,
+        beams: list[list[set[int]]] | None = None,
     ) -> None:
         self.sparql_parse = sparql_parse
         self.sparql_encoded = sparql.encode()
         # placeholders in document (byte) order
         self.nl_iris = list(find_all(self.sparql_parse, "NL_IRI"))
+        # placeholder -> wording -> beams that produced it, so a prompt can show
+        # every placeholder at one beam's wording rather than mixing them. None
+        # outside merging, where each placeholder has one wording anyway.
+        self.beams = beams
         # selections/identifiers are stored in *fill* order (a stack), so
         # pop_selection() undoes the most recent selection for backtracking.
         # self.order maps fill step k -> placeholder (document) index, i.e. the
@@ -390,7 +460,7 @@ class Skeleton:
             # resolved placeholders are substituted; not-yet-resolved ones are
             # left as their natural-language token (only possible in the partial
             # case, since require_done guarantees all are filled otherwise)
-            sparql += filled.get(j, str(nl_iri["value"]))
+            sparql += filled.get(j, display_nl_iri(nl_iri))
             start = byte_end
 
         sparql += self.sparql_encoded[start:].decode()
@@ -412,47 +482,78 @@ class Skeleton:
         filled = self.get_filled_placeholders()
 
         cur = self.nl_iris[idx]
-        cur_start, cur_end = cur["byte_span"]
+        values = extract_values_from_nl_iri(cur)
+        queries_and_variants = extract_queries_and_variants_from_nl_iri(cur)
 
-        # prefix: everything before the current placeholder, with all already
-        # resolved placeholders substituted (under non-left-to-right orders a
-        # resolved placeholder may sit either side of the current one) and any
-        # not-yet-resolved placeholder left as natural language
-        prefix = ""
+        sparqls = [
+            self.render_for_selection(idx, filled, wording)
+            for wording in range(len(values))
+        ]
+        return Info(
+            # the constraint and its memo key are wording-independent
+            sparql=sparqls[0],
+            sparqls=sparqls,
+            queries=[query for query, _ in queries_and_variants],
+            variants=[variant for _, variant in queries_and_variants],
+            values=values,
+        )
+
+    # the beam to render the unresolved placeholders at. A wording usually comes
+    # from several beams, so prefer one covering the most of them, since merging
+    # truncates. Ties go to the lowest index, i.e. the best-scoring beam.
+    def pick_beam(self, idx: int, filled: dict[int, str], wording: int) -> int | None:
+        if self.beams is None:
+            return None
+
+        unresolved = [
+            i for i in range(len(self.nl_iris)) if i != idx and i not in filled
+        ]
+        return max(
+            sorted(self.beams[idx][wording]),
+            key=lambda beam: sum(
+                any(beam in beams for beams in self.beams[i]) for i in unresolved
+            ),
+            default=None,
+        )
+
+    # where placeholder i carries beam, falling back to its first wording when
+    # merging truncated that beam's away
+    def wording_for_beam(self, i: int, beam: int | None) -> int:
+        if beam is None or self.beams is None:
+            return 0
+
+        return next(
+            (w for w, beams in enumerate(self.beams[i]) if beam in beams),
+            0,
+        )
+
+    # the skeleton with placeholder idx marked at the given wording: resolved
+    # placeholders substituted by their identifier, unresolved ones shown at the
+    # same beam's wording so the prompt reads as one coherent skeleton
+    def render_for_selection(
+        self,
+        idx: int,
+        filled: dict[int, str],
+        wording: int,
+    ) -> str:
+        beam = self.pick_beam(idx, filled, wording)
+
+        parts = []
         start = 0
         for i, nl_iri in enumerate(self.nl_iris):
             byte_start, byte_end = nl_iri["byte_span"]
-            if byte_start >= cur_start:
-                break
-            prefix += self.sparql_encoded[start:byte_start].decode()
-            prefix += filled.get(i, str(nl_iri["value"]))
+            parts.append(self.sparql_encoded[start:byte_start].decode())
+            if i in filled:
+                parts.append(filled[i])
+            elif i == idx:
+                value = extract_values_from_nl_iri(nl_iri)[wording]
+                parts.append(f"{BOR}{value}{EOR}")
+            else:
+                parts.append(display_nl_iri(nl_iri, self.wording_for_beam(i, beam)))
             start = byte_end
-        prefix += self.sparql_encoded[start:cur_start].decode()
 
-        query, variant = extract_query_and_variant_from_nl_iri(cur)
-        value = extract_value_from_nl_iri(cur)
-
-        # tail: everything after the current placeholder, again with resolved
-        # placeholders substituted and unresolved ones left as natural language
-        tail = ""
-        start = cur_end
-        for i, nl_iri in enumerate(self.nl_iris):
-            byte_start, byte_end = nl_iri["byte_span"]
-            if byte_start <= cur_start:
-                continue
-            tail += self.sparql_encoded[start:byte_start].decode()
-            tail += filled.get(i, str(nl_iri["value"]))
-            start = byte_end
-        tail += self.sparql_encoded[start:].decode()
-
-        sparql = prefix + f"{BOR}{value}{EOR}" + tail
-        return Info(
-            prefix=prefix,
-            sparql=sparql,
-            query=query,
-            variant=variant,
-            value=value,
-        )
+        parts.append(self.sparql_encoded[start:].decode())
+        return "".join(parts)
 
     def add_selection(self, selection: Selection, manager: KgManager) -> None:
         assert not self.done, "All NL IRIs have already been replaced"
@@ -477,6 +578,56 @@ class Skeleton:
         selection = self.selections.pop()
         self.identifiers.pop()
         return selection
+
+
+# fold two skeletons that differ only in placeholder wording into one carrying
+# both; None if they do not line up
+def merge_skeletons(
+    base: Skeleton,
+    other: Skeleton,
+    parser: LR1Parser,
+    fill_order: FillOrder = "left-to-right",
+) -> Skeleton | None:
+    if len(base.nl_iris) != len(other.nl_iris):
+        return None
+
+    parts = []
+    beams: list[list[set[int]]] = []
+    start = 0
+    for i, (base_iri, other_iri) in enumerate(zip(base.nl_iris, other.nl_iris)):
+        byte_start, byte_end = base_iri["byte_span"]
+        parts.append(base.sparql_encoded[start:byte_start].decode())
+
+        base_values = extract_values_from_nl_iri(base_iri)
+        other_values = extract_values_from_nl_iri(other_iri)
+        values = ordered_unique(base_values + other_values)[:MAX_PLACEHOLDER_QUERIES]
+        parts.append(f"{BOI}{SEP.join(values)}{EOI}")
+
+        # a wording shared by both sides belongs to both their beams
+        origins: dict[str, set[int]] = {}
+        for skeleton, iri_values in ((base, base_values), (other, other_values)):
+            for w, value in enumerate(iri_values):
+                if skeleton.beams is None:
+                    continue
+                origins.setdefault(value, set()).update(skeleton.beams[i][w])
+        beams.append([origins.get(value, set()) for value in values])
+
+        start = byte_end
+
+    parts.append(base.sparql_encoded[start:].decode())
+
+    # all-or-nothing: without it everything falls back to its first wording
+    known = all(all(placeholder) for placeholder in beams)
+
+    try:
+        return Skeleton.parse(
+            "".join(parts),
+            parser,
+            fill_order,
+            beams=beams if known else None,
+        )
+    except Exception:
+        return None
 
 
 def get_skeleton_prompt(
@@ -507,7 +658,7 @@ for wikidata properties."""
 
 def ordered_alternatives(
     alternative_groups: AlternativeGroups,
-    queries: dict[ObjType, tuple[str, str | None]],
+    queries: Queries,
 ) -> OrderedAlternatives:
     return ordered_alternatives_with_interleave(
         alternative_groups,
@@ -518,10 +669,14 @@ def ordered_alternatives(
 
 def ordered_alternatives_with_interleave(
     alternative_groups: AlternativeGroups,
-    queries: dict[ObjType, tuple[str, str | None]],
+    queries: Queries,
     interleave: bool = False,
 ) -> OrderedAlternatives:
-    variants = {obj_type: variant for obj_type, (_, variant) in queries.items()}
+    # the variant hint comes from the first wording that gives one
+    variants = {
+        obj_type: next((variant for _, variant in pairs if variant is not None), None)
+        for obj_type, pairs in queries.items()
+    }
 
     entities = [
         (alternative, ObjType.ENTITY, variants.get(ObjType.ENTITY))
@@ -559,7 +714,7 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
 
     grouped = {}
 
-    for label, (alternative, obj_type, variant) in zip(ALT_LABELS, alternatives):
+    for label, (alternative, obj_type, _) in zip(ALT_LABELS, alternatives):
         alt = alternative.get_selection_string(
             show_matched_label=False,
             include_variants=[],
@@ -586,15 +741,16 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
     return top_k_string
 
 
-def find_alternative_groups(
+# object types the placeholder can take and, per type, the identifiers the
+# constraint allows (None means unconstrained). Independent of the wording and
+# costs an endpoint round trip, so it is derived once and reused by all wordings.
+def find_candidate_ids(
     manager: KgManager,
     sparql: str,
-    queries: dict[ObjType, tuple[str, str | None]],
-    top_k: int,
     logger: Logger,
     skip_constraint: bool = False,
     max_candidates: int | None = None,
-) -> AlternativeGroups:
+) -> tuple[list[ObjType], dict[ObjType, dict[str, list[str]] | None]]:
     # prefix left of the current placeholder, with any unresolved placeholders
     # turned into variables so it parses
     prefix = replace_unresolved_placeholders(sparql.split(BOR, 1)[0])
@@ -658,10 +814,23 @@ def find_alternative_groups(
             "Skipping constraint-based IRI filtering, full search will be performed"
         )
 
+    return obj_types, identifier_maps
+
+
+# alternatives for one wording, within what the constraint allows
+def search_alternatives(
+    manager: KgManager,
+    obj_types: list[ObjType],
+    identifier_maps: dict[ObjType, dict[str, list[str]] | None],
+    queries: Queries,
+    query_index: int,
+    top_k: int,
+    logger: Logger,
+) -> AlternativeGroups:
     alternative_groups = {}
     for obj_type in obj_types:
         assert obj_type in queries, f"Missing query for object type {obj_type}"
-        query, _ = queries[obj_type]
+        query, _ = queries[obj_type][query_index]
         logger.debug(f"Searching with query '{query}' in '{obj_type.index_name}' index")
         alternatives = manager.search_index(
             obj_type.index_name,
@@ -678,6 +847,34 @@ def find_alternative_groups(
         + format_alternatives(ordered_alternatives(alternative_groups, queries))
     )
     return alternative_groups
+
+
+# lookup and search for the first wording, all the training data prep needs
+def find_alternative_groups(
+    manager: KgManager,
+    sparql: str,
+    queries: Queries,
+    top_k: int,
+    logger: Logger,
+    skip_constraint: bool = False,
+    max_candidates: int | None = None,
+) -> AlternativeGroups:
+    obj_types, identifier_maps = find_candidate_ids(
+        manager,
+        sparql,
+        logger,
+        skip_constraint=skip_constraint,
+        max_candidates=max_candidates,
+    )
+    return search_alternatives(
+        manager,
+        obj_types,
+        identifier_maps,
+        queries,
+        0,
+        top_k,
+        logger,
+    )
 
 
 def get_selection_prompt_and_options(
@@ -928,13 +1125,13 @@ def tokenize_messages(
     if "{% generation %}" not in chat_temp or all(m == 0 for m in mask):
         # invalid assitant tokens mask, fallback to computing labels
         # manually
-        prompt_ids = tokenizer.apply_chat_template(
+        prompt_enc: dict = tokenizer.apply_chat_template(
             messages[:-1],
             add_generation_prompt=True,
             return_dict=True,
             enable_thinking=False,
-        )
-        prompt_len = len(prompt_ids)
+        )  # type: ignore
+        prompt_len = len(prompt_enc["input_ids"])
         non_prompt_ids = enc["input_ids"][prompt_len:]
         labels = [IGNORE_INDEX] * prompt_len + non_prompt_ids
     else:
@@ -987,6 +1184,42 @@ def tokenize_and_log(
     return output
 
 
+# option letter ids as the chat template renders them; sentencepiece tokenizers
+# mark a word boundary, so llama-2 puts "▁A" (319) in the assistant turn while
+# convert_tokens_to_ids("A") gives 29909, which never occurs there
+@lru_cache(maxsize=None)
+def get_option_token_ids(
+    tokenizer: PreTrainedTokenizerBase,
+    options: tuple[str, ...],
+) -> tuple[int, ...]:
+    probe = [{"role": "user", "content": "?"}]
+
+    def render(letter: str) -> list[int]:
+        enc: dict = tokenizer.apply_chat_template(  # type: ignore
+            probe + [{"role": "assistant", "content": letter}],
+            return_dict=True,
+            enable_thinking=False,
+        )
+        return enc["input_ids"]
+
+    # the letter sits wherever two different letters make the render diverge,
+    # which also skips any tokens the template inserts first (e.g. Qwen3's
+    # empty <think> block). Probed with fixed labels since options can be a
+    # single element when there are no alternatives to choose from.
+    first, second = render(ALT_LABELS[0]), render(ALT_LABELS[1])
+    position = next(
+        (i for i in range(min(len(first), len(second))) if first[i] != second[i]),
+        None,
+    )
+    assert position is not None, "Chat template renders all option letters alike"
+
+    token_ids = tuple(render(option)[position] for option in options)
+    assert all(t is not None and t != tokenizer.unk_token_id for t in token_ids), (
+        f"Option letters not single tokens: {options}"
+    )
+    return token_ids
+
+
 def tokenize_option_answer(
     messages: Messages,
     options: list[str],
@@ -1006,10 +1239,7 @@ def tokenize_option_answer(
         return_dict=True,
         enable_thinking=False,
     )  # type: ignore
-    option_token_ids = [tokenizer.convert_tokens_to_ids(o) for o in options]
-    assert all(
-        t is not None and t != tokenizer.unk_token_id for t in option_token_ids
-    ), f"Option letters not single tokens: {options}"
+    option_token_ids = list(get_option_token_ids(tokenizer, tuple(options)))
 
     located = messages[-1]["content"]
     assert located in options, (

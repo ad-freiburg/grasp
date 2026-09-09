@@ -2,6 +2,9 @@ from unittest.mock import Mock
 
 from grasp.build.shapes import (
     ClassMaps,
+    build_per_class_property_frequency_query,
+    build_schema_class_query,
+    build_total_entities_query,
     ClassProfile,
     DirectedMaps,
     PropertyFreq,
@@ -12,14 +15,16 @@ from grasp.build.shapes import (
     compute_shape,
     emit_pseudo_shex,
 )
-from grasp.configs import ShapeConfig
+from grasp.configs import GraspConfig, ShapeConfig
+from grasp.functions import call_shape_function
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer, WikidataPropertyNormalizer
-from grasp.shapes import ShapeSample, Target, TargetClass, TargetLiteral
+from grasp.shapes import Shapes, ShapeSample, Target, TargetClass, TargetLiteral
 from grasp.sparql.types import AskResult, SelectResult
+from grasp.sparql.utils import load_iri_and_literal_parser
 
 
-def _attach_normalizers(
+def attach_normalizers(
     m: Mock,
     property_normalizer: Normalizer | None = None,
     entity_normalizer: Normalizer | None = None,
@@ -46,7 +51,7 @@ def make_manager(
     m.get_label.return_value = None
     m.try_get_data.return_value = None
     m.prefixes = {}
-    _attach_normalizers(m, property_normalizer, entity_normalizer)
+    attach_normalizers(m, property_normalizer, entity_normalizer)
     return m
 
 
@@ -72,7 +77,7 @@ def make_labelled_manager(
 
     m.get_label.side_effect = get_label
     m.try_get_data.return_value = object()  # non-None signals index exists
-    _attach_normalizers(m, property_normalizer, entity_normalizer)
+    attach_normalizers(m, property_normalizer, entity_normalizer)
     return m
 
 
@@ -728,7 +733,7 @@ class TestComputeShape:
         assert "http://ex.org/rare" not in out  # rare instance prop filtered
 
 
-def _make_profile(with_target_iris: bool = True) -> ClassProfile:
+def make_profile(with_target_iris: bool = True) -> ClassProfile:
     type_targets: list[Target] = (
         [TargetClass(iri="http://ex.org/Class", short_iri="ex:Class")]
         if with_target_iris
@@ -760,7 +765,7 @@ def _make_profile(with_target_iris: bool = True) -> ClassProfile:
 class TestEmitPseudoShexLabelled:
     def test_no_index_falls_back_to_short_iris(self):
         manager = make_manager()
-        profile = _make_profile()
+        profile = make_profile()
         shex = emit_pseudo_shex(profile, manager, ShapeConfig())
         assert shex == ("ex:Human {\n  ex:type ex:Class ;\n  ex:name xsd:string ;\n}")
 
@@ -775,7 +780,7 @@ class TestEmitPseudoShexLabelled:
                 "http://ex.org/name": "name",
             },
         )
-        profile = _make_profile()
+        profile = make_profile()
         shex = emit_pseudo_shex(profile, manager, ShapeConfig())
         assert shex == (
             "ex:Human {\n"
@@ -788,7 +793,7 @@ class TestEmitPseudoShexLabelled:
         manager = make_labelled_manager(
             entity_labels={"http://ex.org/Human": "Human"},
         )
-        profile = _make_profile()
+        profile = make_profile()
         shex = emit_pseudo_shex(profile, manager, ShapeConfig())
         assert shex == ("ex:Human {\n  ex:type ex:Class ;\n  ex:name xsd:string ;\n}")
 
@@ -874,7 +879,7 @@ class TestWikidataVariantGrouping:
         assert "http://ex.org/Paper" in iris
 
 
-def _empty_profile(
+def empty_profile(
     iri: str = "http://ex.org/Q5", short_iri: str = "wd:Q5"
 ) -> ClassProfile:
     return ClassProfile(iri=iri, short_iri=short_iri)
@@ -885,7 +890,7 @@ class TestShapeSampleQueries:
         s = ShapeSample(
             iri="http://ex.org/Q5",
             short_iri="wd:Q5",
-            profile=_empty_profile(),
+            profile=empty_profile(),
             label="Human",
             aliases=["person", "human being"],
         )
@@ -895,7 +900,7 @@ class TestShapeSampleQueries:
         s = ShapeSample(
             iri="http://ex.org/Q5",
             short_iri="wd:Q5",
-            profile=_empty_profile(),
+            profile=empty_profile(),
             label="wd:Q5",  # same as short_iri
         )
         assert s.queries() == ["wd:Q5"]
@@ -904,7 +909,7 @@ class TestShapeSampleQueries:
         s = ShapeSample(
             iri="http://ex.org/Q5",
             short_iri="wd:Q5",
-            profile=_empty_profile(),
+            profile=empty_profile(),
         )
         assert s.queries() == ["wd:Q5"]
 
@@ -912,9 +917,73 @@ class TestShapeSampleQueries:
         s = ShapeSample(
             iri="http://ex.org/Q5",
             short_iri="wd:Q5",
-            profile=_empty_profile(),
+            profile=empty_profile(),
             label="Human",
             aliases=["person"],
         )
         s2 = ShapeSample.model_validate(s.model_dump())
         assert s2 == s
+
+
+def test_class_discovery_only_considers_iri_classes() -> None:
+    # literal objects of a typing predicate are not classes, and fail to
+    # parse once wrapped in <>
+    query = build_total_entities_query("?instance gkp:P0 {CLASS}")
+    assert "FILTER(ISIRI(?class))" in query
+
+    schema_query = build_schema_class_query("{CLASS} rdfs:subClassOf ?super")
+    assert "FILTER(ISIRI(?class))" in schema_query
+
+
+def test_class_discovery_ranks_by_instance_count() -> None:
+    # max_classes slices this result, so the order decides what gets profiled
+    query = build_total_entities_query("?instance gkp:P0 {CLASS}")
+    assert "ORDER BY DESC(?totalEntities)" in query
+    assert query.index("GROUP BY ?class") < query.index("ORDER BY DESC(?totalEntities)")
+
+
+def test_per_class_queries_are_not_iri_filtered() -> None:
+    # the class term is a concrete IRI here, so the filter would be dead weight
+    query = build_per_class_property_frequency_query(
+        "?instance gkp:P0 {CLASS}", "https://gptkb.org/concept/C0"
+    )
+    assert "ISIRI" not in query
+    assert "<https://gptkb.org/concept/C0>" in query
+
+
+class TestGetShapeIriGuard:
+    def make_shape_manager(self) -> Mock:
+        m = make_manager()
+        m.kg = "test"
+        m.iri_literal_parser = load_iri_and_literal_parser()
+        m.shape_config = ShapeConfig()
+        return m
+
+    def call(self, manager: Mock, iri: str) -> str:
+        shapes = Shapes(instance_pattern="?instance a {CLASS} .")
+        return call_shape_function(
+            "get_shape",
+            {"iri": iri},
+            shapes,
+            manager,
+            GraspConfig(),
+        )
+
+    def test_non_iri_argument_is_rejected_before_building_sparql(self) -> None:
+        # a bare label parses as a literal, and wrapping it in <> would only
+        # fail later as an opaque lexer error
+        manager = self.make_shape_manager()
+        result = self.call(manager, "airmail stamps")
+
+        assert "is not a valid IRI" in result
+        manager.execute_sparql.assert_not_called()
+
+    def test_iri_argument_reaches_computation(self) -> None:
+        manager = self.make_shape_manager()
+        manager.execute_sparql.side_effect = Exception("boom")
+
+        result = self.call(manager, "http://ex.org/Human")
+
+        # got past the guard and into compute_shape
+        assert "failed to compute on the fly" in result
+        assert manager.execute_sparql.called

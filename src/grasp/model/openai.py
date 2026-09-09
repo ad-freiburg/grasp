@@ -248,6 +248,32 @@ class OpenAIResponsesModel(Model):
                 assert isinstance(msg.content, Response)
                 cnt = msg.content
 
+                # reasoning first, same order as in the raw output of a response
+                if cnt.reasoning:
+                    rs = cnt.reasoning
+                    # type and summary are both required, without the type the
+                    # api falls back to a message item and rejects the missing role
+                    rs_msg: dict = {
+                        "id": rs.id,
+                        "type": "reasoning",
+                        "summary": [],
+                    }
+
+                    if rs.summary:
+                        rs_msg["summary"] = [
+                            {"type": "summary_text", "text": rs.summary}
+                        ]
+
+                    if rs.content:
+                        rs_msg["content"] = [
+                            {"type": "reasoning_text", "text": rs.content}
+                        ]
+
+                    if rs.encrypted_content:
+                        rs_msg["encrypted_content"] = rs.encrypted_content
+
+                    msgs.append(rs_msg)
+
                 if isinstance(cnt.message, str):
                     msgs.append(
                         {
@@ -269,25 +295,6 @@ class OpenAIResponsesModel(Model):
                             ],
                         }
                     )
-
-                if cnt.reasoning:
-                    rs = cnt.reasoning
-                    rs_msg: dict = {"id": rs.id}
-
-                    if rs.summary:
-                        rs_msg["summary"] = [
-                            {"type": "summary_text", "text": rs.summary}
-                        ]
-
-                    if rs.content:
-                        rs_msg["content"] = [
-                            {"type": "reasoning_text", "text": rs.content}
-                        ]
-
-                    if rs.encrypted_content:
-                        rs_msg["encrypted_content"] = rs.encrypted_content
-
-                    msgs.append(rs_msg)
 
                 for tool_call in cnt.tool_calls:
                     msgs.append(

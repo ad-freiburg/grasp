@@ -45,6 +45,11 @@ from grasp.notes import (
     take_notes_from_outputs,
     take_notes_from_samples,
 )
+from grasp.search_params import (
+    DEFAULT_MIN_SCORE_PERCENTILE,
+    EmbeddingBuildParams,
+    EmbeddingSearchParams,
+)
 from grasp.server import serve
 from grasp.shapes import ShapeIndex, ShapeSample
 from grasp.tasks import Task, get_task
@@ -84,6 +89,113 @@ def add_overwrite_arg(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Overwrite existing output",
     )
+
+
+def add_embedding_args(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "embedding index",
+        "Only applicable when building an embedding index",
+    )
+    group.add_argument(
+        "--emb-model",
+        type=str,
+        default="Qwen/Qwen3-Embedding-0.6B",
+        help="Embedding model to use",
+    )
+    group.add_argument(
+        "--emb-device",
+        type=str,
+        default=None,
+        help="Device to use for the embedding model",
+    )
+    group.add_argument(
+        "--emb-dim",
+        type=int,
+        help="Embedding dimensionality",
+    )
+    group.add_argument(
+        "--emb-batch-size",
+        "--batch-size",
+        type=int,
+        default=256,
+        help="Batch size for embedding",
+    )
+    group.add_argument(
+        "--min-score-percentile",
+        type=float,
+        nargs="?",
+        const=DEFAULT_MIN_SCORE_PERCENTILE,
+        default=None,
+        help="Percentile of the random item-item similarity distribution to "
+        "derive the min score from; not given at all means no derivation, "
+        f"given without a value means {DEFAULT_MIN_SCORE_PERCENTILE:g}",
+    )
+    group.add_argument(
+        "--min-score-margin",
+        type=float,
+        default=0.0,
+        help="Margin added to the derived min score",
+    )
+    group.add_argument(
+        "--min-score-samples",
+        type=int,
+        default=4096,
+        help="Number of pairs sampled to derive the min score",
+    )
+    group.add_argument(
+        "--min-score-seed",
+        type=int,
+        default=22,
+        help="Seed for sampling the pairs to derive the min score",
+    )
+
+    search = parser.add_argument_group(
+        "embedding search",
+        "Initial search params of an embedding index; take precedence over the "
+        "derived ones and can be overridden again from a GRASP config",
+    )
+    search.add_argument(
+        "--min-score",
+        type=float,
+        default=None,
+        help="Minimum score a match must reach",
+    )
+    search.add_argument(
+        "--rerank",
+        type=float,
+        default=None,
+        help="Oversampling factor for reranking approximate matches",
+    )
+    search.add_argument(
+        "--exact",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Search exhaustively instead of using the approximate index",
+    )
+
+
+def get_embedding_build_params(args: argparse.Namespace) -> EmbeddingBuildParams:
+    return EmbeddingBuildParams(
+        min_score_percentile=args.min_score_percentile,
+        min_score_margin=args.min_score_margin,
+        min_score_samples=args.min_score_samples,
+        seed=args.min_score_seed,
+    )
+
+
+def get_embedding_search_params(
+    args: argparse.Namespace,
+) -> EmbeddingSearchParams | None:
+    # only fields explicitly given on the command line should override
+    given = {
+        name: getattr(args, name)
+        for name in ("min_score", "rerank", "exact")
+        if getattr(args, name) is not None
+    }
+    if not given:
+        return None
+
+    return EmbeddingSearchParams.model_validate(given)
 
 
 def parse_args() -> argparse.Namespace:
@@ -536,29 +648,7 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Type of index to build (not applicable for shapes)",
     )
-    index_parser.add_argument(
-        "--emb-model",
-        type=str,
-        default="Qwen/Qwen3-Embedding-0.6B",
-        help="Embedding model to use when building embedding index",
-    )
-    index_parser.add_argument(
-        "--emb-device",
-        type=str,
-        default=None,
-        help="Device to use for embedding model when building embedding index",
-    )
-    index_parser.add_argument(
-        "--emb-dim",
-        type=int,
-        help="Embedding dimensionality when building embedding index",
-    )
-    index_parser.add_argument(
-        "--emb-batch-size",
-        type=int,
-        default=256,
-        help="Batch size when building embedding index",
-    )
+    add_embedding_args(index_parser)
     index_parser.add_argument(
         "--max-classes",
         type=int,
@@ -583,22 +673,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory to save the example index",
     )
     example_parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=256,
-        help="Batch size for building the example index",
-    )
-    example_parser.add_argument(
-        "--emb-model",
-        type=str,
-        default="Qwen/Qwen3-Embedding-0.6B",
-        help="Embedding model to use when building examples index",
-    )
-    example_parser.add_argument(
         "description",
         type=str,
         help="Short description of this example index (shown in system prompt)",
     )
+    add_embedding_args(example_parser)
     add_task_arg(example_parser)
     add_overwrite_arg(example_parser)
 
@@ -968,7 +1047,7 @@ def setup_grasp(args: argparse.Namespace) -> None:
     phase = args.phase
 
     if phase == "shapes":
-        _shapes_setup_grasp(args)
+        shapes_setup_grasp(args)
         return
 
     logger = get_logger("GRASP SETUP", args.log_level)
@@ -1085,7 +1164,7 @@ def setup_grasp(args: argparse.Namespace) -> None:
         logger.info(f"Saved {name} description to {stamped} (latest: {path})")
 
 
-def _shapes_setup_grasp(args: argparse.Namespace) -> None:
+def shapes_setup_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP SHAPES SETUP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
@@ -1229,6 +1308,8 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
         args.overwrite,
         args.log_level,
         total_classes=total_classes,
+        build_params=get_embedding_build_params(args),
+        search_params=get_embedding_search_params(args),
     )
 
 
@@ -1273,6 +1354,8 @@ def main():
                 args.emb_dim,
                 args.log_level,
                 args.overwrite,
+                get_embedding_build_params(args),
+                get_embedding_search_params(args),
             )
 
     elif args.command == "notes":
@@ -1300,10 +1383,12 @@ def main():
             args.examples_file,
             args.output_dir,
             model,
-            args.batch_size,
+            args.emb_batch_size,
             args.overwrite,
             args.log_level,
             args.description,
+            get_embedding_build_params(args),
+            get_embedding_search_params(args),
         )
 
     elif args.command == "om-pretask":

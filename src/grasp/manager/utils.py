@@ -16,9 +16,9 @@ from search_rdf.model import (
 from universal_ml_utils.configuration import load_config
 from universal_ml_utils.io import load_json, load_text
 
-from grasp.configs import KgInfo
+from grasp.configs import KgInfo, NamedIndexConfig
 from grasp.manager.normalizer import Normalizer
-from grasp.search_params import SearchParams, load_search_params
+from grasp.search_params import SearchParams, resolve_index_search_params
 from grasp.sparql.types import ObjType
 from grasp.sparql.utils import find_longest_prefix
 from grasp.utils import get_index_dir
@@ -174,7 +174,7 @@ def load_index_description(
 
 def load_other_indices(
     kg: str,
-    indices: list[str],
+    indices: list[NamedIndexConfig],
     logger: logging.Logger | None = None,
 ) -> dict[str, KgIndex]:
     base_index_dir = get_index_dir(kg)
@@ -188,10 +188,12 @@ def load_other_indices(
 
     config = load_config(config_path)
 
+    configured = {index.name: index for index in indices}
+
     others = {}
     for cfg in config["indices"]:
         name = cfg["name"]
-        if name not in indices:
+        if name not in configured:
             if logger is not None:
                 logger.debug(
                     f"Skipping index {name} as it's not in the specified indices list"
@@ -212,11 +214,13 @@ def load_other_indices(
             continue
 
         info_sparql = load_info_sparql(sub_index_dir, logger)
-        search_params = None
-        if isinstance(index, EmbeddingIndex):
-            search_params = load_search_params(
-                os.path.join(sub_index_dir, "embedding")
-            )
+        search_params = resolve_index_search_params(
+            index.index_type,
+            os.path.join(sub_index_dir, index.index_type),
+            configured[name].params,
+            name=name,
+            logger=logger,
+        )
         others[name] = KgIndex(
             desc, index, index.data(), info_sparql, search_params=search_params
         )

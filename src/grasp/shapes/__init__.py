@@ -18,9 +18,10 @@ from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import flatten
 
 from grasp.search_params import (
-    EmbeddingSearchParams,
+    EmbeddingBuildParams,
+    SearchParams,
     build_embedding_search_params,
-    load_search_params,
+    resolve_index_search_params,
     write_search_params,
 )
 
@@ -65,11 +66,18 @@ class ClassProfile(BaseModel):
     iri: str
     short_iri: str
     total_entities: int = 0
+    # instances profiled if the class was sampled, 0 if profiled exhaustively
+    profiled_entities: int = 0
     properties: list[PropertyProfile] = Field(default_factory=list)
     # inverse edges: properties for which instances of this class are the *object*.
     # reuses PropertyProfile, where `targets` holds the *source* classes rather
     # than the target ones, and `entity_count` counts distinct receiving instances.
     incoming: list[PropertyProfile] = Field(default_factory=list)
+
+    # coverage counts are over the profiled instances, not the whole extension
+    @property
+    def share_base(self) -> int:
+        return self.profiled_entities or self.total_entities
 
 
 class ShapeSample(BaseModel):
@@ -98,7 +106,7 @@ class ShapeIndex:
         model: SentenceTransformerModel,
         samples: list[ShapeSample],
         total_classes: int | None = None,
-        search_params: EmbeddingSearchParams | None = None,
+        search_params: SearchParams | None = None,
     ) -> None:
         self.data = data
         self.index = index
@@ -106,22 +114,27 @@ class ShapeIndex:
         self.samples = samples
         self.total_classes = total_classes
         self.indexed_classes = len(samples)
-        self.search_params = search_params or EmbeddingSearchParams()
+        self.search_params = search_params
         self.iri_map: dict[str, ShapeSample] = {s.iri: s for s in samples}
 
     def search(self, query: str, k: int = 10) -> list[ShapeSample]:
         embedding = self.model.embed([query])[0]
-        p = self.search_params
-        matches = self.index.search(
-            embedding, k, min_score=p.min_score, exact=p.exact, rerank=p.rerank
+        kwargs = (
+            {} if self.search_params is None else self.search_params.search_kwargs()
         )
+        matches = self.index.search(embedding, k, **kwargs)
         return [self.samples[id] for id, _, _ in matches]
 
     def get_by_iri(self, iri: str) -> ShapeSample | None:
         return self.iri_map.get(iri)
 
     @classmethod
-    def load(cls, dir: str, model: SentenceTransformerModel) -> "ShapeIndex":
+    def load(
+        cls,
+        dir: str,
+        model: SentenceTransformerModel,
+        search_params: dict | None = None,
+    ) -> "ShapeIndex":
         data = Data.load(os.path.join(dir, "data"))
         embedding_path = os.path.join(dir, "data", "embedding.safetensors")
         index_dir = os.path.join(dir, "index")
@@ -142,16 +155,18 @@ class ShapeIndex:
         if os.path.exists(info_path):
             total_classes = load_json(info_path).get("total_classes")
 
-        search_params = load_search_params(index_dir)
-        assert search_params is None or isinstance(search_params, EmbeddingSearchParams)
-
         return cls(
             data,
             index,
             model,
             samples,
             total_classes=total_classes,
-            search_params=search_params,
+            search_params=resolve_index_search_params(
+                index.index_type,
+                index_dir,
+                search_params,
+                name="shapes",
+            ),
         )
 
     @classmethod
@@ -164,6 +179,8 @@ class ShapeIndex:
         overwrite: bool = False,
         log_level: str | int | None = None,
         total_classes: int | None = None,
+        build_params: EmbeddingBuildParams | None = None,
+        search_params: SearchParams | None = None,
     ) -> None:
         logger = get_logger("SHAPE INDEX BUILD", log_level)
 
@@ -208,15 +225,9 @@ class ShapeIndex:
             info["total_classes"] = total_classes
         dump_json(info, os.path.join(output_dir, "info.json"))
 
-        params = build_embedding_search_params(embedding)
+        params = build_embedding_search_params(embedding, build_params, search_params)
         write_search_params(params, index_dir)
-        if params.calibration is None:
-            logger.info(
-                f"Index too small to calibrate min_score; "
-                f"using default {params.min_score:.3f}"
-            )
-        else:
-            logger.info(f"Calibrated min_score={params.min_score:.3f}")
+        logger.info(f"Search params: {params.model_dump_json()}")
 
         end = time.monotonic()
         logger.info(f"Shape index built in {end - start:.2f} seconds")
@@ -246,13 +257,17 @@ def load_setup_patterns(shapes_dir: str) -> tuple[str | None, str | None]:
     return read("instance_pattern.sparql"), read("schema_pattern.sparql")
 
 
-def load_shapes(shapes_dir: str, model: SentenceTransformerModel) -> Shapes | None:
+def load_shapes(
+    shapes_dir: str,
+    model: SentenceTransformerModel,
+    search_params: dict | None = None,
+) -> Shapes | None:
     instance_pattern, schema_pattern = load_setup_patterns(shapes_dir)
 
     index = None
     index_dir = os.path.join(shapes_dir, "index")
     if os.path.exists(index_dir):
-        index = ShapeIndex.load(index_dir, model)
+        index = ShapeIndex.load(index_dir, model, search_params)
 
     if instance_pattern is None and schema_pattern is None and index is None:
         return None

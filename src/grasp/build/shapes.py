@@ -46,6 +46,9 @@ def distinct_members(pattern: str, class_term: str = "?class") -> str:
     cp = bind_pattern(pattern, class_term)
     inner = "\n".join(f"      {line}" for line in cp.strip().splitlines())
     project = "?class ?instance" if class_term == "?class" else "?instance"
+    # a class is always an IRI; filtering here also prunes before the DISTINCT
+    if class_term == "?class":
+        inner += "\n      FILTER(ISIRI(?class))"
     return (
         f"  {{\n"
         f"    SELECT DISTINCT {project} WHERE {{\n"
@@ -56,12 +59,14 @@ def distinct_members(pattern: str, class_term: str = "?class") -> str:
 
 
 def build_total_entities_query(pattern: str) -> str:
+    # ordered so that max_classes keeps the biggest classes, not an arbitrary cut
     return (
         f"SELECT ?class (COUNT(*) AS ?totalEntities)\n"
         f"WHERE {{\n"
         f"{distinct_members(pattern)}\n"
         f"}}\n"
-        f"GROUP BY ?class"
+        f"GROUP BY ?class\n"
+        f"ORDER BY DESC(?totalEntities)"
     )
 
 
@@ -70,8 +75,54 @@ def wrap_pattern(pattern: str) -> str:
     return f"  {{\n{inner}\n  }}"
 
 
-def build_per_class_property_frequency_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
+@dataclass(frozen=True)
+class InstanceSample:
+    total: int
+    limit: int
+    windows: int
+
+    @property
+    def per_window(self) -> int:
+        return max(1, self.limit // self.windows)
+
+    # instances actually profiled, 0 if the class is small enough to be exact
+    @property
+    def size(self) -> int:
+        if self.total <= self.limit:
+            return 0
+        return self.per_window * self.windows
+
+
+# full extension of a class, or a sample of it when profiling all of it would
+# exhaust the endpoint; spread windows because one slice skews the property
+# distribution, ORDER BY because LIMIT/OFFSET is undefined without it
+def members_block(
+    pattern: str,
+    class_iri: str,
+    member_var: str = "?instance",
+    sample: InstanceSample | None = None,
+) -> str:
+    bound = bind_pattern(pattern, iri_term(class_iri), member_var)
+    if sample is None or not sample.size:
+        return wrap_pattern(bound)
+
+    # stride >= per_window whenever total > limit, so windows never overlap
+    stride = sample.total // sample.windows
+    inner = "\n".join(f"        {line}" for line in bound.strip().splitlines())
+    windows = [
+        f"    {{\n"
+        f"      SELECT DISTINCT {member_var} WHERE {{\n{inner}\n      }}\n"
+        f"      ORDER BY {member_var} LIMIT {sample.per_window} OFFSET {i * stride}\n"
+        f"    }}"
+        for i in range(sample.windows)
+    ]
+    return "  {\n" + "\n    UNION\n".join(windows) + "\n  }"
+
+
+def build_per_class_property_frequency_query(
+    pattern: str, class_iri: str, sample: InstanceSample | None = None
+) -> str:
+    ip = members_block(pattern, class_iri, sample=sample)
     # ?bnodeCount rides along as an extra aggregate so the node-kind split costs
     # no additional query.
     return (
@@ -86,8 +137,10 @@ def build_per_class_property_frequency_query(pattern: str, class_iri: str) -> st
     )
 
 
-def build_per_class_literal_profile_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
+def build_per_class_literal_profile_query(
+    pattern: str, class_iri: str, sample: InstanceSample | None = None
+) -> str:
+    ip = members_block(pattern, class_iri, sample=sample)
     return (
         f"SELECT ?p ?datatype (COUNT(*) AS ?count)\n"
         f"WHERE {{\n"
@@ -101,8 +154,10 @@ def build_per_class_literal_profile_query(pattern: str, class_iri: str) -> str:
     )
 
 
-def build_per_class_range_profile_query(pattern: str, class_iri: str) -> str:
-    ip = wrap_pattern(bind_pattern(pattern, iri_term(class_iri)))
+def build_per_class_range_profile_query(
+    pattern: str, class_iri: str, sample: InstanceSample | None = None
+) -> str:
+    ip = members_block(pattern, class_iri, sample=sample)
     op = wrap_pattern(bind_pattern(pattern, "?targetClass", "?o"))
     # blank-node objects are excluded here so that they are counted exactly once,
     # by ?bnodeCount above, instead of also landing in a class bucket.
@@ -119,8 +174,10 @@ def build_per_class_range_profile_query(pattern: str, class_iri: str) -> str:
     )
 
 
-def build_per_class_incoming_frequency_query(pattern: str, class_iri: str) -> str:
-    op = wrap_pattern(bind_pattern(pattern, iri_term(class_iri), "?o"))
+def build_per_class_incoming_frequency_query(
+    pattern: str, class_iri: str, sample: InstanceSample | None = None
+) -> str:
+    op = members_block(pattern, class_iri, "?o", sample)
     return (
         f"SELECT ?p (COUNT(*) AS ?tripleCount) (COUNT(DISTINCT ?o) AS ?entityCount)"
         f" (SUM(IF(isBlank(?s), 1, 0)) AS ?bnodeCount)\n"
@@ -133,8 +190,10 @@ def build_per_class_incoming_frequency_query(pattern: str, class_iri: str) -> st
     )
 
 
-def build_per_class_incoming_source_query(pattern: str, class_iri: str) -> str:
-    op = wrap_pattern(bind_pattern(pattern, iri_term(class_iri), "?o"))
+def build_per_class_incoming_source_query(
+    pattern: str, class_iri: str, sample: InstanceSample | None = None
+) -> str:
+    op = members_block(pattern, class_iri, "?o", sample)
     sp = wrap_pattern(bind_pattern(pattern, "?sourceClass", "?s"))
     return (
         f"SELECT ?p ?sourceClass (COUNT(*) AS ?count)\n"
@@ -307,7 +366,8 @@ class NormalizedMaps:
 
 def build_schema_class_query(pattern: str) -> str:
     cp = wrap_pattern(bind_pattern(pattern))
-    return f"SELECT DISTINCT ?class\nWHERE {{\n{cp}\n}}"
+    # same IRI-only rule as the instance path; no count here to order by
+    return f"SELECT DISTINCT ?class\nWHERE {{\n{cp}\n  FILTER(ISIRI(?class))\n}}"
 
 
 def build_schema_profile_query(pattern: str, class_iri: str) -> str:
@@ -444,7 +504,7 @@ def select_properties(
     )
     return select_from(
         profile.properties,
-        profile.total_entities,
+        profile.share_base,
         cap,
         shape_config.min_property_share,
     )
@@ -462,7 +522,7 @@ def select_incoming(
     )
     return select_from(
         profile.incoming,
-        profile.total_entities,
+        profile.share_base,
         cap,
         shape_config.min_property_share,
     )
@@ -506,7 +566,7 @@ def emit_pseudo_shex(
             # the focus class' own instances and do not carry over to inverse edges.
             return f"  ^{prop_str} {value_str} ;"
 
-        tag = cardinality_tag_for_property(prop, profile.total_entities)
+        tag = cardinality_tag_for_property(prop, profile.share_base)
         tag_suffix = f" {tag}" if tag else ""
         return f"  {prop_str} {value_str}{tag_suffix} ;"
 
@@ -698,11 +758,13 @@ def assemble_profile(
     total_entities: int,
     shape_config: ShapeConfig,
     manager: KgManager,
+    profiled_entities: int = 0,
 ) -> ClassProfile:
     return ClassProfile(
         iri=class_iri,
         short_iri=manager.format_iri(class_iri, wrap=True),
         total_entities=total_entities,
+        profiled_entities=profiled_entities,
         properties=assemble_direction(maps.out, shape_config, manager),
         incoming=assemble_direction(maps.inc, shape_config, manager),
     )
@@ -719,31 +781,46 @@ def collect_class_maps(
     instance_pattern: str | None = None,
     schema_pattern: str | None = None,
     include_total: bool = False,
+    sample: InstanceSample | None = None,
 ) -> tuple[ClassMaps, int]:
     maps = ClassMaps()
     total = 0
     if instance_pattern is not None:
         freq_rows = select_values(
             execute(
-                build_per_class_property_frequency_query(instance_pattern, class_iri)
+                build_per_class_property_frequency_query(
+                    instance_pattern, class_iri, sample
+                )
             )
         )
         lit_rows = select_values(
-            execute(build_per_class_literal_profile_query(instance_pattern, class_iri))
+            execute(
+                build_per_class_literal_profile_query(
+                    instance_pattern, class_iri, sample
+                )
+            )
         )
         range_rows = select_values(
-            execute(build_per_class_range_profile_query(instance_pattern, class_iri))
+            execute(
+                build_per_class_range_profile_query(instance_pattern, class_iri, sample)
+            )
         )
         maps.merge(
             ClassMaps.from_instance_rows(freq_rows, lit_rows, range_rows, manager)
         )
         in_freq_rows = select_values(
             execute(
-                build_per_class_incoming_frequency_query(instance_pattern, class_iri)
+                build_per_class_incoming_frequency_query(
+                    instance_pattern, class_iri, sample
+                )
             )
         )
         in_source_rows = select_values(
-            execute(build_per_class_incoming_source_query(instance_pattern, class_iri))
+            execute(
+                build_per_class_incoming_source_query(
+                    instance_pattern, class_iri, sample
+                )
+            )
         )
         maps.merge(ClassMaps.from_incoming_rows(in_freq_rows, in_source_rows))
         if include_total:
@@ -883,15 +960,23 @@ def build_shapes(
 
     samples = []
     skipped = 0
+    sampled = 0
     for c_iri in tqdm(all_class_iris, desc="Profiling classes"):
+        # total comes from the discovery query above, not a per-class query
+        total = instance_total.get(c_iri, 0)
+        sample = InstanceSample(
+            total=total,
+            limit=shape_config.max_profile_instances,
+            windows=shape_config.profile_windows,
+        )
         try:
-            # total comes from the discovery query above, not a per-class query
             maps, _ = collect_class_maps(
                 c_iri,
                 manager,
                 execute,
                 instance_pattern if c_iri in instance_total else None,
                 schema_pattern if c_iri in schema_set else None,
+                sample=sample,
             )
         except Exception as e:
             logger.warning(
@@ -901,12 +986,16 @@ def build_shapes(
             skipped += 1
             continue
 
+        if sample.size:
+            sampled += 1
+
         profile = assemble_profile(
             c_iri,
             maps,
-            instance_total.get(c_iri, 0),
+            total,
             shape_config,
             manager,
+            sample.size,
         )
         class_label, class_aliases = get_label_and_aliases(c_iri, "entities", manager)
         if class_label:
@@ -927,5 +1016,9 @@ def build_shapes(
     if skipped:
         logger.warning(f"Skipped {skipped:,} class(es) due to query failures")
 
+    if sampled:
+        logger.info(
+            f"Sampled {sampled:,} class(es) too large to profile exhaustively"
+        )
     logger.info(f"Built {len(samples)} shapes")
     return samples, total_classes

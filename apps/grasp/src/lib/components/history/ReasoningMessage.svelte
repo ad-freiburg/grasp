@@ -10,19 +10,22 @@
   const hasContent = Boolean(content.trim());
 </script>
 
-<MessageCard title="Reasoning" accent="var(--color-uni-blue)">
-  {#if hasReasoning}
-    <MarkdownContent className="reasoning-block" content={reasoning} />
-  {/if}
+<!-- a model turn can carry an empty message; don't render an empty card -->
+{#if hasReasoning || hasContent}
+  <MessageCard title="Reasoning" accent="var(--color-uni-blue)">
+    {#if hasReasoning}
+      <MarkdownContent className="reasoning-block" content={reasoning} />
+    {/if}
 
-  {#if hasReasoning && hasContent}
-    <hr class="divider" />
-  {/if}
+    {#if hasReasoning && hasContent}
+      <hr class="divider" />
+    {/if}
 
-  {#if hasContent}
-    <MarkdownContent className="content-block" content={content} />
-  {/if}
-</MessageCard>
+    {#if hasContent}
+      <MarkdownContent className="content-block" content={content} />
+    {/if}
+  </MessageCard>
+{/if}
 
 <style>
   .divider {

@@ -155,9 +155,7 @@ def materialize_sample(
                 constrain_p,
             )
             selections.append(
-                SelectionSample(
-                    messages=messages, options=options, target=target
-                )
+                SelectionSample(messages=messages, options=options, target=target)
             )
     else:
         selections = []

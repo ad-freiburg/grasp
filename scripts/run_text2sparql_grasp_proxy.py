@@ -42,7 +42,7 @@ if __name__ == "__main__":
         )
 
     @app.get("/")
-    async def _text2sparql(question: str, dataset: str):
+    async def text2sparql(question: str, dataset: str):
         if dataset not in dataset_to_endpoint:
             raise fastapi.HTTPException(404, f"Unknown dataset {dataset}")
 

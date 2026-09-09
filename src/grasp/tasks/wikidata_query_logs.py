@@ -93,7 +93,10 @@ the query more natural, precise, etc.
 4. For the final SPARQL query, generate between 1 and {max_questions} natural \
 language questions that accurately capture its intent. Ensure diversity in \
 both phrasing (e.g., keyword-like, question-form, or request-style) and detail \
-(e.g., referencing result columns, filters, or other query components).
+(e.g., referencing result columns, filters, or other query components). \
+Refer to entities and properties by their natural language labels, never by their \
+IRIs or ids, e.g. "Victor Hugo" and "author" instead of "wd:Q535" and "wdt:P50", \
+except if the question is explicitly about a specific IRI itself.
 5. Provide your final output by calling the answer function."""
 
 

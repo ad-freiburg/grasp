@@ -258,8 +258,10 @@ def parse_binding(
 
     tag_binding = binding.get("tag", binding.get("tags", None))
     if tag_binding is not None:
-        assert tag_binding["type"] == "literal", "Expected tags to be a literal"
-        tags = tag_binding["value"].lower().split(",")
+        # via Binding so endpoint-specific literal types are normalized
+        tags_binding = Binding.from_dict(tag_binding)
+        assert tags_binding.typ == "literal", "Expected tags to be a literal"
+        tags = tags_binding.value.lower().split(",")
     else:
         tags = []
 

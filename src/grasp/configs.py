@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, conlist
+from pydantic import BaseModel, Field, conlist, model_validator
 
 
 class KgInfo(BaseModel):
@@ -11,7 +11,50 @@ class KgInfo(BaseModel):
     params: dict[str, str] | None = None
 
 
-class ShapeConfig(BaseModel):
+class IndexConfig(BaseModel):
+    # search params overriding the ones persisted with the index; only fields
+    # set here override, and they are validated against the index type on load
+    params: dict[str, Any] | None = None
+
+
+# an index referred to by its type, e.g. entities, properties, literals
+class TypedIndexConfig(IndexConfig):
+    type: Literal["auto", "fuzzy", "embedding", "keyword"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def from_type(cls, data: Any) -> Any:
+        # a plain index type string stays valid
+        return {"type": data} if isinstance(data, str) else data
+
+
+# an additional index referred to by its name in indices.yaml
+class NamedIndexConfig(IndexConfig):
+    name: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def from_name(cls, data: Any) -> Any:
+        # a plain index name stays valid
+        return {"name": data} if isinstance(data, str) else data
+
+
+# an example index referred to by its directory
+class ExamplesConfig(IndexConfig):
+    path: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def from_path(cls, data: Any) -> Any:
+        # a plain directory stays valid
+        return {"path": data} if isinstance(data, str) else data
+
+
+class ShapeConfig(IndexConfig):
+    # larger classes are profiled from a sample of this many instances,
+    # drawn as this many evenly spread windows
+    max_profile_instances: int = 100_000
+    profile_windows: int = 10
     max_properties_per_class: int = 30
     dense_max_properties_per_class: int = 10
     # separate caps so inverse edges can never displace outgoing ones
@@ -27,12 +70,18 @@ class ShapeConfig(BaseModel):
 
 class KgConfig(BaseModel):
     kg: str
-    entities: Literal["fuzzy", "embedding", "keyword"] | None = "fuzzy"
-    properties: Literal["fuzzy", "embedding", "keyword"] | None = "embedding"
-    literals: Literal["auto", "fuzzy", "embedding", "keyword"] | None = "auto"
+    entities: TypedIndexConfig | None = Field(
+        default_factory=lambda: TypedIndexConfig(type="fuzzy")
+    )
+    properties: TypedIndexConfig | None = Field(
+        default_factory=lambda: TypedIndexConfig(type="embedding")
+    )
+    literals: TypedIndexConfig | None = Field(
+        default_factory=lambda: TypedIndexConfig(type="auto")
+    )
     shapes: ShapeConfig | None = Field(default_factory=ShapeConfig)
     notes_file: str | None = None
-    examples: str | None = None
+    examples: ExamplesConfig | None = None
 
     # kg info
     info: KgInfo | None = None
@@ -40,7 +89,7 @@ class KgConfig(BaseModel):
     # additional indices to load
     # built via search-rdf and exposed
     # via $GRASP_INDEX_DIR/{kg}/indices.yaml
-    indices: list[str] = []
+    indices: list[NamedIndexConfig] = []
 
 
 class ModelConfig(BaseModel):

@@ -81,8 +81,18 @@ class Response(BaseModel):
         return self.message is None and self.reasoning is None and not self.tool_calls
 
     @property
+    def message_content(self) -> str | None:
+        if isinstance(self.message, str):
+            return self.message
+        elif isinstance(self.message, ResponseMessage):
+            return self.message.content
+        return None
+
+    @property
     def has_content(self) -> bool:
-        return self.message is not None or self.has_reasoning_content
+        # a message object with an empty string is not content
+        content = self.message_content
+        return bool(content and content.strip()) or self.has_reasoning_content
 
     @property
     def has_reasoning_content(self) -> bool:

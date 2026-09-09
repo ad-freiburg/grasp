@@ -16,7 +16,7 @@ from search_rdf.model import (
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
-from grasp.configs import KgConfig, ShapeConfig
+from grasp.configs import KgConfig, ShapeConfig, TypedIndexConfig
 from grasp.manager.normalizer import Normalizer, WikidataPropertyNormalizer
 from grasp.manager.utils import (
     EmbeddingModel,
@@ -34,7 +34,7 @@ from grasp.manager.utils import (
     merge_prefixes,
     try_load_search_index,
 )
-from grasp.search_params import EmbeddingSearchParams, load_search_params
+from grasp.search_params import resolve_index_search_params
 from grasp.shapes import (
     Shapes,
     load_setup_description,
@@ -147,7 +147,11 @@ class KgManager:
             if key not in models:
                 models[key] = SentenceTransformerModel(embedding_model)
 
-            self.shapes = load_shapes(shapes_dir, models[key])  # type: ignore
+            self.shapes = load_shapes(
+                shapes_dir,
+                models[key],  # type: ignore
+                self.shape_config.params,
+            )
 
         self.embedding_models = models
         return models
@@ -599,15 +603,12 @@ class KgManager:
             kwargs = {}
             if index.index_type == "embedding":
                 assert isinstance(index, EmbeddingIndex)
-                embedding = self.embed_query(index, query, query_type)
-                kwargs["embedding"] = embedding
-                params = kg_index.search_params or EmbeddingSearchParams()
-                assert isinstance(params, EmbeddingSearchParams)
-                kwargs["min_score"] = params.min_score
-                kwargs["exact"] = params.exact
-                kwargs["rerank"] = params.rerank
+                kwargs["embedding"] = self.embed_query(index, query, query_type)
             else:
                 kwargs["query"] = query
+
+            if kg_index.search_params is not None:
+                kwargs.update(kg_index.search_params.search_kwargs())
 
             if identifier_map is None:
                 allow_ids = None
@@ -869,12 +870,12 @@ DEFAULT_DESCRIPTIONS = {
 def try_load_index(
     kg: str,
     index_name: str,
-    index_type: str,
+    index_cfg: TypedIndexConfig,
     logger: logging.Logger | None = None,
 ) -> KgIndex | None:
     index_dir = os.path.join(get_index_dir(kg), index_name)
 
-    index = try_load_search_index(index_dir, index_type, logger)
+    index = try_load_search_index(index_dir, index_cfg.type, logger)
     if index is None:
         return None
 
@@ -886,9 +887,14 @@ def try_load_index(
     else:
         normalizer = None
 
-    search_params = None
-    if isinstance(index, EmbeddingIndex):
-        search_params = load_search_params(os.path.join(index_dir, "embedding"))
+    # the configured type can be auto, so use the type the index resolved to
+    search_params = resolve_index_search_params(
+        index.index_type,
+        os.path.join(index_dir, index.index_type),
+        index_cfg.params,
+        name=index_name,
+        logger=logger,
+    )
 
     return KgIndex(
         description=description
@@ -918,22 +924,19 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
         logger.info("Skipping loading of indices")
         return KgManager(cfg.kg, indices, **info.model_dump())
 
-    if cfg.entities is not None:
-        ent_index = try_load_index(cfg.kg, "entities", cfg.entities, logger)
-        if ent_index is not None:
-            indices["entities"] = ent_index
+    for name, index_cfg in [
+        ("entities", cfg.entities),
+        ("properties", cfg.properties),
+        ("literals", cfg.literals),
+    ]:
+        if index_cfg is None:
+            continue
 
-    if cfg.properties is not None:
-        prop_index = try_load_index(cfg.kg, "properties", cfg.properties, logger)
-        if prop_index is not None:
-            indices["properties"] = prop_index
+        index = try_load_index(cfg.kg, name, index_cfg, logger)
+        if index is not None:
+            indices[name] = index
 
-    if cfg.literals is not None:
-        lit_index = try_load_index(cfg.kg, "literals", cfg.literals, logger)
-        if lit_index is not None:
-            indices["literals"] = lit_index
-
-    others = load_other_indices(cfg.kg, cfg.indices)
+    others = load_other_indices(cfg.kg, cfg.indices, logger)
     for name, index in others.items():
         if name in indices:
             logger.warning(

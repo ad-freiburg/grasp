@@ -1,4 +1,4 @@
-/* global __API_BASE__ */
+/* global __API_BASE__, __QLEVER_HOSTS__ */
 
 export const APP_COLORS = Object.freeze({
   uniBlue: '#344A9A',
@@ -74,11 +74,23 @@ export const TASKS = Object.freeze([
 // tasks that take natural language input and thus support speech-to-text
 export const STT_TASKS = Object.freeze(['sparql-qa', 'general-qa', 'entity-linking']);
 
-export const QLEVER_HOSTS = Object.freeze([
-  'qlever.cs.uni-freiburg.de',
-  'qlever.informatik.uni-freiburg.de',
-  'qlever.dev'
-]);
+// Hosts whose SPARQL endpoint gets an "Execute on QLever" button, set at build
+// time via the QLEVER_HOSTS env var (see vite.config.js). An entry is either an
+// exact host or a wildcard suffix ('*.qlever.dev' or '.qlever.dev'), which
+// matches any subdomain but not the bare domain. An empty list hides the button.
+export const QLEVER_HOSTS = Object.freeze(
+  __QLEVER_HOSTS__.map((host) => host.trim().toLowerCase()).filter(Boolean)
+);
+
+export const isQleverHost = (host) => {
+  const target = String(host ?? '').toLowerCase();
+  if (!target) return false;
+  return QLEVER_HOSTS.some((entry) => {
+    if (entry.startsWith('*.')) return target.endsWith(entry.slice(1));
+    if (entry.startsWith('.')) return target.endsWith(entry);
+    return target === entry;
+  });
+};
 
 // A relative API base (e.g. "api") is resolved against the current document URL.
 // The app is only ever served at the mount root — "/", "/?share=:id", or a

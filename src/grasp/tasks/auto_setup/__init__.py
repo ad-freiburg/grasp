@@ -143,11 +143,11 @@ class AutoSetupTask(GraspTask):
         manager = self.managers[0]
 
         if self.input["phase"] == "index":
-            return self._index_system_information(manager)
+            return self.index_system_information(manager)
         else:
-            return self._info_system_information()
+            return self.info_system_information()
 
-    def _index_system_information(self, manager: KgManager) -> str:
+    def index_system_information(self, manager: KgManager) -> str:
         name = self.input["name"]
         reference = REFERENCE_SETUP[name]
 
@@ -214,7 +214,7 @@ Reference {name} info SPARQL:
 Reference {name} index description:
 {DEFAULT_DESCRIPTIONS[name]}"""
 
-    def _info_system_information(self) -> str:
+    def info_system_information(self) -> str:
         manager = self.managers[0]
 
         return f"""\
@@ -242,11 +242,11 @@ and repeat, otherwise stop."""
 
     def rules(self) -> list[str]:
         if self.input["phase"] == "index":
-            return self._index_rules()
+            return self.index_rules()
         else:
-            return self._info_rules()
+            return self.info_rules()
 
-    def _index_rules(self) -> list[str]:
+    def index_rules(self) -> list[str]:
         name = self.input["name"]
         rules = [
             "If the user provides additional notes about the desired setup, make sure to follow them.",
@@ -302,7 +302,7 @@ and repeat, otherwise stop."""
 
         return rules
 
-    def _info_rules(self) -> list[str]:
+    def info_rules(self) -> list[str]:
         return [
             "If the user provides additional notes about the setup, make sure to follow them.",
             "Avoid mentions of specific details in the knowledge graph description, but "

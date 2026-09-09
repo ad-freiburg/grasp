@@ -34,6 +34,8 @@ dependencies = [
   "fastapi>=0.115.0",
   "uvicorn>=0.30.0",
   "websockets>=14.0",
+  # fastapi needs this for the /transcribe upload endpoint
+  "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]
