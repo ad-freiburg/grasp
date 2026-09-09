@@ -22,6 +22,19 @@ from grasp.utils import FunctionCallException, format_list, format_notes
 from grasp.build.shapes import collect_iris, compute_shape, emit_pseudo_shex
 
 
+def format_entity(entity: Entity) -> str:
+    output = f"Full IRI: {entity.identifier}"
+    if entity.entity != entity.identifier:
+        output += f", shortened IRI: {entity.entity}"
+    if entity.label is not None:
+        output += f", label: {entity.label}"
+    if entity.aliases and entity.aliases != [entity.label]:
+        output += f", aliases: {entity.aliases}"
+    if entity.infos is not None and entity.infos != []:
+        output += f", infos: {entity.infos}"
+    return output
+
+
 class Relation(StrEnum):
     EQUIVALENCE = "="
     SUBSUMPTION = "<="
@@ -653,7 +666,7 @@ def input_instructions(
         # surrounding indentation, and semantically fitting since pseudo-SHEx
         # is itself a small code-like syntax
         nonlocal shape_shown
-        block = f"**{label}**: {entity.format()}\n"
+        block = f"**{label}**: {format_entity(entity)}\n"
         shape_text = get_entity_shape_text(manager, entity.identifier, known)
         if shape_text is not None:
             shape_shown = True
