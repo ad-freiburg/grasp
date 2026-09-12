@@ -5,7 +5,7 @@ import random
 import sys
 from datetime import datetime
 from importlib import metadata
-
+from pathlib import Path
 from search_rdf.model import SentenceTransformerModel
 from termcolor import colored
 from tqdm import tqdm
@@ -53,6 +53,7 @@ from grasp.search_params import (
 from grasp.server import serve
 from grasp.shapes import ShapeIndex, ShapeSample
 from grasp.tasks import Task, get_task
+from grasp.tasks.om_pretask import om_pretask
 from grasp.utils import (
     format_trace,
     get_available_knowledge_graphs,
@@ -754,6 +755,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable logging for all loggers, not only the GRASP-specific ones",
     )
+
+    om_pretask_parser = subparsers.add_parser(
+        "om-pretask",
+        help="Run OM string-matching pretask between two KGs",
+    )
+    add_config_arg(om_pretask_parser)
+    om_pretask_parser.add_argument(
+        "--source-kg",
+        help="Name of the source knowledge graph. Must be exact the same name as in the task YAML file",
+        type=str,
+        required=True
+    )
+    om_pretask_parser.add_argument(
+        "--target-kg",
+        help="Name of the target knowledge graph. Must be exact the same name as in the task YAML file",
+        type=str,
+        required=True
+    )
+    om_pretask_parser.add_argument("--output-file", type=Path, required=True)
+
     return parser.parse_args()
 
 
@@ -807,7 +828,7 @@ def run_grasp(args: argparse.Namespace) -> None:
 
         skip = max(0, args.skip)
         take = args.take or len(inputs)
-        inputs = inputs[skip : skip + take]
+        inputs = inputs[skip: skip + take]
 
         if args.output_file:
             if os.path.exists(args.output_file) and not args.overwrite:
@@ -1292,6 +1313,16 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
     )
 
 
+def om_pretask_grasp(args: argparse.Namespace) -> None:
+    config = GraspConfig(**load_config(args.config))
+    managers, _ = setup(config)
+
+    source_manager, _ = find_manager(managers, args.source_kg)
+    target_manager, _ = find_manager(managers, args.target_kg)
+
+    om_pretask(source_manager, target_manager, args.output_file, config)
+
+
 def main():
     args = parse_args()
     if args.all_loggers:
@@ -1359,6 +1390,9 @@ def main():
             get_embedding_build_params(args),
             get_embedding_search_params(args),
         )
+
+    elif args.command == "om-pretask":
+        om_pretask_grasp(args)
 
 
 if __name__ == "__main__":
