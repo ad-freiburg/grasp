@@ -524,6 +524,16 @@ let running = false;
           enrichedPayload = { ...enrichedPayload, elInput };
         }
       }
+      if (
+        payload.type === 'input' &&
+        lastInputRecord?.task === task &&
+        lastInputRecord.value &&
+        typeof lastInputRecord.value === 'object' &&
+        (lastInputRecord.value.image_input?.length ||
+          lastInputRecord.value.audio_input?.length)
+      ) {
+        enrichedPayload = { ...enrichedPayload, input: lastInputRecord.value };
+      }
       if (payload.type === 'output') {
         enrichedPayload =
           enrichedPayload === payload
