@@ -18,7 +18,7 @@ def split_iri(iri: str) -> tuple[str, str]:
     if "://" not in iri:
         return "", iri
     last = max(iri.rfind("#"), iri.rfind("/"))
-    return ("", iri) if last == -1 else (iri[:last], iri[last + 1 :])
+    return ("", iri) if last == -1 else (iri[:last], iri[last + 1:])
 
 
 def split_at_punctuation(s: str) -> Iterator[str]:
@@ -51,7 +51,7 @@ def get_local_name_from_iri(iri: str, prefixes: dict[str, str]) -> str:
         _, obj_name = split_iri(iri)
     else:
         _, long = pfx
-        obj_name = iri[len(long) :]
+        obj_name = iri[len(long):]
 
     return unquote_plus(obj_name)
 
@@ -178,6 +178,21 @@ def format_message(message: Message) -> str:
         name = message.name or message.role
         header = colored(f"{name.upper()}", "magenta")
         return f"{header}\n{message.content}"
+    elif isinstance(message.content, list):
+        header = colored(f"{message.role.upper()}", "magenta")
+        parts = []
+        for part in message.content:
+            t = part.get("type")
+            if t == "text":
+                parts.append(f"[text] {part.get("text", "")}")
+            elif t == "image_url":
+                url = part.get("image_url", {}).get("url", "")
+                short = (url[:80] + "...") if len(url) > 80 else url
+                parts.append(f"[image_url] {short}")
+            else:
+                parts.append(f"[{t}]  {json.dumps(part, indent=2)}")
+        content = "\n".join(parts)
+        return f"{header}\n{content}"
     else:
         return format_response(message.content)
 

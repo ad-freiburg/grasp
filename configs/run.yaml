@@ -1,19 +1,74 @@
-model: env(MODEL:gpt-5.6-terra)
-model_provider: env(MODEL_PROVIDER:openai/responses)
-model_endpoint: env(MODEL_ENDPOINT:null)
-model_api_key: env(MODEL_API_KEY:null)
-model_kwargs:
-  # for OpenAI models
-  reasoning:
-    effort: env(REASONING_EFFORT:null)
-    summary: env(REASONING_SUMMARY:null)
-  text:
-    verbosity: env(VERBOSITY:low)
-  # for Anthropic models
-  # thinking:
-  #   type: adaptive
-  # output_config:
-  #   effort: env(THINKING_EFFORT:medium)
+models:
+  - model: env(MODEL:gpt-5.6-terra)
+    model_provider: env(MODEL_PROVIDER:openai/responses)
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    # model_kwargs:
+    # for OpenAI models
+    #  reasoning:
+    #    effort: env(REASONING_EFFORT:null)
+    #    summary: env(REASONING_SUMMARY:null)
+    # for Anthropic models
+    #  thinking:
+    #    type: adaptive
+    #  output_config:
+    #    effort: env(THINKING_EFFORT:medium)
+    modality: [text, image, grasp]
+    description: "Medium sized OpenAI model for fast coding, vision and research tasks"
+  #- model: env(MODEL:gemini-3.6-flash)
+  #  model_provider: env(MODEL_PROVIDER:openai/completions)
+  #  model_endpoint: env(MODEL_ENDPOINT:https://generativelanguage.googleapis.com/v1beta/openai/)
+  #  model_api_key: env(GEMINI_API_KEY)
+  #  model_kwargs:
+  #    reasoning:
+  #      effort: high
+  #      summary: env(REASONING_SUMMARY:null)
+  #  modality: [text, image]
+  #  category: vision
+  #  description: "High-end Google Gemini model for reasoning and vision tasks."
+#  - model: env(MODEL:qwen-3.6-27b-llmlb)
+#    model_provider: env(MODEL_PROVIDER:openai/completions)
+#    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+#    model_api_key: env(OPENWEBUI_API_KEY)
+#    model_kwargs:
+#      reasoning:
+#        effort: env(REASONING_EFFORT:null)
+#        summary: env(REASONING_SUMMARY:null)
+#    modality: [text, image]
+#    description: "Multimodal Alibaba model optimized for long-context coding, reasoning, and vision-language tasks"
+#  - model: env(MODEL:gemma-4-31b-llmlb)
+#    model_provider: env(MODEL_PROVIDER:openai/completions)
+#    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+#    model_api_key: env(OPENWEBUI_API_KEY)
+#    model_kwargs:
+#      reasoning:
+#        effort: env(REASONING_EFFORT:null)
+#        summary: env(REASONING_SUMMARY:null)
+#    modality: [text, image]
+#    category: vision
+#    description: "Multimodal model from Google built for strong long-context and production inference, good for vision tasks"
+#  - model: env(MODEL:nuextract3-llmlb)
+#    model_provider: env(MODEL_PROVIDER:openai/completions)
+#    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+#    model_api_key: env(OPENWEBUI_API_KEY)
+#    model_kwargs:
+#      reasoning:
+#        effort: env(REASONING_EFFORT:null)
+#        summary: env(REASONING_SUMMARY:null)
+#    modality: [text, image]
+#    description: "A lightweicht OCR Model for Document analysis"
+  - model: env(MODEL:gpt-audio-1.5)
+    model_provider: openai/completions
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, audio]
+    description: "OpenAIs small audio model for Audio analysis"
+
+# clap_model: clapcap  # CLAP audio captioning fallback, only used when no audio LLM is configured
 
 tool_choice: env(TOOL_CHOICE:auto)
 
@@ -27,15 +82,20 @@ sparql_connection_timeout: env(SPARQL_CONNECTION_TIMEOUT:6.0)
 sparql_query_timeout: env(SPARQL_QUERY_TIMEOUT:30.0)
 sparql_read_timeout: env(SPARQL_READ_TIMEOUT:10.0)
 
-fn_set: env(FN_SET:all)
+fn_set: env(FN_SET:search_extended)
 list_k: env(LIST_K:10)
 search_k: env(SEARCH_K:10)
 result_max_rows: env(RESULT_MAX_ROWS:10)
 result_max_columns: env(RESULT_MAX_COLUMNS:10)
 
+max_image_dimension: env(MAX_IMAGE_DIMENSION:2048)
+
 force_examples: env(FORCE_EXAMPLES:null)
 random_examples: env(RANDOM_EXAMPLES:false)
 num_examples: env(NUM_EXAMPLES:3)
+
+# answer_in_free_text: true
+load_user_input: true
 
 knowledge_graphs:
   - kg: env(KG:wikidata)

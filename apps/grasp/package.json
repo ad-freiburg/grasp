@@ -20,6 +20,7 @@
     "dompurify": "^3.3.0",
     "highlight.js": "^11.11.1",
     "marked": "^16.4.1",
-    "papaparse": "^5.5.3"
+    "papaparse": "^5.5.3",
+    "pdfjs-dist": "^4.10.38"
   }
 }

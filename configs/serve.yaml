@@ -1,21 +1,77 @@
-model: env(MODEL:gpt-5.6-terra)
-model_provider: env(MODEL_PROVIDER:openai/responses)
-model_endpoint: env(MODEL_ENDPOINT:null)
-model_api_key: env(MODEL_API_KEY:null)
-model_timeout: env(MODEL_TIMEOUT:120)
-model_kwargs:
-  # for OpenAI models
-  reasoning:
-    effort: env(REASONING_EFFORT:null)
-    summary: env(REASONING_SUMMARY:null)
-  text:
-    verbosity: env(VERBOSITY:low)
-  # for Anthropic models
-  # thinking:
-  #   type: enabled
-  #   budget_tokens: env(THINKING_BUDGET:4096)
+models:
+  - model: env(MODEL:gpt-5.6-terra)
+    model_provider: env(MODEL_PROVIDER:openai/responses)
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    model_kwargs:
+    # for OpenAI models
+      reasoning:
+        effort: env(REASONING_EFFORT:high)
+        summary: env(REASONING_SUMMARY:null)
+      text:
+        verbosity: env(VERBOSITY:low)
+      # for Anthropic models
+      # thinking:
+      #   type: adaptive
+      # output_config:
+      #   effort: env(THINKING_EFFORT:medium)
+    modality: [text, image, grasp]
+    description: "Small OpenAI model for fast coding, vision and research tasks"
+  - model: env(MODEL:gpt-5.6-terra)
+    model_provider: env(MODEL_PROVIDER:openai/responses)
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, image]
+    category: vision
+    description: "High-end OpenAI model for complex reasoning, coding, vision and research tasks."
+  - model: env(MODEL:qwen-3.6-27b-llmlb)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+    model_api_key: env(OPENWEBUI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, image]
+    description: "Multimodal Alibaba model optimized for long-context coding, reasoning, and vision-language tasks"
+  - model: env(MODEL:gemma-4-31b-llmlb)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+    model_api_key: env(OPENWEBUI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, image]
+    category: vision
+    description: "Multimodal model from Google built for strong long-context and production inference, good for vision tasks"
+  - model: env(MODEL:nuextract3-llmlb)
+    model_provider: env(MODEL_PROVIDER:openai/completions)
+    model_endpoint: env(MODEL_ENDPOINT:https://openwebui.uni-freiburg.de/api/v1)
+    model_api_key: env(OPENWEBUI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, image]
+    description: "A lightweicht OCR Model for Document analysis"
+  - model: env(MODEL:gpt-audio-1.5)
+    model_provider: openai/completions
+    model_endpoint: env(MODEL_ENDPOINT:https://api.openai.com/v1)
+    model_api_key: env(OPENAI_API_KEY)
+    model_kwargs:
+      reasoning:
+        effort: env(REASONING_EFFORT:null)
+        summary: env(REASONING_SUMMARY:null)
+    modality: [text, audio]
+    description: "OpenAIs small audio model for Audio analysis"
 
-max_completion_tokens: env(MAX_TOKENS:16384)
+# clap_model: clapcap  # CLAP audio captioning fallback, only used when no audio LLM is configured
+
 tool_choice: env(TOOL_CHOICE:auto)
 
 task_kwargs:
@@ -38,14 +94,29 @@ search_k: env(SEARCH_K:10)
 result_max_rows: env(RESULT_MAX_ROWS:10)
 result_max_columns: env(RESULT_MAX_COLUMNS:10)
 
+max_image_dimension: env(MAX_IMAGE_DIMENSION:1024)
+
 force_examples: env(FORCE_EXAMPLES:null)
 random_examples: env(RANDOM_EXAMPLES:false)
 num_examples: env(NUM_EXAMPLES:3)
+answer_in_free_text: env(ANSWER_IN_FREE_TEXT:false)
+load_user_input: true
 
 knowledge_graphs:
-  - kg: env(KG:wikidata)
-    examples: env(KG_EXAMPLES:null)
-    notes_file: env(KG_NOTES_FILE:null)
+  - kg: wikidata
+    examples: env(WD_EXAMPLES:null)
+    entities: env(WD_ENT_TYPE:fuzzy)
+    properties: env(WD_PROP_TYPE:embedding)
+    notes_file: env(WD_NOTES_FILE:null)
+    info:
+      endpoint: env(WD_ENDPOINT:null)
+#  - kg: freebase
+#  - kg: dblp
+#  - kg: dbpedia
+#  - kg: imdb
+#  - kg: orkg
+#  - kg: osm-planet
+#  - kg: uniprot
 
 # server config
 port: env(PORT:6789)
@@ -54,6 +125,6 @@ max_idle_time: env(MAX_IDLE_TIME:300)
 max_generation_time: env(MAX_GENERATION_TIME:300)
 log_outputs: env(LOG_OUTPUTS:null)
 log_file: env(LOG_FILE:null)
-share: env(SHARE:null)
+share: share/
 rate_limit: env(RATE_LIMIT:null)
 rate_limit_window: env(RATE_LIMIT_WINDOW:60)

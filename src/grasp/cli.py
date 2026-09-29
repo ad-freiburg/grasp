@@ -61,6 +61,11 @@ from grasp.utils import (
     link,
     parse_key_value_pairs,
 )
+from grasp.multimodal.utils import (
+    image_file_to_base64,
+    image_url_to_base64,
+    is_multimodal_payload,
+)
 
 
 def add_config_arg(parser: argparse.ArgumentParser) -> None:
@@ -197,6 +202,34 @@ def get_embedding_search_params(
     return EmbeddingSearchParams.model_validate(given)
 
 
+def add_image_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--image-input",
+        nargs="+",
+        type=str,
+        default=None,
+        help="Path to Image File for loading into Context",
+    )
+
+
+def add_load_user_input(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--load-user-input",
+        action="store_true",
+        help="Forces user inputs directly into grasp model context"
+    )
+
+
+def add_audio_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--audio-input",
+        nargs="+",
+        type=str,
+        default=None,
+        help="Path to Audio File for loading into context"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     available_kgs = get_available_knowledge_graphs()
 
@@ -215,6 +248,7 @@ def parse_args() -> argparse.Namespace:
     # run GRASP server
     server_parser = subparsers.add_parser("serve", help="Start a GRASP server")
     add_config_arg(server_parser)
+    add_load_user_input(server_parser)
 
     # run GRASP on a single input
     run_parser = subparsers.add_parser(
@@ -245,6 +279,9 @@ def parse_args() -> argparse.Namespace:
         "but only if input format is 'json')",
     )
     add_task_arg(run_parser)
+    add_image_arg(run_parser)
+    add_audio_arg(run_parser)
+    add_load_user_input(run_parser)
 
     # run GRASP on file with inputs
     file_parser = subparsers.add_parser(
@@ -303,6 +340,9 @@ def parse_args() -> argparse.Namespace:
     )
     add_task_arg(file_parser)
     add_overwrite_arg(file_parser)
+    add_image_arg(file_parser)
+    add_audio_arg(file_parser)
+    add_load_user_input(file_parser)
 
     # run GRASP note taking
     note_parser = subparsers.add_parser(
@@ -761,6 +801,9 @@ def run_grasp(args: argparse.Namespace) -> None:
     logger = get_logger("GRASP", args.log_level)
     config = GraspConfig(**load_config(args.config))
 
+    if (args.load_user_input):
+        config.load_user_input = True
+
     managers, models = setup(config)
 
     examples_model = models.get(f"sentence-transformer/{config.embedding_model}")
@@ -777,6 +820,9 @@ def run_grasp(args: argparse.Namespace) -> None:
     )
 
     notes, kg_notes = load_notes(config)
+
+    audio_inputs: list[str] = []
+    image_urls = []
 
     if args.input_field is None:
         input_field = get_task(args.task, managers, config).default_input_field
@@ -798,6 +844,20 @@ def run_grasp(args: argparse.Namespace) -> None:
             if id is None:
                 ipt["id"] = str(i)
 
+            if isinstance(ipt, dict):
+                image_urls = ipt.get("image_url")
+
+            if input_field is not None and not is_multimodal_payload(ipt):
+                ipt = extract_field(ipt, input_field)
+
+            if image_urls is not None:
+                if isinstance(ipt, dict):
+                    ipt["image_url"] = image_urls
+                else:
+                    ipt = {"input": ipt, "image_url": image_urls}
+
+            assert ipt is not None, (f"Input not found for input {i:,}")
+
         if args.shuffle:
             assert config.seed is not None, (
                 "Seed must be set for deterministic shuffling"
@@ -807,7 +867,7 @@ def run_grasp(args: argparse.Namespace) -> None:
 
         skip = max(0, args.skip)
         take = args.take or len(inputs)
-        inputs = inputs[skip : skip + take]
+        inputs = inputs[skip: skip + take]
 
         if args.output_file:
             if os.path.exists(args.output_file) and not args.overwrite:
@@ -829,16 +889,37 @@ def run_grasp(args: argparse.Namespace) -> None:
         else:
             ipt = args.input
 
+        if args.image_input is not None:
+            for image in args.image_input:
+                if image.startswith("http"):
+                    image_b64 = image_url_to_base64(image, config.max_image_dimension)
+                elif image.startswith("data:"):
+                    image_b64 = image
+                else:
+                    image_b64 = image_file_to_base64(image, config.max_image_dimension)
+                image_urls.append(image_b64)
+        if args.audio_input is not None:
+            audio_inputs = [audio for audio in args.audio_input if isinstance(audio, str) and audio.strip()]
+
         if args.input_format == "json":
-            inputs = [json.loads(ipt)]
+            obj = json.loads(ipt)
+            if image_urls is not None:
+                obj["image_url"] = image_urls
+            if audio_inputs:
+                obj["audio_input"] = audio_inputs
+            inputs = [obj]
         else:
-            inputs = [{"input": ipt}]
-            input_field = "input"  # overwrite
+            inputs = [{
+                "input": ipt,
+                "image_url": image_urls,
+                "audio_input": audio_inputs,
+            }]
+            input_field = None  # overwrite
 
     for i, ipt in enumerate(inputs):
         id = extract_field(ipt, "id") or "unknown"
 
-        if input_field is not None:
+        if input_field is not None and not is_multimodal_payload(ipt):
             ipt = extract_field(ipt, input_field)
 
         assert ipt is not None, f"Input not found for input {i:,}"
@@ -890,6 +971,8 @@ def run_grasp(args: argparse.Namespace) -> None:
 
 def serve_grasp(args: argparse.Namespace) -> None:
     config = ServerConfig(**load_config(args.config))
+    if args.load_user_input:
+        config.load_user_input = True
 
     serve(config, args.log_level)
 

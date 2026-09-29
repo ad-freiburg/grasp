@@ -27,8 +27,10 @@ dependencies = [
   "universal-ml-utils>=0.1.6",
   "grammar-utils>=0.1.6",
   "search-rdf>=0.5.2",
-  "pillow>=11.0.0",
-  "ijson>=3.0.0",
+  "pillow>=12.2.0",
+  "ijson>=3.5.0",
+  "torchcodec>=0.14.0",
+  "msclap>=1.3.4",
   "cachetools>=7.0.0",
   # server
   "fastapi>=0.115.0",

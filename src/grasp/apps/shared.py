@@ -119,7 +119,14 @@ def render_messages(output: dict, new_format: bool = True) -> None:
                         st.markdown(f"**Tool: {tool_call.name}**")
                         st.code(json.dumps(tool_call.args, indent=2), language="json")
                         st.markdown("**Result:**")
-                        st.markdown(tool_call.result)
+                        result = tool_call.result
+                        if isinstance(result, str):
+                            try:
+                                st.json(json.loads(result))
+                            except (TypeError, ValueError):
+                                st.markdown(result)
+                        else:
+                            st.markdown(result)
 
                 if i < len(messages) - 1:
                     st.markdown("---")
@@ -145,7 +152,13 @@ def render_messages(output: dict, new_format: bool = True) -> None:
             tool_response = tool_responses[tool_call_id]
             tool_content = tool_response.get("content", "")
             st.markdown("**Result:**")
-            st.markdown(tool_content)
+            if isinstance(tool_content, str):
+                try:
+                    st.json(json.loads(tool_content))
+                except (TypeError, ValueError):
+                    st.markdown(tool_content)
+            else:
+                st.markdown(tool_content)
 
     tool_responses = {}
     for msg in output["messages"]:

@@ -63,6 +63,23 @@ def generate_id(length: int = 6) -> str:
     return "".join(random.sample(ALPHABET, length))
 
 
+def format_request_for_log(data: Any, *, exclude_past: bool = False) -> str:
+    if isinstance(data, BaseModel):
+        data = data.model_dump(exclude={"past"} if exclude_past else None)
+
+    return json.dumps(shorten_base64_inputs(data), indent=2, default=str)
+
+
+def shorten_base64_inputs(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: shorten_base64_inputs(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [shorten_base64_inputs(item) for item in value]
+    if isinstance(value, str) and (value.startswith("data:image") or value.startswith("data:audio")):
+        return f"{value[:30]}..." if len(value > 33) else value
+    return value
+
+
 class RateLimiter:
     def __init__(self, limit: int, window: int):
         self.limit = limit
@@ -251,7 +268,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             if not sel or not all(kg in kgs for kg in sel):
                 logger.error(
                     f"{prefix} Unsupported knowledge graph selection:\n"
-                    f"{request.model_dump_json(indent=2)}"
+                    f"{format_request_for_log(request)}"
                 )
                 raise HTTPException(
                     status_code=400,
@@ -332,7 +349,9 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                 return {}
 
             if output_logger is not None:
-                output_logger.info(json.dumps(output))
+                output_logger.info(
+                    json.dumps({**output, "input": request.input})
+                )
 
             return output
 
@@ -386,13 +405,14 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                     request = Request(**data)
                 except Exception:
                     logger.error(
-                        f"{prefix} Invalid request:\n{json.dumps(data, indent=2)}"
+                        f"{prefix} Invalid request:\n{format_request_for_log(data)}"
                     )
                     await websocket.send_json({"error": "Invalid request format"})
                     continue
 
                 logger.info(
-                    f"{prefix} Got request:\n{request.model_dump_json(indent=2, exclude={'past'})}"
+                    f"{prefix} Got request:\n"
+                    f"{format_request_for_log(request, exclude_past=True)}"
                 )
 
                 if rate_limiter is not None:
@@ -411,7 +431,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                 if not sel or not all(kg in kgs for kg in sel):
                     logger.error(
                         f"{prefix} Unsupported knowledge graph selection:\n"
-                        f"{request.model_dump_json(indent=2)}"
+                        f"{format_request_for_log(request)}"
                     )
                     await websocket.send_json(
                         {"error": "Unsupported knowledge graph selection"}
@@ -419,6 +439,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                     continue
 
                 sel_managers, _ = partition_by(managers, lambda m: m.kg in sel)
+                request_input = request.input
 
                 past_messages = None
                 past_known = None
@@ -435,7 +456,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                     try:
                         generator = generate(
                             request.task,
-                            request.input,
+                            request_input,
                             config,
                             sel_managers,
                             kg_notes[request.task],
@@ -487,7 +508,9 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
 
                             output = payload
                             if output["type"] == "output" and output_logger is not None:
-                                output_logger.info(json.dumps(output))
+                                output_logger.info(
+                                    json.dumps({**output, "input": request_input})
+                                )
 
                             await websocket.send_json(output)
                             data = await websocket.receive_json()
