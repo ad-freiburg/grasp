@@ -637,7 +637,18 @@ class OmTask(GraspTask, FeedbackTask):
         return system_information()
 
     def rules(self) -> list[str]:
-        return rules()
+        task_rules = rules()
+        if self.config.parallel_tool_calls:
+            task_rules = task_rules + [
+                "Multiple calls per turn: You may call multiple functions (e.g. several "
+                "set_correspondence calls) in a single turn to work more efficiently. Each is "
+                "still checked against the correspondences set so far as soon as it runs, in the "
+                "order you call them - but you will only see all of that turn's results together, "
+                "afterwards, not one by one. So within one turn, double-check beforehand that your "
+                "calls do not contradict each other (e.g. two different source entities mapped to "
+                "the same target entity)."
+            ]
+        return task_rules
 
     def function_definitions(self) -> list[dict]:
         return functions(self.managers)
