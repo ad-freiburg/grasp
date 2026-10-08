@@ -83,6 +83,23 @@ class AlignmentState:
         self.correspondences: dict[str, Correspondence] = AlignmentState.__global_correspondences
 
     def add_1_to_1_correspondence(self, correspondence: Correspondence):
+        """
+        Records `correspondence`, indexed under *both* its source and target
+        IRI - either one, looked up via `get_correspondence`, returns the
+        same `Correspondence` object.
+
+        >>> AlignmentState._AlignmentState__global_correspondences.clear()  # shared across instances, see __init__
+        >>> state = AlignmentState()
+        >>> c = Correspondence(
+        ...     entity_source=Entity(identifier="http://cmt#Paper", entity="cmt:Paper"),
+        ...     entity_target=Entity(identifier="http://conference#Paper", entity="conference:Paper"),
+        ... )
+        >>> state.add_1_to_1_correspondence(c)
+        >>> state.get_correspondence("http://cmt#Paper") is c
+        True
+        >>> state.get_correspondence("http://conference#Paper") is c
+        True
+        """
         self.correspondences[correspondence.entity_source.identifier] = correspondence
         self.correspondences[correspondence.entity_target.identifier] = correspondence
 
@@ -95,6 +112,28 @@ class AlignmentState:
         return self.correspondences.get(entity)
 
     def remove_correspondence(self, entity_source: str, entity_target: str):
+        """
+        Unlike the module-level `delete_correspondence`, this does not
+        validate that `entity_source`/`entity_target` are actually mapped
+        (to each other or at all) first - removing an entity that isn't
+        currently mapped raises a raw `KeyError`, not a friendly
+        `FunctionCallException`.
+
+        >>> AlignmentState._AlignmentState__global_correspondences.clear()  # shared across instances, see __init__
+        >>> state = AlignmentState()
+        >>> c = Correspondence(
+        ...     entity_source=Entity(identifier="http://cmt#Paper", entity="cmt:Paper"),
+        ...     entity_target=Entity(identifier="http://conference#Paper", entity="conference:Paper"),
+        ... )
+        >>> state.add_1_to_1_correspondence(c)
+        >>> state.remove_correspondence("http://cmt#Paper", "http://conference#Paper")
+        >>> state.get_correspondence("http://cmt#Paper") is None
+        True
+        >>> state.remove_correspondence("http://cmt#Paper", "http://conference#Paper")
+        Traceback (most recent call last):
+            ...
+        KeyError: 'http://cmt#Paper'
+        """
         self.correspondences.pop(entity_source)
         self.correspondences.pop(entity_target)
 
@@ -105,6 +144,20 @@ class AlignmentState:
         itself. Used to clean up before overwriting, so the previous
         correspondence's other side does not linger as a stale, dangling entry
         that still shows up in the final alignment.
+
+        >>> AlignmentState._AlignmentState__global_correspondences.clear()  # shared across instances, see __init__
+        >>> state = AlignmentState()
+        >>> c = Correspondence(
+        ...     entity_source=Entity(identifier="http://cmt#Paper", entity="cmt:Paper"),
+        ...     entity_target=Entity(identifier="http://conference#Paper", entity="conference:Paper"),
+        ... )
+        >>> state.add_1_to_1_correspondence(c)
+        >>> state.discard_correspondence_of("http://cmt#Paper")
+        >>> state.get_correspondence("http://cmt#Paper") is None
+        True
+        >>> state.get_correspondence("http://conference#Paper") is None
+        True
+        >>> state.discard_correspondence_of("http://cmt#NeverMapped")  # no-op, does not raise
         """
         existing = self.correspondences.pop(entity, None)
         if existing is None:
@@ -278,10 +331,25 @@ def rules() -> list[str]:
 
 
 def entity_exists_in_kg(manager: KgManager, iri: str) -> bool:
-    # subject and object position cover classes/instances; predicate position
-    # is needed too since a property may appear only there (e.g. used in
-    # triples without a separate rdf:type owl:ObjectProperty/DatatypeProperty
-    # declaration triple of its own)
+    """
+    Checks whether `iri` appears anywhere in the knowledge graph - as a
+    subject, predicate, or object - via a single SPARQL ASK query. Predicate
+    position is checked too (not just subject/object, which would cover
+    classes/instances) since a property may appear only there, e.g. used in
+    triples without a separate rdf:type owl:ObjectProperty/DatatypeProperty
+    declaration triple of its own.
+
+    >>> from grasp.sparql.utils import load_iri_and_literal_parser
+    >>> from grasp.sparql.types import AskResult
+    >>> class FakeManager:
+    ...     iri_literal_parser = load_iri_and_literal_parser()
+    ...     def execute_sparql(self, sparql):
+    ...         return AskResult(boolean="cmt#Paper" in sparql)
+    >>> entity_exists_in_kg(FakeManager(), "http://cmt#Paper")
+    True
+    >>> entity_exists_in_kg(FakeManager(), "http://cmt#DoesNotExist")
+    False
+    """
     wrapped = prepare_identifier_for_sparql(iri, manager.iri_literal_parser)
     sparql = (
         f"ASK {{ {{ {wrapped} ?p ?o }} UNION {{ ?s ?p {wrapped} }} "
@@ -298,6 +366,28 @@ def ensure_known(manager: KgManager, iri: str, known: set[str]) -> None:
     an earlier function call result during this conversation. Otherwise fall
     back to an actual live existence check against the KG, and only report
     the IRI as invalid to the LLM once that check has genuinely failed.
+
+    >>> known = {"http://cmt#Paper"}
+    >>> ensure_known(None, "http://cmt#Paper", known)  # already known: manager is never touched
+
+    >>> from grasp.sparql.utils import load_iri_and_literal_parser
+    >>> from grasp.sparql.types import AskResult
+    >>> class FakeManager:
+    ...     iri_literal_parser = load_iri_and_literal_parser()
+    ...     def execute_sparql(self, sparql):
+    ...         return AskResult(boolean=True)
+    >>> ensure_known(FakeManager(), "http://cmt#Review", known)
+    >>> sorted(known)
+    ['http://cmt#Paper', 'http://cmt#Review']
+
+    >>> class FakeManagerNotFound:
+    ...     iri_literal_parser = load_iri_and_literal_parser()
+    ...     def execute_sparql(self, sparql):
+    ...         return AskResult(boolean=False)
+    >>> ensure_known(FakeManagerNotFound(), "http://cmt#Ghost", known)
+    Traceback (most recent call last):
+        ...
+    grasp.utils.FunctionCallException: The entity http://cmt#Ghost does not seem to exist in the knowledge graph. Double check the IRI.
     """
     if iri in known:
         return
@@ -324,6 +414,43 @@ def get_entity_shape_text(
     shape index/patterns exist for this KG at all). If `known` is given, IRIs
     referenced by the shape are added to it, same as when a shape is surfaced
     via the interactive get_shape/search_shape functions.
+
+    No shapes configured for this KG at all:
+
+    >>> class FakeManagerNoShapes:
+    ...     shapes = None
+    >>> get_entity_shape_text(FakeManagerNoShapes(), "http://cmt#Paper") is None
+    True
+
+    Shapes configured, but neither a pre-built index nor instance/schema
+    patterns to compute one on the fly:
+
+    >>> from grasp.shapes import Shapes
+    >>> class FakeManagerEmptyShapes:
+    ...     shapes = Shapes()
+    ...     shape_config = None
+    >>> get_entity_shape_text(FakeManagerEmptyShapes(), "http://cmt#Paper") is None
+    True
+
+    IRI found in the pre-built shape index - rendered as pseudo-SHEx:
+
+    >>> from grasp.shapes import ShapeSample, ClassProfile
+    >>> class FakeIndex:
+    ...     def get_by_iri(self, iri):
+    ...         return ShapeSample(
+    ...             iri=iri, short_iri="cmt:Paper",
+    ...             profile=ClassProfile(iri=iri, short_iri="cmt:Paper"),
+    ...         )
+    >>> class FakeManagerWithIndex:
+    ...     shapes = Shapes(index=FakeIndex())
+    ...     shape_config = None
+    ...     prefixes = {}
+    ...     def get_label(self, iri, index_name):
+    ...         return None
+    >>> print(get_entity_shape_text(FakeManagerWithIndex(), "http://cmt#Paper"))
+    cmt:Paper {
+      # no properties found for this class
+    }
     """
     if manager.shapes is None:
         return None
@@ -368,7 +495,58 @@ def add_1_to_1_correspondence(
         know_before_use: bool = True,
         overwrite: bool = False,
         ) -> str:
+    """
+    Resolves `entity_source`/`entity_target` against their KGs, enforces the
+    1:1 mapping constraint (returns a conflict message instead of mapping
+    anything if either side is already matched, unless `overwrite=True`),
+    and on success records the correspondence in `state`.
 
+    >>> from grasp.sparql.utils import load_iri_and_literal_parser
+    >>> from grasp.sparql.types import AskResult
+    >>> class FakeManager:
+    ...     def __init__(self, kg):
+    ...         self.kg = kg
+    ...         self.iri_literal_parser = load_iri_and_literal_parser()
+    ...         self.prefixes = {}
+    ...     def normalize(self, identifier, index_name):
+    ...         return None
+    ...     def get_info_for_identifiers_from_index(self, identifiers, index_name):
+    ...         return {}
+    ...     def format_iri(self, identifier):
+    ...         return identifier
+    ...     def execute_sparql(self, sparql):
+    ...         return AskResult(boolean=True)
+    >>> AlignmentState._AlignmentState__global_correspondences.clear()  # shared across instances, see AlignmentState
+    >>> managers = [FakeManager("cmt"), FakeManager("conference")]
+    >>> state = AlignmentState()
+    >>> known = set()
+    >>> add_1_to_1_correspondence(
+    ...     managers, "cmt", "conference",
+    ...     "http://cmt#Paper", "http://conference#Paper",
+    ...     state, known,
+    ... )
+    'Aligned http://cmt#Paper from cmt with http://conference#Paper from conference.'
+    >>> state.get_correspondence("http://cmt#Paper").entity_target.identifier
+    'http://conference#Paper'
+
+    Re-mapping an already-matched entity without `overwrite=True` is
+    rejected with a conflict message instead of silently replacing it:
+
+    >>> print(add_1_to_1_correspondence(
+    ...     managers, "cmt", "conference",
+    ...     "http://cmt#Paper", "http://conference#Document",
+    ...     state, known,
+    ... ))
+    Mapping Conflict detected: The entity 'http://cmt#Paper' has already been mapped to 'http://conference#Paper', but you proposed a new mapping to 'http://conference#Document'.
+    <BLANKLINE>
+    Do not default to keeping the existing mapping. Treat both candidates as hypotheses and evaluate them from scratch:
+    - Option A (Current):   'http://cmt#Paper' ≡ 'http://conference#Paper'
+    - Option B (New candidate): 'http://cmt#Paper' ≡ 'http://conference#Document'
+    <BLANKLINE>
+    Compare both semantically and structurally. Which target entity is genuinely the better conceptual match?
+    - If Option B is superior: Re-submit by calling `set_correspondence(..., overwrite=True)`.
+    - If Option A is superior: It will be automatically retained. Find a different valid match for the unmapped entity or leave it unmapped.
+    """
     try:
         manager_source, _ = find_manager(managers, kg_source)
         manager_target, _ = find_manager(managers, kg_target)
@@ -432,6 +610,28 @@ def delete_correspondence(
         entity2: str,
         state: AlignmentState,
         ) -> str:
+    """
+    Removes the correspondence between `entity1` and `entity2`, but only if
+    one actually links the two of them - unlike
+    `AlignmentState.remove_correspondence`, this validates that first and
+    raises a friendly `FunctionCallException` instead of a raw `KeyError`.
+
+    >>> AlignmentState._AlignmentState__global_correspondences.clear()  # shared across instances, see AlignmentState
+    >>> from grasp.tasks.entities import Entity
+    >>> state = AlignmentState()
+    >>> state.add_1_to_1_correspondence(Correspondence(
+    ...     entity_source=Entity(identifier="http://cmt#Paper", entity="cmt:Paper"),
+    ...     entity_target=Entity(identifier="http://conference#Paper", entity="conference:Paper"),
+    ... ))
+    >>> delete_correspondence("http://cmt#Paper", "http://conference#Paper", state)
+    'Deleted correspondence between http://cmt#Paper and http://conference#Paper'
+    >>> state.get_correspondence("http://cmt#Paper") is None
+    True
+    >>> delete_correspondence("http://cmt#Paper", "http://conference#Paper", state)
+    Traceback (most recent call last):
+        ...
+    grasp.utils.FunctionCallException: There is no Correspondence aligning http://cmt#Paper to http://conference#Paper yet. Notice you have to use the full IRI as entity reference.
+    """
     correspondence1 = state.get_correspondence(entity1)
     correspondence2 = state.get_correspondence(entity2)
     if correspondence1 is None or correspondence1 is not correspondence2:
@@ -452,6 +652,53 @@ def call_function(
     state: AlignmentState | None = None,
     example_indices: dict | None = None,
 ) -> str:
+    """
+    Dispatches one LLM-requested function call (see `functions()`) to its
+    actual implementation, using `state` to track mapping progress across
+    the whole conversation.
+
+    >>> from grasp.sparql.utils import load_iri_and_literal_parser
+    >>> from grasp.sparql.types import AskResult
+    >>> class FakeManager:
+    ...     def __init__(self, kg):
+    ...         self.kg = kg
+    ...         self.iri_literal_parser = load_iri_and_literal_parser()
+    ...         self.prefixes = {}
+    ...     def normalize(self, identifier, index_name):
+    ...         return None
+    ...     def get_info_for_identifiers_from_index(self, identifiers, index_name):
+    ...         return {}
+    ...     def format_iri(self, identifier):
+    ...         return identifier
+    ...     def execute_sparql(self, sparql):
+    ...         return AskResult(boolean=True)
+    >>> AlignmentState._AlignmentState__global_correspondences.clear()  # shared across instances, see AlignmentState
+    >>> managers = [FakeManager("cmt"), FakeManager("conference")]
+    >>> config = GraspConfig(model="test")
+    >>> state = AlignmentState()
+    >>> state.task_input = AlignmentTaskInput(source_kg="cmt", target_kg="conference")
+    >>> known = set()
+    >>> call_function(
+    ...     config, managers, "set_correspondence",
+    ...     {"source_entity": "http://cmt#Paper", "target_entity": "http://conference#Paper", "overwrite": False},
+    ...     known, state,
+    ... )
+    'Aligned http://cmt#Paper from cmt with http://conference#Paper from conference.'
+    >>> "http://cmt#Paper" in call_function(config, managers, "show_correspondences", {}, known, state)
+    True
+    >>> call_function(
+    ...     config, managers, "delete_correspondence",
+    ...     {"source_entity": "http://cmt#Paper", "target_entity": "http://conference#Paper"},
+    ...     known, state,
+    ... )
+    'Deleted correspondence between http://cmt#Paper and http://conference#Paper'
+    >>> call_function(config, managers, "stop", {}, known, state)
+    'Stopping'
+    >>> call_function(config, managers, "unknown_function", {}, known, state)
+    Traceback (most recent call last):
+        ...
+    ValueError: Unknown function unknown_function
+    """
     assert isinstance(state, AlignmentState), (
         "Alignments must be provided as state for OM task"
     )
@@ -497,6 +744,33 @@ def input_instructions(
     managers: list[KgManager],
     known: set[str],
 ) -> str:
+    """
+    Renders the per-turn prompt text for the OM task: potential
+    correspondences (from string matching) first, then any remaining
+    unmatched entities, each with its formatted entity block and (if
+    available) rendered shape.
+
+    >>> from grasp.tasks.entities import Entity
+    >>> class FakeManager:
+    ...     def __init__(self, kg):
+    ...         self.kg = kg
+    ...         self.shapes = None  # no shape index/patterns -> no shape block
+    >>> managers = [FakeManager("cmt"), FakeManager("conference")]
+    >>> task_input = AlignmentTaskInput(
+    ...     source_kg="cmt", target_kg="conference",
+    ...     unmatched_entities=[
+    ...         Entity(identifier="http://cmt#Paper", entity="cmt:Paper", label="Paper"),
+    ...     ],
+    ... )
+    >>> state = AlignmentState()
+    >>> state.task_input = task_input
+    >>> print(input_instructions(task_input, state, managers, set()))
+    Align the following entity from the source ontology cmt with an entity from the target ontology conference or verify it has no appropriate match:
+    ### Entity 1
+    **Source**: Full IRI: http://cmt#Paper, shortened IRI: cmt:Paper, label: Paper
+    <BLANKLINE>
+    <BLANKLINE>
+    """
     instructions = ""
     source_manager, _ = find_manager(managers, task_input.source_kg)
     target_manager, _ = find_manager(managers, task_input.target_kg)

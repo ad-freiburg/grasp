@@ -14,6 +14,19 @@ from grasp.sparql.types import ObjType
 
 
 def normalize_name(name: str) -> str:
+    """
+    Normalizes a label/alias for string-matching comparison: splits
+    camelCase, treats "_"/"-" as word separators, collapses whitespace, and
+    casefolds - so e.g. "hasAuthor", "has_author" and "Has Author" all
+    normalize to the same string and therefore match each other.
+
+    >>> normalize_name("hasAuthor")
+    'has author'
+    >>> normalize_name("Program_Committee-Chair")
+    'program committee chair'
+    >>> normalize_name("  extra   spaces  ")
+    'extra spaces'
+    """
     _WHITESPACE_RE = re.compile(r"\s+")
 
     name = unicodedata.normalize("NFKC", name)
@@ -24,6 +37,16 @@ def normalize_name(name: str) -> str:
 
 
 def entity_names(entity: Entity) -> list[str]:
+    """
+    All of `entity`'s own names for string-matching purposes: its label (if
+    any) followed by its aliases. Returns an empty list if the entity has
+    neither.
+
+    >>> entity_names(Entity(identifier="http://cmt#Paper", entity="cmt:Paper", label="Paper", aliases=["Publication"]))
+    ['Paper', 'Publication']
+    >>> entity_names(Entity(identifier="http://cmt#Paper", entity="cmt:Paper"))
+    []
+    """
     names = [entity.label] if entity.label else []
     if entity.aliases:
         names.extend(entity.aliases)
@@ -33,6 +56,25 @@ def entity_names(entity: Entity) -> list[str]:
 def _entities_from_ids(
     kg_manager: KgManager, ids: list[str], info: dict[str, dict]
 ) -> dict[str, Entity]:
+    """
+    Builds an `Entity` per id, preferring the label from `info` and falling
+    back to one derived from the IRI itself (e.g. via camelCase-splitting
+    the local name) when `info` has none for that id.
+
+    >>> class FakeManager:
+    ...     prefixes = {}
+    ...     def format_iri(self, iri):
+    ...         return iri
+    >>> result = _entities_from_ids(
+    ...     FakeManager(),
+    ...     ["http://cmt#Paper", "http://cmt#hasAuthor"],
+    ...     {"http://cmt#Paper": {"label": "Paper", "alias": ["Publication"]}},
+    ... )
+    >>> result["http://cmt#Paper"].label, result["http://cmt#Paper"].aliases
+    ('Paper', ['Publication'])
+    >>> result["http://cmt#hasAuthor"].label  # no info entry -> derived from the IRI
+    'has Author'
+    """
     result: dict[str, Entity] = {}
     for iri in ids:
         entry = info.get(iri, {})
@@ -52,6 +94,20 @@ def _entities_from_ids(
 def _filter_own_namespace(identifiers: list[str], kg_manager: KgManager) -> list[str]:
     """
     Keeps only identifiers within the KG's own namespace(s).
+
+    >>> class FakeManager:
+    ...     kg_prefixes = {"cmt": "http://cmt#"}
+    >>> ids = ["http://cmt#Paper", "http://conference#Paper", "http://cmt#Review"]
+    >>> _filter_own_namespace(ids, FakeManager())
+    ['http://cmt#Paper', 'http://cmt#Review']
+
+    No declared namespace at all means this fails open (returns everything
+    unfiltered) rather than risk silently discarding every identifier:
+
+    >>> class FakeManagerNoNamespace:
+    ...     kg_prefixes = {}
+    >>> _filter_own_namespace(ids, FakeManagerNoNamespace()) == ids
+    True
     """
     own_namespaces = tuple(kg_manager.kg_prefixes.values())
     if not own_namespaces:
@@ -66,6 +122,28 @@ def retrieve_entities_and_properties(kg_manager: KgManager) -> dict[str, Entity]
     Retrieves all classes and properties of a KG using GRASP's own, already
     built entities/properties indices.
     Does not cover individuals/instances.
+
+    An identifier that appears in *both* indices (the entities index may
+    already include properties, depending on how the KG was set up) is only
+    queried/enriched once, via the properties index's own info lookup:
+
+    >>> from grasp.sparql.types import ObjType
+    >>> class FakeManager:
+    ...     prefixes = {}
+    ...     kg_prefixes = {"cmt": "http://cmt#"}
+    ...     def format_iri(self, iri):
+    ...         return iri
+    ...     def get_data(self, name):
+    ...         if name == ObjType.ENTITY.index_name:
+    ...             return [("http://cmt#Paper", None), ("http://cmt#hasAuthor", None)]
+    ...         return [("http://cmt#hasAuthor", None)]
+    ...     def get_info_for_identifiers_from_index(self, ids, name):
+    ...         return {"http://cmt#Paper": {"label": "Paper"}} if "http://cmt#Paper" in ids else {}
+    >>> result = retrieve_entities_and_properties(FakeManager())
+    >>> sorted(result)
+    ['http://cmt#Paper', 'http://cmt#hasAuthor']
+    >>> result["http://cmt#hasAuthor"].label
+    'has Author'
     """
     entities_data = kg_manager.get_data(ObjType.ENTITY.index_name)
     properties_data = kg_manager.get_data(ObjType.PROPERTY.index_name)
@@ -96,6 +174,19 @@ def retrieve_entities_and_properties(kg_manager: KgManager) -> dict[str, Entity]
 
 
 def build_string_matching_dict(entities: dict[str, Entity]) -> dict[str, list[Entity]]:
+    """
+    Indexes `entities` by every one of their normalized names (label and
+    aliases alike), so entities with multiple names are found under each of
+    them.
+
+    >>> paper = Entity(identifier="http://cmt#Paper", entity="cmt:Paper", label="Paper")
+    >>> review = Entity(identifier="http://cmt#Review", entity="cmt:Review", label="Review")
+    >>> d = build_string_matching_dict({paper.identifier: paper, review.identifier: review})
+    >>> sorted(d)
+    ['paper', 'review']
+    >>> d["paper"] == [paper]
+    True
+    """
     result: dict[str, list[Entity]] = {}
     for entity in entities.values():
         names = entity_names(entity)
@@ -112,6 +203,24 @@ def perform_string_matching(
     entities_source: dict[str, Entity],
     entities_target: dict[str, Entity]
         ) -> tuple[list[PotentialCorrespondences], list[Entity]]:
+    """
+    Splits `entities_source` into those with at least one normalized-name
+    match in `entities_target` (returned as `PotentialCorrespondences`,
+    candidates in first-seen order, deduplicated) and those with none
+    (returned as unmatched).
+
+    >>> paper = Entity(identifier="http://cmt#Paper", entity="cmt:Paper", label="Paper")
+    >>> review = Entity(identifier="http://cmt#Review", entity="cmt:Review", label="Review")
+    >>> conf_paper = Entity(identifier="http://conference#Paper", entity="conference:Paper", label="Paper")
+    >>> matches, unmatched = perform_string_matching(
+    ...     {paper.identifier: paper, review.identifier: review},
+    ...     {conf_paper.identifier: conf_paper},
+    ... )
+    >>> matches[0].source_entity.entity, [c.entity for c in matches[0].candidates]
+    ('cmt:Paper', ['conference:Paper'])
+    >>> [e.entity for e in unmatched]
+    ['cmt:Review']
+    """
     target_matching_dict = build_string_matching_dict(entities_target)
     matches: list[PotentialCorrespondences] = []
     unmatched: list[Entity] = []
@@ -145,7 +254,31 @@ def write_jsonl_input(
     batch_size: int = 1,
     limit: int | None = None,
 ) -> Path:
+    """
+    Writes one `AlignmentTaskInput` JSON record per line, `batch_size`
+    entities at a time (string-matched ones first, then unmatched ones,
+    same relative order as in `string_matches + unmatched_entities`). A
+    batch straddling the boundary between the two correctly splits into its
+    `potential_correspondences` and `unmatched_entities` parts rather than
+    misclassifying either side.
 
+    >>> import tempfile, json
+    >>> paper_src = Entity(identifier="http://cmt#Paper", entity="cmt:Paper", label="Paper")
+    >>> paper_tgt = Entity(identifier="http://conference#Paper", entity="conference:Paper", label="Paper")
+    >>> review = Entity(identifier="http://cmt#Review", entity="cmt:Review", label="Review")
+    >>> matches = [PotentialCorrespondences(source_entity=paper_src, candidates=[paper_tgt])]
+    >>> out = Path(tempfile.mktemp(suffix=".jsonl"))
+    >>> _ = write_jsonl_input(matches, [review], "cmt", "conference", out, batch_size=1)
+    >>> len(out.read_text().splitlines())
+    2
+    >>> _ = write_jsonl_input(matches, [review], "cmt", "conference", out, batch_size=2)
+    >>> record = json.loads(out.read_text().splitlines()[0])
+    >>> [c["source_entity"]["entity"] for c in record["potential_correspondences"]]
+    ['cmt:Paper']
+    >>> [e["entity"] for e in record["unmatched_entities"]]
+    ['cmt:Review']
+    >>> out.unlink()
+    """
     entities = string_matches + unmatched_entities
     if limit is not None:
         logging.info(f"Limiting source entities to the first {limit} entities.")
@@ -182,6 +315,40 @@ def write_jsonl_input(
 
 
 def om_pretask(source_manager: KgManager, target_manager: KgManager, output_file: Path, config: GraspConfig):
+    """
+    End-to-end OM pretask: retrieves both KGs' entities/properties, string-
+    matches the source ones against the target ones (unless
+    `task_kwargs.om_pretask.skip_prematching` is set, in which case every
+    source entity is treated as unmatched and `target_manager` is never
+    queried for its own entities at all), and writes the result as the
+    JSONL input `om_task` consumes.
+
+    >>> import tempfile, json
+    >>> from grasp.sparql.types import ObjType
+    >>> class FakeManager:
+    ...     def __init__(self, kg, label):
+    ...         self.kg = kg
+    ...         self.prefixes = {}
+    ...         self.kg_prefixes = {kg: f"http://{kg}#"}
+    ...         self._label = label
+    ...     def format_iri(self, iri):
+    ...         return iri
+    ...     def get_data(self, name):
+    ...         if name == ObjType.ENTITY.index_name:
+    ...             return [(f"http://{self.kg}#Paper", None)]
+    ...         return []
+    ...     def get_info_for_identifiers_from_index(self, ids, name):
+    ...         return {f"http://{self.kg}#Paper": {"label": self._label}}
+    >>> config = GraspConfig(model="test", task_kwargs={"om_pretask": {"batch_size": 1}})
+    >>> out = Path(tempfile.mktemp(suffix=".jsonl"))
+    >>> om_pretask(FakeManager("cmt", "Paper"), FakeManager("conference", "Paper"), out, config)
+    >>> record = json.loads(out.read_text().splitlines()[0])
+    >>> record["source_kg"], record["target_kg"]
+    ('cmt', 'conference')
+    >>> [c["source_entity"]["entity"] for c in record["potential_correspondences"]]
+    ['http://cmt#Paper']
+    >>> out.unlink()
+    """
     configs = config.task_kwargs.get("om_pretask", {})
     skip_prematching = configs.get("skip_prematching")
     batch_size = configs.get("batch_size")
