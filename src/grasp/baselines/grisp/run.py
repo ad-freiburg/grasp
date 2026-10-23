@@ -57,7 +57,7 @@ from grasp.baselines.grisp.utils import (
     skeleton_wording_key,
 )
 from grasp.configs import KgConfig
-from grasp.functions import sparql_result_view
+from grasp.functions import format_selection_groups, sparql_result_view
 from grasp.manager import KgManager
 from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, Selection, SelectResult
@@ -812,6 +812,7 @@ def select_iris(
             "alternatives": [
                 {
                     "identifier": alternative.get_identifier(),
+                    "iri": alternative.identifier,
                     "label": alternative.get_label(),
                     "variants": alternative.variants,
                     # shown in the selection prompt
@@ -995,13 +996,33 @@ def generate(
         # prepare_sparql_result returns parse-derived selections even when
         # execution fails, so the validator/improvement model still sees the
         # resolved items when there is no result.
+        # the output shows the selections and the result in structured form,
+        # with the same sampled aliases and infos as the formatted ones
         preview = result.formatted if result.result is not None else RESULT_UNAVAILABLE
+        formatted_selections, selection_groups = format_selection_groups(
+            selections,
+            manager,
+            result.sparql,
+        )
         return {
             "sparql": result.sparql,
-            "selections": manager.format_selections(selections),
+            "selections": formatted_selections,
             "result": preview,
-            "formatted": format_sparql_result(manager, result, selections),
+            "formatted": format_sparql_result(
+                manager,
+                result,
+                selections,
+                formatted_selections,
+            ),
+            "output": {
+                "sparql": result.sparql,
+                "selections": [group.model_dump() for group in selection_groups],
+                "result": result.tool_result().model_dump(),
+            },
         }
+
+    def output_fields(cand_out: dict) -> dict:
+        return {**cand_out["output"], "formatted": cand_out["formatted"]}
 
     # best candidate seen so far (by validator score); used to pick the final
     # answer when no candidate clears the acceptance threshold.
@@ -1273,9 +1294,9 @@ def generate(
             and best.get("out") is not None
             and best["sparql"] == sparql
         ):
-            out.update(best["out"])
+            out.update(output_fields(best["out"]))
         else:
-            out.update(execute_and_format(sparql))
+            out.update(output_fields(execute_and_format(sparql)))
 
     end = time.monotonic()
     output = {

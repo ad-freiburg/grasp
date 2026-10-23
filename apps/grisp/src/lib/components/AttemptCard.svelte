@@ -11,15 +11,21 @@
   let constraintOpen = false;
   let expanded = {};
 
-  // aliases and info in one line, as the selection prompt shows them
-  function details(alt) {
-    const parts = [];
-    if (alt.aliases?.length) {
-      const shown = alt.aliases.slice(0, MAX_ALIASES).map((a) => `"${a}"`).join(', ');
-      parts.push(`also known as ${shown}${alt.aliases.length > MAX_ALIASES ? ', etc.' : ''}`);
-    }
-    parts.push(...(alt.info ?? []).slice(0, MAX_INFO));
-    return parts.join(' · ');
+  // aliases and infos as the selection prompt shows them
+  function aliasText(alt) {
+    if (!alt.aliases?.length) return '';
+    const shown = alt.aliases.slice(0, MAX_ALIASES).map((a) => `"${a}"`).join(', ');
+    const etc = alt.aliases.length > MAX_ALIASES ? ', etc.' : '';
+    return `${alt.label ? 'also known as' : 'known as'} ${shown}${etc}`;
+  }
+
+  function infos(alt) {
+    return (alt.info ?? []).slice(0, MAX_INFO);
+  }
+
+  // older traces only have the short identifier
+  function href(alt) {
+    return /^https?:\/\//.test(alt.iri ?? '') ? alt.iri : null;
   }
 
   $: objType = attempt.alternatives.find((a) => a.obj_type)?.obj_type ?? null;
@@ -156,11 +162,18 @@
                 {#if alt.isNone}
                   <em>{alt.label}</em>
                 {:else}
-                  <span class="label">{alt.label || alt.identifier}</span>
-                  {#if alt.identifier && alt.label !== alt.identifier}<span class="id">{alt.identifier}</span>{/if}
-                  {#if alt.variant}<span class="variant">{alt.variant}</span>{/if}
+                  <strong class="label">{alt.label || alt.identifier}</strong>
+                  {#if alt.identifier && alt.label !== alt.identifier}
+                    {#if href(alt)}
+                      <a class="id" href={href(alt)} target="_blank" rel="noopener noreferrer" on:click|stopPropagation><code>{alt.identifier}</code></a>
+                    {:else}
+                      <code class="id">{alt.identifier}</code>
+                    {/if}
+                  {/if}
+                  {#if alt.variant}<span class="variant">as {alt.variant}</span>{/if}
                   {#if alt.was !== null && alt.was !== undefined && alt.was !== alt.rank}<span class="was">search #{alt.was + 1}</span>{/if}
-                  {#if details(alt)}<span class="details">{details(alt)}</span>{/if}
+                  {#if aliasText(alt)}<span class="aliases">· {aliasText(alt)}</span>{/if}
+                  {#each infos(alt) as info}<span class="info">{info}</span>{/each}
                 {/if}
               </td>
               {#if attempt.reranked}<td class="col-score">{alt.score?.toFixed(3) ?? ''}</td>{/if}
@@ -229,6 +242,16 @@
     font-family: 'Fira Code', monospace;
     font-size: 0.75rem;
     color: var(--text-subtle);
+  }
+
+  a.id {
+    color: var(--color-uni-blue);
+    text-decoration: underline;
+    text-decoration-color: rgba(52, 74, 154, 0.4);
+  }
+
+  a.id code {
+    font-family: inherit;
   }
 
   .attempt-header {
@@ -337,7 +360,6 @@
 
   .row--selected {
     background: rgba(0, 160, 130, 0.1);
-    font-weight: 600;
   }
 
   .row--rejected {
@@ -350,7 +372,7 @@
   }
 
   .row--below {
-    opacity: 0.4;
+    opacity: 0.7;
   }
 
   .check {
@@ -390,11 +412,29 @@
     mask-image: none;
   }
 
-  .details {
-    margin-left: 0.6em;
-    font-size: 0.75rem;
-    font-weight: 400;
+  .aliases {
+    margin-left: 0.4em;
+    font-size: 0.78rem;
     color: var(--text-subtle);
+  }
+
+  /* infos as small boxes like in search results; one line unless the
+     row is expanded */
+  .info {
+    display: inline-block;
+    margin-left: 0.35em;
+    padding: 0 0.45rem;
+    border: 1px solid rgba(52, 74, 154, 0.18);
+    border-radius: var(--radius-sm);
+    background: rgba(52, 74, 154, 0.04);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--text-primary);
+  }
+
+  .alt-cell--expanded .info {
+    margin-top: 0.2rem;
+    white-space: normal;
   }
 
   .empty {

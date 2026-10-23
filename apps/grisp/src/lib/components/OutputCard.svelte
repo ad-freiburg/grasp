@@ -1,6 +1,9 @@
 <script>
   import SparqlBlock from './SparqlBlock.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
+  import ExecutionResult from './ExecutionResult.svelte';
+  import SelectionGroups from './SelectionGroups.svelte';
+  import { highlightQuerySpans } from '../utils/ranges.js';
 
   export let output;
 
@@ -11,17 +14,14 @@
   const error = output?.error ?? null;
 
   const sparql = out?.sparql ?? null;
+  // items of the query per type and the execution result in structured
+  // form, older outputs have them formatted
   const selections = out?.selections ?? null;
   const result = out?.result ?? null;
+  // element containing the query, for highlighting hovered query items
+  let queryEl;
   const formatted = out?.formatted ?? null;
   const endpoint = out?.endpoint ?? null;
-
-  // Helper to convert data to markdown
-  function toMarkdown(value) {
-    if (value === null || value === undefined) return '';
-    if (typeof value === 'string') return value;
-    return '```json\n' + JSON.stringify(value, null, 2) + '\n```';
-  }
 </script>
 
 <div class="output-card">
@@ -45,15 +45,22 @@
   {/if}
 
   {#if result}
-    <MarkdownContent content={toMarkdown(result)} />
+    <ExecutionResult {result} />
   {/if}
 
   {#if sparql}
-    <SparqlBlock code={sparql} {endpoint} />
+    <div bind:this={queryEl}>
+      <SparqlBlock code={sparql} {endpoint} />
+    </div>
   {/if}
 
-  {#if selections}
-    <MarkdownContent content={toMarkdown(selections)} />
+  {#if Array.isArray(selections) && selections.length}
+    <SelectionGroups
+      groups={selections}
+      on:itemhover={(event) => highlightQuerySpans(queryEl, event.detail.spans)}
+    />
+  {:else if typeof selections === 'string' && selections}
+    <MarkdownContent content={selections} />
   {/if}
 
   {#if !sparql && !result && !error}
