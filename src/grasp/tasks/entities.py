@@ -21,6 +21,10 @@ class Entity(BaseModel):
     identifier: str
     entity: str
     label: str | None = None
+    # whether the label was derived from the IRI (e.g. its local name) because
+    # the entity has no label in the knowledge graph; such a label may look like
+    # a name but only be an identifier, so it should not count as lexical evidence
+    label_derived: bool = False
     aliases: list[str] | None = None
     infos: list[str] | None = None
 

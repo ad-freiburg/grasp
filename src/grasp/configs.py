@@ -168,10 +168,15 @@ class GraspConfig(ModelConfig):
     know_before_use: bool = False
 
     # interaction parameters
+    # maximum number of model calls per run (see core.StepBudget)
     max_steps: int = 100
     # how many times the model is allowed to repeat the same response
     # (loop) before we give up; each repetition counts as one loop
     max_loops: int = 1
+    # step budget: during the last fraction of max_steps (e.g. 0.3: the last
+    # ceil(0.3 * max_steps) steps) the model is told before each step how many
+    # steps are left; None = never (see core.StepBudget)
+    budget_warning_fraction: float | None = None
 
     # example parameters
     num_examples: int = 3
