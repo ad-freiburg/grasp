@@ -30,6 +30,9 @@
     box-shadow: 0 10px 18px rgba(15, 15, 47, 0.04);
     padding: var(--spacing-md);
     display: grid;
+    /* a single column that does not grow with wide content, so tables
+       scroll inside it */
+    grid-template-columns: minmax(0, 1fr);
     width: 100%;
     max-width: 100%;
   }
@@ -94,6 +97,7 @@
 
   .message-card__body {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--spacing-sm);
   }
 

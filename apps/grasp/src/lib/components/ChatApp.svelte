@@ -1140,6 +1140,7 @@ let running = false;
           initialCeaPayload={ceaInitialPayload}
           initialElPayload={elInitialPayload}
           {sttEnabled}
+          autofocus={!queryParams.loadId}
         />
       </div>
     </main>

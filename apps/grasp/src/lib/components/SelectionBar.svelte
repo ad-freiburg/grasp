@@ -17,6 +17,22 @@
 
   $: activeTask = tasks.find((t) => t.id === task);
 
+  // marks a label that does not fit, so its end fades out
+  function overflowing(node) {
+    const update = () =>
+      node.classList.toggle('task-trigger__label--overflow', node.scrollWidth > node.clientWidth);
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    const mutations = new MutationObserver(update);
+    mutations.observe(node, { childList: true, characterData: true, subtree: true });
+    return {
+      destroy() {
+        observer.disconnect();
+        mutations.disconnect();
+      }
+    };
+  }
+
   function toggle() {
     if (disabled) return;
     if (isOpen) {
@@ -116,7 +132,7 @@
         aria-haspopup="listbox"
         aria-expanded={isOpen}
       >
-        <span class="task-trigger__label">{activeTask?.name ?? task}</span>
+        <span class="task-trigger__label" use:overflowing>{activeTask?.name ?? task}</span>
         <span class="task-trigger__arrow" aria-hidden="true"></span>
       </button>
       {#if isOpen}
@@ -222,6 +238,8 @@
   .task-select-container {
     position: relative;
     margin-right: var(--spacing-xs);
+    flex-shrink: 0;
+    max-width: 12rem;
   }
 
   .task-trigger {
@@ -229,7 +247,7 @@
     border: 1px solid rgba(52, 74, 154, 0.28);
     border-radius: var(--radius-sm);
     background: rgba(52, 74, 154, 0.08);
-    padding: 0.5rem 2rem 0.5rem 0.95rem;
+    padding: 0.35rem 2rem 0.35rem 0.95rem;
     font-size: 0.85rem;
     line-height: 1.2;
     color: var(--color-uni-blue);
@@ -239,14 +257,23 @@
     font-family: inherit;
     font-weight: 600;
     min-width: 120px;
+    max-width: 100%;
     text-align: left;
     position: relative;
     display: flex;
     align-items: center;
   }
 
+  /* always one line like the chips, a long name fades out */
   .task-trigger__label {
     flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  :global(.task-trigger__label--overflow) {
+    mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
   }
 
   .task-trigger__arrow {

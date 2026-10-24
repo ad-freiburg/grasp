@@ -28,10 +28,13 @@
   <div class="output-header">
     <h2 class="output-title">Output</h2>
     {#if elapsed !== null}
-      <span class="chip">
-        {elapsed.toFixed(2)}s{#if skeletonsTime !== null && resolutionTime !== null}
-          &nbsp;(skeletons {skeletonsTime.toFixed(2)}s · resolution {resolutionTime.toFixed(2)}s){/if}
-      </span>
+      <div class="timings">
+        <span class="chip chip--total">{elapsed.toFixed(2)}s</span>
+        {#if skeletonsTime !== null && resolutionTime !== null}
+          <span class="chip">skeletons {skeletonsTime.toFixed(2)}s</span>
+          <span class="chip">resolution {resolutionTime.toFixed(2)}s</span>
+        {/if}
+      </div>
     {/if}
   </div>
 
@@ -80,17 +83,34 @@
     box-shadow: var(--shadow-sm);
   }
 
-  .output-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
   .output-title {
     margin: 0;
     font-size: 1.05rem;
     font-weight: 600;
     color: var(--color-uni-dark-blue);
+  }
+
+  .output-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-xs) var(--spacing-md);
+  }
+
+  .timings {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--spacing-xs);
+  }
+
+  /* on phones the chips go below the title, left aligned */
+  @media (max-width: 600px) {
+    .timings {
+      flex-basis: 100%;
+      justify-content: flex-start;
+    }
   }
 
   .chip {
@@ -102,6 +122,12 @@
     color: var(--color-uni-blue);
     font-size: 0.75rem;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .chip--total {
+    background: var(--color-uni-blue);
+    color: #fff;
   }
 
   .error-block {
