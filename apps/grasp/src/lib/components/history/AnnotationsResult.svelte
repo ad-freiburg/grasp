@@ -67,6 +67,7 @@
 <style>
   .annotations-result {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--spacing-sm);
     font-size: 0.95rem;
     line-height: 1.6;

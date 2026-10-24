@@ -160,6 +160,7 @@
 <style>
   .el-result {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--spacing-sm);
   }
 

@@ -5,11 +5,13 @@
   // e.g. "Shapes (page 1 of 10+)" as label and page info
   $: summary = (result?.summary ?? '').match(/^(.*?)(?: \((.*)\))?$/);
 
+  // cardinality as a regex quantifier after the targets like in ShEx, none for
+  // exactly one value
   const CARDINALITY = {
-    '': ['1', 'most instances have exactly one value'],
-    '?': ['0..1', 'some instances have one value, others none'],
-    '+': ['1..n', 'most instances have one or more values'],
-    '*': ['0..n', 'some instances have several values, others none']
+    '': 'most instances have exactly one value',
+    '?': 'some instances have one value, others none',
+    '+': 'most instances have one or more values',
+    '*': 'some instances have several values, others none'
   };
 
   function href(iri) {
@@ -24,10 +26,10 @@
   function propertyTitle(prop, shape) {
     const id = prop.short_iri;
     const variants = prop.variants?.length ? ` as ${prop.variants.join('/')}` : '';
-    const inverse = prop.inverse
-      ? `\ninstances of these classes point to ${name(shape)} via ${name(prop)}`
-      : '';
-    return `${id}${variants}${inverse}`;
+    const detail = prop.inverse
+      ? `instances of these classes point to ${name(shape)} via ${name(prop)}`
+      : (CARDINALITY[prop.cardinality ?? ''] ?? '');
+    return `${id}${variants}${detail ? `\n${detail}` : ''}`;
   }
 
   // datatypes without their prefix, e.g. string for xsd:string
@@ -138,12 +140,12 @@
                       {/if}
                     </span>
                   {/each}
+                  {#if !prop.inverse && prop.cardinality}
+                    <span class="quantifier" title={CARDINALITY[prop.cardinality] ?? ''}>{prop.cardinality}</span>
+                  {/if}
                 </span>
                 {#if prop.inverse}
                   <span class="arrow">→ {name(shape)}</span>
-                {:else}
-                  {@const [text, explanation] = CARDINALITY[prop.cardinality ?? ''] ?? [prop.cardinality, '']}
-                  <span class="cardinality" title={explanation}>{text}</span>
                 {/if}
               </li>
             {/each}
@@ -192,7 +194,7 @@
 
   .prop {
     display: grid;
-    grid-template-columns: minmax(7rem, 13rem) 1fr auto;
+    grid-template-columns: minmax(7rem, 13rem) 1fr;
     align-items: start;
     gap: var(--spacing-sm);
   }
@@ -267,17 +269,28 @@
     font-size: 0.78rem;
   }
 
-  .cardinality,
+  /* estimated cardinality, boxed apart from the property name */
+  .quantifier {
+    display: inline-block;
+    align-self: center;
+    min-width: 1.3rem;
+    padding: 0.05rem 0.3rem;
+    border: 1px dashed rgba(0, 0, 0, 0.2);
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.03);
+    color: var(--text-subtle);
+    font-family: 'Fira Code', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    text-align: center;
+    cursor: help;
+  }
+
   .arrow {
     line-height: 1.9;
     font-size: 0.8rem;
     color: var(--text-subtle);
     white-space: nowrap;
-  }
-
-  .cardinality {
-    font-variant-numeric: tabular-nums;
-    cursor: help;
   }
 
   .hidden {
@@ -297,11 +310,7 @@
 
   @media (max-width: 640px) {
     .prop {
-      grid-template-columns: 1fr auto;
-    }
-
-    .targets {
-      grid-column: 1 / -1;
+      grid-template-columns: minmax(0, 1fr);
     }
   }
 </style>
