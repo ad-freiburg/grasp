@@ -57,6 +57,7 @@
   let elSpecialInstructions = '';
   let elPreviousPayload = null;
   let elTextareaEl;
+  let elFieldsetEl;
   let elBackdropEl;
   let appliedInitialElRef = null;
 
@@ -189,7 +190,7 @@
   $: if (isElTask) {
     elText;
     elTextareaEl;
-    elAutoResize();
+    tick().then(elAutoResize);
   }
   $: if (!isCeaTask && textareaEl && value === '' && previousValue !== '') {
     focusInput();
@@ -260,7 +261,10 @@
   // tapping a button must not blur the input, on phones that would move
   // the buttons back next to it before the click lands
   function keepInputFocus(event) {
-    if (document.activeElement === textareaEl) event.preventDefault();
+    const active = document.activeElement;
+    if (active === textareaEl || (isElTask && elFieldsetEl?.contains(active))) {
+      event.preventDefault();
+    }
   }
 
   function onKeydown(event) {
@@ -1017,7 +1021,9 @@
   <div class="composer__input-wrapper">
     <div
       class="composer__input-row"
-      class:composer__input-row--filled={!isCeaTask && !isElTask && value.trim().length > 0}
+      class:composer__input-row--filled={isElTask
+        ? elText.trim().length > 0
+        : !isCeaTask && value.trim().length > 0}
     >
       {#if isCeaTask}
         <div class="composer__upload-fieldset">
@@ -1180,7 +1186,7 @@
           {/if}
         </div>
       {:else if isElTask}
-        <div class="composer__el-fieldset">
+        <div class="composer__el-fieldset" bind:this={elFieldsetEl}>
           <div class="composer__el-input-wrap">
             <div
               class="composer__el-backdrop"
@@ -1195,6 +1201,8 @@
               bind:this={elTextareaEl}
               rows="1"
               on:input={elAutoResize}
+              on:focus={elAutoResize}
+              on:blur={elAutoResize}
               on:select={handleElSelect}
               on:scroll={syncElScroll}
               disabled={disabled || isRunning || isCancelling}
@@ -1562,12 +1570,19 @@
      the buttons move below it */
   @media (max-width: 600px) {
     .composer__input-row--filled,
-    .composer__input-row:has(> .composer__input:focus) {
+    .composer__input-row:has(> .composer__input:focus),
+    .composer__input-row:has(> .composer__el-fieldset:focus-within) {
       flex-wrap: wrap;
     }
 
+    .composer__input-row--filled > .composer__el-fieldset,
+    .composer__input-row > .composer__el-fieldset:focus-within {
+      flex-basis: 100%;
+    }
+
     .composer__input-row--filled > .composer__input-actions,
-    .composer__input-row:has(> .composer__input:focus) > .composer__input-actions {
+    .composer__input-row:has(> .composer__input:focus) > .composer__input-actions,
+    .composer__input-row:has(> .composer__el-fieldset:focus-within) > .composer__input-actions {
       margin-left: auto;
     }
   }
@@ -1624,6 +1639,13 @@
   .composer__el-input:focus {
     outline: none;
     border-color: rgba(52, 74, 154, 0.4);
+  }
+
+  /* a wrapped placeholder would be cut off in the one-line input */
+  .composer__el-input::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .composer__el-input:disabled {
