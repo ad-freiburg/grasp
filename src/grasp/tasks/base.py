@@ -69,6 +69,25 @@ class GraspTask(ABC):
     def default_input_field(self) -> str | None:
         return None
 
+    def final_step_functions(self) -> list[dict] | None:
+        """Functions offered in the last allowed step, in which the model must
+        call one of them (tool choice required), e.g. to submit a result. None
+        means the last step is like every other step."""
+        return None
+
+    def budget_message(self, steps_left: int, final: bool) -> str:
+        """Message to the model before a step during the last part of the step
+        budget (see budget_warning_fraction), and before a forced final step."""
+        if final:
+            return (
+                "This is your last step. Finish the task now with the "
+                "information you have gathered so far."
+            )
+        return (
+            f"You have {steps_left} steps left, including this one. Make sure "
+            "to finish the task before you run out of steps."
+        )
+
     @classmethod
     def sample_cls(cls) -> type[Sample] | None:
         return None

@@ -1,8 +1,10 @@
 import json
+import math
 import time
 import traceback
 import uuid
 from copy import deepcopy
+from dataclasses import dataclass
 from logging import Logger
 from typing import Any, Generator
 
@@ -100,6 +102,46 @@ def system_instructions(
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
     return "\n\n".join(blocks)
+
+
+@dataclass
+class StepBudget:
+    """Step budget of a generate run.
+
+    A step is one model call. At most max_steps calls are made; messages that
+    generate injects itself (loop notices, feedback, budget messages) do not
+    use up steps, nor do the tool results, which belong to the assistant
+    message of their call.
+
+    warning_fraction: during the last ceil(warning_fraction * max_steps)
+    steps the model is told before each step how many steps are left (None:
+    never). The step with left == 1 is the final one; tasks can restrict it
+    to a set of functions that must be called (see
+    GraspTask.final_step_functions).
+
+    Example with max_steps=8, warning_fraction=0.3: steps 1-5 run as usual,
+    before steps 6, 7 and 8 the model is told that 3, 2 and 1 steps are left.
+    """
+    max_steps: int
+    warning_fraction: float | None = None
+    used: int = 0
+
+    @property
+    def left(self) -> int:
+        """Steps left, including the next one."""
+        return self.max_steps - self.used
+
+    @property
+    def warn(self) -> bool:
+        """Whether the model is told the remaining steps before the next one."""
+        if self.warning_fraction is None:
+            return False
+        return self.left <= math.ceil(self.warning_fraction * self.max_steps)
+
+    @property
+    def final(self) -> bool:
+        """Whether the next step is the last one."""
+        return self.left == 1
 
 
 def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingModel]]:
@@ -267,8 +309,11 @@ def generate(
     for msg in messages:
         logger.debug(format_message(msg))
 
-    num_messages = len(messages)
     error: dict | None = None
+    # max_steps counts model calls (see StepBudget); before, it counted the
+    # messages appended after the input, so loop and feedback messages used
+    # up steps as well
+    budget = StepBudget(config.max_steps, config.budget_warning_fraction)
 
     # keep track of last serialized message to detect loops
     # if model emits the same message twice, we are stuck
@@ -277,9 +322,28 @@ def generate(
     # loops before giving up
     loops = 0
     retries = 0
-    while len(messages) - num_messages < config.max_steps:
+    while budget.left > 0:
+        step_fns, step_config = fns, None
+        final_fns = task.final_step_functions() if budget.final else None
+        if budget.warn or final_fns:
+            budget_msg = task.budget_message(budget.left, budget.final)
+            messages.append(Message.user(budget_msg, name="budget"))
+            yield {
+                "type": "budget",
+                "content": budget_msg,
+                "steps_left": budget.left,
+                "final": budget.final,
+            }
+            logger.debug(f"Step budget: {budget.left} steps left")
+        if final_fns:
+            # last step: only the task's final functions, one of which must be
+            # called; the per-call config leaves the run's config untouched
+            step_fns = final_fns
+            step_config = config.model_copy(update={"tool_choice": "required"})
+        budget.used += 1
+
         try:
-            response = model(messages, fns)
+            response = model(messages, step_fns, step_config)
         except APIConnectionError:
             error = {
                 "content": "LLM API timed out or failed to connect",
