@@ -226,7 +226,9 @@ class AnnotationState:
             ]
 
         if list_entities:
-            result += format_annotated_entities(self.annotations.values())
+            result += format_annotated_entities(
+                annotated_entities(self.annotations.values())
+            )
 
         return result
 
@@ -483,8 +485,8 @@ def annotations_result(
 
     entities = []
     if list_entities:
-        formatted_entities, entities = annotated_entities(state.annotations.values())
-        formatted += formatted_entities
+        entities = annotated_entities(state.annotations.values())
+        formatted += format_annotated_entities(entities)
 
     return ElAnnotationsResult(
         formatted=formatted,

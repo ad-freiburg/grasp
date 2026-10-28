@@ -1,11 +1,13 @@
 from grasp.functions import (
     ExecutionResult,
+    SelectionGroup,
     execute_sparql,
     find_manager,
+    format_selection_groups,
     update_known_from_selections,
 )
 from grasp.manager import KgManager
-from grasp.sparql.item import selections_from_sparql
+from grasp.sparql.term import selections_from_sparql
 from grasp.sparql.types import Selection
 from grasp.sparql.utils import READ_TIMEOUT, REQUEST_TIMEOUT
 
@@ -57,19 +59,14 @@ def prepare_sparql_result(
 
 
 def format_sparql_result(
-    manager: KgManager,
+    kg: str,
     result: ExecutionResult,
-    selections: list[Selection],
-    formatted_selections: str | None = None,
+    groups: list[SelectionGroup],
 ) -> str:
-    # formatted selections can be given to use already sampled ones
-    fmt = f"SPARQL query over {manager.kg}:\n```sparql\n{result.sparql}\n```"
+    fmt = f"SPARQL query over {kg}:\n```sparql\n{result.sparql}\n```"
 
-    fmt_sel = formatted_selections
-    if fmt_sel is None:
-        fmt_sel = manager.format_selections(selections)
-    if fmt_sel:
-        fmt += f"\n\n{fmt_sel}"
+    if groups:
+        fmt += f"\n\n{format_selection_groups(groups)}"
 
     fmt += f"\n\nExecution result:\n{result.formatted}"
     return fmt

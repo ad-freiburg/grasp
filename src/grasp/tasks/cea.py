@@ -229,7 +229,9 @@ class AnnotationState:
         )
 
         if list_entities:
-            table += format_annotated_entities(self.annotations.values())
+            table += format_annotated_entities(
+                annotated_entities(self.annotations.values())
+            )
 
         return table
 
@@ -382,8 +384,8 @@ def annotations_result(
 
     entities = []
     if list_entities:
-        formatted_entities, entities = annotated_entities(state.annotations.values())
-        formatted += formatted_entities
+        entities = annotated_entities(state.annotations.values())
+        formatted += format_annotated_entities(entities)
 
     rows, cells = state.cells(only_annotation_window=True)
     return CeaAnnotationsResult(

@@ -2,10 +2,10 @@ from typing import Iterable
 
 from pydantic import BaseModel
 
-from grasp.functions import SearchItem, alternative_item, parse_iri_or_literal
+from grasp.functions import parse_iri_or_literal
 from grasp.manager import KgManager, format_kgs
 from grasp.model import ToolCallResult
-from grasp.sparql.types import Alternative, ObjType
+from grasp.sparql.types import KgItem, ObjType, format_kg_item
 from grasp.utils import (
     FunctionCallException,
     format_enumerate,
@@ -25,13 +25,13 @@ class Entity(BaseModel):
     aliases: list[str] | None = None
     infos: list[str] | None = None
 
-    def to_alternative(self) -> Alternative:
-        return Alternative(
-            self.identifier,
+    def to_kg_item(self) -> KgItem:
+        return KgItem(
+            identifier=self.identifier,
             short_identifier=self.entity,
             label=self.label,
-            aliases=self.aliases,
-            info=self.infos,
+            aliases=self.aliases or [],
+            infos=self.infos or [],
         )
 
     @property
@@ -43,7 +43,7 @@ class AnnotationsResult(ToolCallResult):
     # message of annotate or delete_annotation, empty for show_annotations
     message: str = ""
     # the listed annotated entities, if any
-    entities: list[SearchItem] = []
+    entities: list[KgItem] = []
 
 
 def nil_entity() -> Entity:
@@ -109,30 +109,25 @@ def prepare_annotation(
     return annotation
 
 
-def annotated_entities(annotations: Iterable[Entity]) -> tuple[str, list[SearchItem]]:
-    entities: dict[str, Alternative] = {}
+def annotated_entities(annotations: Iterable[Entity]) -> list[KgItem]:
+    # the sampled annotated entities, without duplicates and nil
+    entities: dict[str, KgItem] = {}
     for annot in annotations:
         if annot.is_nil or annot.identifier in entities:
             continue
 
-        entities[annot.identifier] = annot.to_alternative()
+        entities[annot.identifier] = annot.to_kg_item()
 
+    return [item.sample() for _, item in sorted(entities.items())]
+
+
+def format_annotated_entities(entities: list[KgItem]) -> str:
     if not entities:
-        return "", []
+        return ""
 
-    lines = []
-    items = []
-    for _, alt in sorted(entities.items()):
-        line, item = alternative_item(alt)
-        lines.append(line)
-        items.append(item)
-
-    return f"\n\nAnnotated entities:\n{format_list(lines)}", items
-
-
-def format_annotated_entities(annotations: Iterable[Entity]) -> str:
-    formatted, _ = annotated_entities(annotations)
-    return formatted
+    return "\n\nAnnotated entities:\n" + format_list(
+        format_kg_item(item) for item in entities
+    )
 
 
 def annotation_feedback_system_message(

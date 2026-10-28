@@ -5,7 +5,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from grasp.configs import GraspConfig
-from grasp.functions import check_known, find_manager, format_selection_groups
+from grasp.functions import check_known, find_manager, selection_groups
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message, ToolCall, ToolCallResult
 from grasp.model.base import ResponseMessage
@@ -19,7 +19,7 @@ from grasp.tasks.sparql_qa.examples import (
 from grasp.tasks.sparql_qa.examples import (
     functions as example_functions,
 )
-from grasp.tasks.utils import prepare_sparql_result
+from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import (
     FunctionCallException,
     format_enumerate,
@@ -338,23 +338,13 @@ def prepare_formatted_output(
     )
     manager, _ = find_manager(managers, kg)
 
-    formatted_selections, selection_groups = format_selection_groups(
-        selections,
-        manager,
-        result.sparql,
-    )
-    formatted = f"SPARQL query over {kg}:\n```sparql\n{result.sparql}\n```"
-    if selections:
-        formatted += f"\n\n{formatted_selections}"
-
-    formatted += f"\n\nExecution result:\n{result.formatted}"
-
+    groups = selection_groups(selections, manager, result.sparql)
     return {
         "sparql": result.sparql,
-        "selections": [group.model_dump() for group in selection_groups],
+        "selections": [group.model_dump() for group in groups],
         "result": result.tool_result().model_dump(),
         "endpoint": manager.endpoint,
-        "formatted": formatted,
+        "formatted": format_sparql_result(kg, result, groups),
     }
 
 

@@ -20,7 +20,7 @@ from grasp.configs import (
 )
 from grasp.core import generate, load_notes, setup
 from grasp.examples import Sample, load_example_indices
-from grasp.functions import find_manager
+from grasp.functions import find_manager, selection_groups
 from grasp.manager import KgManager
 from grasp.model import get_model
 from grasp.tasks import get_task
@@ -536,8 +536,7 @@ def prepare_ground_truth(
             ),
             read_timeout=config.sparql_read_timeout,
         )
-        manager, _ = find_manager(managers, kg)
-        return format_sparql_result(manager, result, selections)
+        return format_sparql_result(kg, result, selection_groups(selections))
 
     elif isinstance(sample, CeaSample):
         manager, _ = find_manager(managers, kg)

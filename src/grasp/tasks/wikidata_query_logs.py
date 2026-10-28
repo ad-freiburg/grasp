@@ -1,7 +1,7 @@
 from typing import Any
 
 from grasp.configs import GraspConfig
-from grasp.functions import ExecutionResult
+from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
 from grasp.model import Message, Response
 from grasp.sparql.utils import (
@@ -178,7 +178,11 @@ def prepare_sparql(
         except Exception:
             pass
 
-    return result, format_sparql_result(manager, result, selections)
+    return result, format_sparql_result(
+        manager.kg,
+        result,
+        selection_groups(selections),
+    )
 
 
 def input_and_state(

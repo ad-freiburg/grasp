@@ -35,9 +35,9 @@ from grasp.baselines.grisp.data import (
     Candidates,
     FillOrder,
     OracleSkeletonUnavailable,
-    OrderedAlternatives,
+    OrderedKgItems,
     Skeleton,
-    count_alternatives,
+    count_kg_items,
     find_candidate_ids,
     get_improvement_prompt,
     get_selection_prompt_and_options,
@@ -45,8 +45,8 @@ from grasp.baselines.grisp.data import (
     get_validation_prompt,
     gold_sparql_to_nl_skeleton,
     merge_skeletons,
-    ordered_alternatives_with_interleave,
-    search_alternatives,
+    ordered_kg_items_with_interleave,
+    search_kg_items,
     supports_variants,
 )
 from grasp.baselines.grisp.train import GRISPTrainConfig
@@ -61,11 +61,17 @@ from grasp.functions import (
     ExecutionResult,
     SelectionGroup,
     format_selection_groups,
+    selection_groups,
     sparql_result_view,
 )
 from grasp.manager import KgManager
 from grasp.sparql.metrics import f1_score
-from grasp.sparql.types import AskResult, Selection, SelectResult
+from grasp.sparql.types import (
+    AskResult,
+    Selection,
+    SelectResult,
+    format_kg_item,
+)
 from grasp.sparql.utils import (
     SparqlExecuteException,
 )
@@ -315,10 +321,7 @@ class SparqlCandidate:
     # an executed candidate query and the items it uses
     query: str
     result: ExecutionResult
-    selections: list[Selection]
     groups: list[SelectionGroup]
-    # same sampled aliases and infos as groups
-    formatted_selections: str
 
     def preview(self) -> str:
         # a failed execution is unavailable, not a wrong query
@@ -331,12 +334,7 @@ class SparqlCandidate:
             "sparql": self.result.sparql,
             "selections": [group.model_dump() for group in self.groups],
             "result": self.result.tool_result().model_dump(),
-            "formatted": format_sparql_result(
-                manager,
-                self.result,
-                self.selections,
-                self.formatted_selections,
-            ),
+            "formatted": format_sparql_result(manager.kg, self.result, self.groups),
         }
 
 
@@ -541,14 +539,14 @@ def generate_improved_skeletons(
     )
 
 
-def rerank_alternatives(
+def rerank_kg_items(
     model: GRISPModel,
     tokenizer: PreTrainedTokenizerBase,
     manager: KgManager,
     question: str,
     sparql: str,
     selections: list[Selection],
-    alternatives: OrderedAlternatives,
+    kg_items: OrderedKgItems,
     logger: Logger,
 ) -> list[tuple[int | None, float]]:
     prompt, options = get_selection_prompt_and_options(
@@ -556,9 +554,9 @@ def rerank_alternatives(
         question,
         sparql,
         selections,
-        alternatives,
+        kg_items,
     )
-    num_alternatives = count_alternatives(alternatives)
+    num_kg_items = count_kg_items(kg_items)
 
     enc = tokenizer.apply_chat_template(
         prompt,
@@ -607,14 +605,14 @@ def rerank_alternatives(
         "Reranked alternatives:\n"
         + "\n".join(
             f"Rank {i + 1}: "
-            f"{ALT_LABELS[index] if index < num_alternatives else 'None'} "
+            f"{ALT_LABELS[index] if index < num_kg_items else 'None'} "
             f"(score={score:.2%})"
             for i, (score, index) in enumerate(zip(sorted_scores, sorted_indices))
         )
     )
 
     return [
-        (index if index < num_alternatives else None, score)
+        (index if index < num_kg_items else None, score)
         for index, score in zip(sorted_indices, sorted_scores)
     ]
 
@@ -780,11 +778,11 @@ def select_iris(
         # the next wording is searched only once the current one is used up, so
         # the combination the best skeleton proposed is explored first
         while (
-            not candidates.alternatives or next_wording
+            not candidates.kg_items or next_wording
         ) and candidates.next_query < info.num_queries:
             next_wording = False
             t = time.monotonic()
-            alternative_groups = search_alternatives(
+            kg_item_groups = search_kg_items(
                 manager,
                 candidates.obj_types,
                 candidates.identifier_maps,
@@ -794,20 +792,20 @@ def select_iris(
                 logger,
             )
             candidates.next_query += 1
-            known = {(a[0].identifier, a[2]) for a in candidates.alternatives}
-            candidates.alternatives = candidates.alternatives + [
-                alternative
-                for alternative in ordered_alternatives_with_interleave(
-                    alternative_groups,
+            known = {(a[0].identifier, a[2]) for a in candidates.kg_items}
+            candidates.kg_items = candidates.kg_items + [
+                kg_item
+                for kg_item in ordered_kg_items_with_interleave(
+                    kg_item_groups,
                     queries,
                     interleave=not cfg.rerank,
                 )
-                if alternative[0].identifier not in candidates.seen
-                and (alternative[0].identifier, alternative[2]) not in known
+                if kg_item[0].identifier not in candidates.seen
+                and (kg_item[0].identifier, kg_item[2]) not in known
             ]
             timings["search"] += time.monotonic() - t
 
-        alternatives = candidates.alternatives
+        kg_items = candidates.kg_items
         ranking = None
 
         # the wording these alternatives were searched with; the loop above
@@ -820,14 +818,14 @@ def select_iris(
             # will return an empty list if 'None' is top ranked
             # such that we can continue with backtracking
             t = time.monotonic()
-            ranking = rerank_alternatives(
+            ranking = rerank_kg_items(
                 model,
                 tokenizer,
                 manager,
                 question,
                 query_sparql,
                 skeleton.selections,
-                alternatives,
+                kg_items,
                 logger,
             )
             timings["rerank"] = time.monotonic() - t
@@ -846,17 +844,17 @@ def select_iris(
             "variants": info.variants,
             "alternatives": [
                 {
-                    "identifier": alternative.get_identifier(),
-                    "iri": alternative.identifier,
-                    "label": alternative.get_label(),
-                    "variants": alternative.variants,
+                    "identifier": kg_item.get_identifier(),
+                    "iri": kg_item.identifier,
+                    "label": kg_item.get_label(),
+                    "variants": kg_item.variants,
                     # shown in the selection prompt
-                    "aliases": alternative.aliases,
-                    "info": alternative.info,
+                    "aliases": kg_item.aliases,
+                    "info": kg_item.infos,
                     "obj_type": obj_type.value,
                     "variant": variant,
                 }
-                for alternative, obj_type, variant in alternatives
+                for kg_item, obj_type, variant in kg_items
             ],
             "ranking": ranking,
             "constraint": asdict(candidates.constraint),
@@ -872,16 +870,16 @@ def select_iris(
 
             # the pool keeps the search order, only the best ranked one is tried
             if cfg.rerank_discard_below_none:
-                candidates.alternatives = [alternatives[i] for i in sorted(above)]
-            alternatives = [alternatives[i] for i in above[:1]]
+                candidates.kg_items = [kg_items[i] for i in sorted(above)]
+            kg_items = [kg_items[i] for i in above[:1]]
 
         # a used-up wording is only a dead end once none are left
-        if len(alternatives) == 0 and candidates.next_query < info.num_queries:
+        if len(kg_items) == 0 and candidates.next_query < info.num_queries:
             logger.debug("Alternatives used up, trying the next wording")
             next_wording = True
             continue
 
-        if len(alternatives) == 0:
+        if len(kg_items) == 0:
             if skeleton.replaced == 0:
                 logger.debug(
                     "No valid alternatives left for the first placeholder, abandoning skeleton"
@@ -905,18 +903,16 @@ def select_iris(
             continue
 
         # try out the best alternative
-        selected = alternatives[0]
-        alternative, obj_type, variant = selected
-        candidates.alternatives = [
-            a for a in candidates.alternatives if a is not selected
-        ]
-        candidates.seen.add(alternative.identifier)
-        if not alternative.variants:
+        selected = kg_items[0]
+        kg_item, obj_type, variant = selected
+        candidates.kg_items = [a for a in candidates.kg_items if a is not selected]
+        candidates.seen.add(kg_item.identifier)
+        if not kg_item.variants:
             # just to be sure to have no parsing errors
             variant = None
 
         if variant is not None:
-            if not alternative.variants or variant not in alternative.variants:
+            if not kg_item.variants or variant not in kg_item.variants:
                 logger.debug(
                     f"Variant '{variant}' not found in alternative variants, "
                     f"trying next alternative"
@@ -924,21 +920,21 @@ def select_iris(
                 yield {
                     "type": "continue",
                     "reason": "invalid_variant",
-                    "identifier": alternative.get_identifier(),
-                    "label": alternative.get_label(),
+                    "identifier": kg_item.get_identifier(),
+                    "label": kg_item.get_label(),
                     "variant": variant,
-                    "variants": alternative.variants,
+                    "variants": kg_item.variants,
                 }
                 continue
 
             logger.debug(
                 f"Variant '{variant}' found in alternative "
-                f"variants ({alternative.variants})"
+                f"variants ({kg_item.variants})"
             )
 
         show_variants = [variant] if variant is not None else None
         selection = Selection(
-            alternative=alternative,
+            kg_item=kg_item,
             variant=variant,
             obj_type=obj_type,
         )
@@ -948,13 +944,13 @@ def select_iris(
             deepest_query = skeleton.materialize_partial()
         logger.debug(
             f"Adding the following alternative at placholder {skeleton.replaced}/{skeleton.total}:\n"
-            f"{alternative.get_selection_string(include_variants=show_variants)} "
+            f"{format_kg_item(kg_item.sample(), variants=show_variants)} "
         )
 
         yield {
             "type": "select",
-            "identifier": alternative.get_identifier(),
-            "label": alternative.get_label(),
+            "identifier": kg_item.get_identifier(),
+            "label": kg_item.get_label(),
             "variant": variant,
         }
 
@@ -1026,12 +1022,8 @@ def generate(
             request_timeout=(3.5, 6.0),
             read_timeout=3.0,
         )
-        formatted_selections, groups = format_selection_groups(
-            selections,
-            manager,
-            result.sparql,
-        )
-        return SparqlCandidate(query, result, selections, groups, formatted_selections)
+        groups = selection_groups(selections, manager, result.sparql)
+        return SparqlCandidate(query, result, groups)
 
     # best candidate seen so far (by validator score); used to pick the final
     # answer when no candidate clears the acceptance threshold.
@@ -1192,7 +1184,7 @@ def generate(
                             manager,
                             question,
                             candidate.result.sparql,
-                            candidate.formatted_selections,
+                            format_selection_groups(candidate.groups),
                             candidate.preview(),
                             logger,
                         )
@@ -1215,7 +1207,7 @@ def generate(
                             sparql = outcome.sparql
                             break
                         evidence_sparql = candidate.result.sparql
-                        evidence_selections = candidate.formatted_selections
+                        evidence_selections = format_selection_groups(candidate.groups)
                         evidence_result = candidate.preview()
                     else:
                         # partial skeleton: no executable query to validate, show

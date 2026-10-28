@@ -6,6 +6,7 @@ from grasp.functions import (
 )
 from grasp.manager import KgManager
 from grasp.sparql.types import iri_indices
+from grasp.sparql.types import format_kg_item
 from grasp.tasks.exploration.functions import (
     note_function_definitions as base_note_function_definitions,
 )
@@ -134,8 +135,8 @@ def show_explored(
 
     items = []
     for iri in page_items:
-        alt = manager.build_alternative_with_info(iri, infos.get(iri))
-        items.append(alt.get_selection_string())
+        item = manager.build_kg_item_with_info(iri, infos.get(iri))
+        items.append(format_kg_item(item.sample()))
 
     return header + format_enumerate(items, start=start)
 

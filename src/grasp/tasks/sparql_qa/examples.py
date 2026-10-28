@@ -9,7 +9,7 @@ from grasp.functions import (
     SelectionGroup,
     find_manager,
     format_page_suffix,
-    format_selection_groups,
+    selection_groups,
     paginate_results,
     validate_page,
     validate_query,
@@ -220,20 +220,16 @@ def format_examples(
             known,
         )
 
-        formatted_selections, selection_groups = format_selection_groups(
-            selections,
-            manager,
-            result.sparql,
-        )
+        groups = selection_groups(selections, manager, result.sparql)
         exs.append(
             f"Example {i + 1}:\n{example.question}\n\n"
-            + format_sparql_result(manager, result, selections, formatted_selections)
+            + format_sparql_result(kg, result, groups)
         )
         items.append(
             SparqlQaExample(
                 question=example.question,
                 sparql=result.sparql,
-                selections=selection_groups,
+                selections=groups,
                 result=result.tool_result(),
             )
         )

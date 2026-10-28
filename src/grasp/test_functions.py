@@ -5,7 +5,7 @@ from grasp.functions import (
     update_known_from_selections,
 )
 from grasp.manager.normalizer import Normalizer
-from grasp.sparql.types import Alternative, Binding, ObjType, Selection
+from grasp.sparql.types import KgItem, Binding, ObjType, Selection
 
 
 class VariantNormalizer(Normalizer):
@@ -31,9 +31,9 @@ class Manager:
 
 def test_known_from_selections():
     selections = [
-        Selection(Alternative("ex:e"), ObjType.ENTITY),
-        Selection(Alternative("ex:c", variants=["v"]), ObjType.CLASS),
-        Selection(Alternative("ex:p"), ObjType.PROPERTY),
+        Selection(KgItem(identifier="ex:e"), ObjType.ENTITY),
+        Selection(KgItem(identifier="ex:c", variants=["v"]), ObjType.CLASS),
+        Selection(KgItem(identifier="ex:p"), ObjType.PROPERTY),
     ]
     known = set()
     update_known_from_selections(known, selections, Manager())  # type: ignore
