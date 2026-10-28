@@ -1,6 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
-  import SearchItem from './SearchItem.svelte';
+  import KgItem from './KgItem.svelte';
 
   const dispatch = createEventDispatcher();
 
@@ -31,7 +31,7 @@
           on:pointerenter={() => hover(item)}
           on:pointerleave={() => hover(null)}
         >
-          <div class="list-row__body"><SearchItem {item} path={itemPath(g, i)} /></div>
+          <div class="list-row__body"><KgItem {item} path={itemPath(g, i)} /></div>
         </li>
       {/each}
     </ul>

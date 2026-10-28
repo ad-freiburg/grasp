@@ -1,5 +1,5 @@
 <script>
-  import SearchItem from './SearchItem.svelte';
+  import KgItem from './KgItem.svelte';
 
   export let result;
 
@@ -22,7 +22,7 @@
       {#each items as item, index}
         <li class="list-row">
           <span class="list-row__rank">{(result.start ?? 0) + index + 1}</span>
-          <div class="list-row__body"><SearchItem {item} path={`items.${index}`} /></div>
+          <div class="list-row__body"><KgItem {item} path={`items.${index}`} /></div>
         </li>
       {/each}
     </ol>
