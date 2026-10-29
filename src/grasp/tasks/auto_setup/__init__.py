@@ -76,8 +76,8 @@ def update_known_from_sparql(sparql: str, known: set[str], manager: KgManager) -
         # temporarily disable info retrieval
         manager.set_info_retrieval(enable=False)
         _, terms = extract_sparql_terms(sparql, manager)
-        for obj_type in iri_indices():
-            normalizer = manager.get_normalizer(obj_type.index_name)
+        for kind in iri_indices():
+            normalizer = manager.get_normalizer(kind.index_name)
             update_known_from_alts(
                 known,
                 (term.kg_item for term in terms if not term.is_literal),

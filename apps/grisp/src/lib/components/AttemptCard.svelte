@@ -28,7 +28,7 @@
     return /^https?:\/\//.test(alt.iri ?? '') ? alt.iri : null;
   }
 
-  $: objType = attempt.alternatives.find((a) => a.obj_type)?.obj_type ?? null;
+  $: termKind = attempt.alternatives.find((a) => a.kind)?.kind ?? null;
   $: badge = constraintBadge(attempt.constraint);
 
   function constraintBadge(c) {
@@ -95,8 +95,8 @@
       {#if attempt.wordings.length > 1}
         <span class="wording-of">wording {attempt.wording + 1} of {attempt.wordings.length}</span>
       {/if}
-      {#if objType}
-        <span class="type">{objType}</span>
+      {#if termKind}
+        <span class="type">{termKind}</span>
       {/if}
       {#if attempt.changed}
         <span class="revisit">again, now with {attempt.changed}</span>

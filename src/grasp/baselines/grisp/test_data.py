@@ -27,20 +27,20 @@ from grasp.baselines.grisp.data import (
     ordered_kg_items_with_interleave,
     search_kg_items,
     searched_at_position,
-    selectable_obj_types,
+    selectable_kinds,
     split_values,
     tokenize_messages,
     tokenize_option_answer,
 )
 from grasp.baselines.grisp.utils import load_sparql_parser
 from grasp.sparql.term import extract_sparql_terms
-from grasp.sparql.types import KgItem, ObjType, Position, Selection
+from grasp.sparql.types import KgItem, TermKind, Position, Selection
 from grasp.sparql.utils import load_iri_and_literal_parser
 
 SPARQL_PARSER = load_sparql_parser()
 
 # entities support variants, properties do not, mirroring what the run passes
-OBJ_TYPES = {ObjType.ENTITY: False, ObjType.PROPERTY: True}
+KINDS = {TermKind.ENTITY: False, TermKind.PROPERTY: True}
 
 
 def nl_iri(value: str) -> dict:
@@ -96,14 +96,14 @@ class TestBuildQueries:
             variants=["wdt", None],
             values=["population (wdt)", "inhabitants"],
         )
-        queries = info.build_queries(OBJ_TYPES)
+        queries = info.build_queries(KINDS)
         # properties support variants, so the variant is stripped off and passed
         # separately; entities do not, so the raw wording is searched
-        assert queries[ObjType.PROPERTY] == [
+        assert queries[TermKind.PROPERTY] == [
             ("population", "wdt"),
             ("inhabitants", None),
         ]
-        assert queries[ObjType.ENTITY] == [
+        assert queries[TermKind.ENTITY] == [
             ("population (wdt)", None),
             ("inhabitants", None),
         ]
@@ -118,7 +118,7 @@ class TestBuildQueries:
             variants=["wdt", None],
             values=["population (wdt)", "inhabitants"],
         )
-        queries = info.build_queries(OBJ_TYPES)
+        queries = info.build_queries(KINDS)
         assert info.num_queries == 2
         assert all(len(pairs) == info.num_queries for pairs in queries.values())
 
@@ -158,7 +158,7 @@ class TestBeamCoherentRendering:
         manager.denormalize.return_value = "wd:Q4066"
         manager.format_iri.return_value = "wd:Q4066"
         merged.add_selection(
-            Selection(KgItem(identifier="wd:Q4066", label="Harz"), ObjType.ENTITY),
+            Selection(KgItem(identifier="wd:Q4066", label="Harz"), TermKind.ENTITY),
             manager,
         )
         info = merged.prepare_for_selection()
@@ -291,7 +291,7 @@ class TestMergedSkeletonSelection:
 
         info = merged.prepare_for_selection()
         assert info.queries == ["has part", "contains"]
-        assert info.build_queries(OBJ_TYPES)[ObjType.PROPERTY] == [
+        assert info.build_queries(KINDS)[TermKind.PROPERTY] == [
             ("has part", None),
             ("contains", None),
         ]
@@ -306,28 +306,28 @@ class TestSearchKgItems:
         return manager
 
     def queries(self) -> dict:
-        return {ObjType.PROPERTY: [("has part", None), ("contains", None)]}
+        return {TermKind.PROPERTY: [("has part", None), ("contains", None)]}
 
     def test_searches_the_requested_wording(self):
         manager = self.manager({"has part": ["p1"], "contains": ["p2"]})
         groups = search_kg_items(
             manager,
-            [ObjType.PROPERTY],
-            {ObjType.PROPERTY: None},
+            [TermKind.PROPERTY],
+            {TermKind.PROPERTY: None},
             self.queries(),
             1,
             10,
             Mock(),
         )
-        assert [a.identifier for a in groups[ObjType.PROPERTY]] == ["p2"]
+        assert [a.identifier for a in groups[TermKind.PROPERTY]] == ["p2"]
         assert manager.search_index.call_count == 1
 
     def test_empty_result_leaves_group_out(self):
         manager = self.manager({})
         groups = search_kg_items(
             manager,
-            [ObjType.PROPERTY],
-            {ObjType.PROPERTY: None},
+            [TermKind.PROPERTY],
+            {TermKind.PROPERTY: None},
             self.queries(),
             0,
             10,
@@ -340,8 +340,8 @@ class TestSearchKgItems:
         identifier_map = {"p1": ["wdt"]}
         search_kg_items(
             manager,
-            [ObjType.PROPERTY],
-            {ObjType.PROPERTY: identifier_map},
+            [TermKind.PROPERTY],
+            {TermKind.PROPERTY: identifier_map},
             self.queries(),
             0,
             10,
@@ -373,12 +373,12 @@ class TestClasses:
     def test_classes_only_with_class_index(self):
         manager = Mock()
         manager.index_names = ["entities", "properties"]
-        assert selectable_obj_types(manager) == [ObjType.ENTITY, ObjType.PROPERTY]
+        assert selectable_kinds(manager) == [TermKind.ENTITY, TermKind.PROPERTY]
         manager.index_names = ["classes", "entities", "properties"]
-        assert selectable_obj_types(manager) == [
-            ObjType.ENTITY,
-            ObjType.CLASS,
-            ObjType.PROPERTY,
+        assert selectable_kinds(manager) == [
+            TermKind.ENTITY,
+            TermKind.CLASS,
+            TermKind.PROPERTY,
         ]
 
     def test_entities_and_classes_searched_separately(self):
@@ -391,28 +391,28 @@ class TestClasses:
             KgItem(identifier=identifier) for identifier in results[index_name]
         ]
         queries = {
-            ObjType.ENTITY: [("city", None)],
-            ObjType.CLASS: [("city", None)],
+            TermKind.ENTITY: [("city", None)],
+            TermKind.CLASS: [("city", None)],
         }
         groups = search_kg_items(
             manager,
-            [ObjType.ENTITY, ObjType.CLASS],
-            {ObjType.ENTITY: None, ObjType.CLASS: None},
+            [TermKind.ENTITY, TermKind.CLASS],
+            {TermKind.ENTITY: None, TermKind.CLASS: None},
             queries,
             0,
             10,
             Mock(),
         )
-        assert [a.identifier for a in groups[ObjType.ENTITY]] == ["e1", "c1"]
-        assert [a.identifier for a in groups[ObjType.CLASS]] == ["c1", "c2"]
+        assert [a.identifier for a in groups[TermKind.ENTITY]] == ["e1", "c1"]
+        assert [a.identifier for a in groups[TermKind.CLASS]] == ["c1", "c2"]
 
     def test_entities_and_classes_one_group(self):
         groups = {
-            ObjType.PROPERTY: [KgItem(identifier="p1")],
-            ObjType.ENTITY: [KgItem(identifier=i) for i in ["e1", "e2"]],
-            ObjType.CLASS: [KgItem(identifier="c1")],
+            TermKind.PROPERTY: [KgItem(identifier="p1")],
+            TermKind.ENTITY: [KgItem(identifier=i) for i in ["e1", "e2"]],
+            TermKind.CLASS: [KgItem(identifier="c1")],
         }
-        queries = {obj_type: [("x", None)] for obj_type in groups}
+        queries = {kind: [("x", None)] for kind in groups}
 
         def order(interleave: bool) -> list[str]:
             return [
@@ -432,10 +432,10 @@ class TestClasses:
             return [KgItem(identifier=i, score=s) for i, s in scores.items()]
 
         groups = {
-            ObjType.ENTITY: kg_items({"e1": 0.5, "e2": 0.5}),
-            ObjType.CLASS: kg_items({"c1": 1.0, "c2": 0.5}),
+            TermKind.ENTITY: kg_items({"e1": 0.5, "e2": 0.5}),
+            TermKind.CLASS: kg_items({"c1": 1.0, "c2": 0.5}),
         }
-        queries = {obj_type: [("x", None)] for obj_type in groups}
+        queries = {kind: [("x", None)] for kind in groups}
         ordered = ordered_kg_items_with_interleave(groups, queries)
         # ties keep the interleaved rank order
         assert [a.identifier for a, _, _ in ordered] == ["c1", "e1", "e2", "c2"]
@@ -462,22 +462,22 @@ class TestClasses:
 
     def test_identifier_in_both_groups_is_a_class(self):
         groups = {
-            ObjType.ENTITY: [KgItem(identifier=i) for i in ["x", "e1"]],
-            ObjType.CLASS: [KgItem(identifier=i) for i in ["c1", "x"]],
+            TermKind.ENTITY: [KgItem(identifier=i) for i in ["x", "e1"]],
+            TermKind.CLASS: [KgItem(identifier=i) for i in ["c1", "x"]],
         }
-        queries = {obj_type: [("x", None)] for obj_type in groups}
+        queries = {kind: [("x", None)] for kind in groups}
         ordered = ordered_kg_items_with_interleave(groups, queries)
-        assert [(a.identifier, obj_type) for a, obj_type, _ in ordered] == [
-            ("x", ObjType.CLASS),
-            ("c1", ObjType.CLASS),
-            ("e1", ObjType.ENTITY),
+        assert [(a.identifier, kind) for a, kind, _ in ordered] == [
+            ("x", TermKind.CLASS),
+            ("c1", TermKind.CLASS),
+            ("e1", TermKind.ENTITY),
         ]
 
     def test_classes_shown_with_entities(self):
         kg_items = [
-            (KgItem(identifier="e1"), ObjType.ENTITY, None),
-            (KgItem(identifier="c1"), ObjType.CLASS, None),
-            (KgItem(identifier="p1"), ObjType.PROPERTY, None),
+            (KgItem(identifier="e1"), TermKind.ENTITY, None),
+            (KgItem(identifier="c1"), TermKind.CLASS, None),
+            (KgItem(identifier="p1"), TermKind.PROPERTY, None),
         ]
         formatted = format_kg_item_options(kg_items)
         assert "Entity alternatives" in formatted
@@ -671,10 +671,10 @@ def test_properties_only_searched_at_predicate_position():
         "?x ?y <http://other.org/x> }"
     )
     _, terms = extract_sparql_terms(sparql, PropertyOnlyManager())  # type: ignore
-    assert [(term.obj_type, term.position) for term in terms] == [
-        (ObjType.PROPERTY, Position.PROPERTY),
-        (ObjType.PROPERTY, Position.OBJECT),
-        (ObjType.UNKNOWN, Position.OBJECT),
+    assert [(term.kind, term.position) for term in terms] == [
+        (TermKind.PROPERTY, Position.PROPERTY),
+        (TermKind.PROPERTY, Position.OBJECT),
+        (TermKind.UNKNOWN, Position.OBJECT),
     ]
     # unknown items are never searched, they are only valid if allowed
     assert [searched_at_position(term) for term in terms] == [True, False, False]
@@ -700,7 +700,7 @@ def test_unindexed_iris_are_placeholders_but_not_selectable():
     manager = UnindexedManager()
     sparql = "SELECT ?s WHERE { ?s <http://ex.org/p> <http://ex.org/q> }"
     _, terms = extract_sparql_terms(sparql, manager)  # type: ignore
-    assert [term.obj_type for term in terms] == [ObjType.PROPERTY, ObjType.UNINDEXED]
+    assert [term.kind for term in terms] == [TermKind.PROPERTY, TermKind.UNINDEXED]
     assert all(is_placeholder(term) for term in terms)
 
     iris = [IRI.from_term(term, manager) for term in terms]  # type: ignore

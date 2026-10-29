@@ -25,7 +25,7 @@ from grasp.manager import KgManager, load_kg_manager
 from grasp.sparql.term import Term, extract_sparql_terms
 from grasp.sparql.types import (
     KgItem,
-    ObjType,
+    TermKind,
     Position,
     Selection,
     format_kg_item,
@@ -77,50 +77,50 @@ ALT_LABELS = string.ascii_uppercase + string.digits
 IGNORE_INDEX = -100
 
 Messages = list[dict[str, str]]
-KgItemGroups = dict[ObjType, list[KgItem]]
-OrderedKgItems = list[tuple[KgItem, ObjType, str | None]]
+KgItemGroups = dict[TermKind, list[KgItem]]
+OrderedKgItems = list[tuple[KgItem, TermKind, str | None]]
 # wordings of the placeholder being resolved, per object type, with variants
-Queries = dict[ObjType, list[tuple[str, str | None]]]
+Queries = dict[TermKind, list[tuple[str, str | None]]]
 
 # index types a placeholder can be resolved to, classes only with a class index;
 # entities and classes are one group of alternatives, each keeping its own type
-SELECTABLE_OBJ_TYPES = [ObjType.ENTITY, ObjType.CLASS, ObjType.PROPERTY]
+SELECTABLE_KINDS = [TermKind.ENTITY, TermKind.CLASS, TermKind.PROPERTY]
 
 
-def selectable_obj_types(manager: KgManager) -> list[ObjType]:
+def selectable_kinds(manager: KgManager) -> list[TermKind]:
     return [
-        obj_type
-        for obj_type in SELECTABLE_OBJ_TYPES
-        if obj_type != ObjType.CLASS or obj_type.index_name in manager.index_names
+        kind
+        for kind in SELECTABLE_KINDS
+        if kind != TermKind.CLASS or kind.index_name in manager.index_names
     ]
 
 
-def supports_variants(manager: KgManager) -> dict[ObjType, bool]:
+def supports_variants(manager: KgManager) -> dict[TermKind, bool]:
     return {
-        obj_type: manager.get_normalizer(obj_type.index_name).supports_variants
-        for obj_type in selectable_obj_types(manager)
+        kind: manager.get_normalizer(kind.index_name).supports_variants
+        for kind in selectable_kinds(manager)
     }
 
 
-def display_obj_type(obj_type: ObjType) -> ObjType:
-    return ObjType.ENTITY if obj_type == ObjType.CLASS else obj_type
+def display_kind(kind: TermKind) -> TermKind:
+    return TermKind.ENTITY if kind == TermKind.CLASS else kind
 
 
 # properties at the predicate position, entities and classes elsewhere,
 # and everything if the position is unknown
-def searched_obj_types(
-    obj_types: list[ObjType],
+def searched_kinds(
+    kinds: list[TermKind],
     position: Position | None,
-) -> list[ObjType]:
+) -> list[TermKind]:
     if position is None:
-        return obj_types
+        return kinds
     elif position == Position.PROPERTY:
-        return [t for t in obj_types if t == ObjType.PROPERTY]
-    return [t for t in obj_types if t != ObjType.PROPERTY]
+        return [t for t in kinds if t == TermKind.PROPERTY]
+    return [t for t in kinds if t != TermKind.PROPERTY]
 
 
 def searched_at_position(term: Term) -> bool:
-    return term.obj_type in searched_obj_types(SELECTABLE_OBJ_TYPES, term.position)
+    return term.kind in searched_kinds(SELECTABLE_KINDS, term.position)
 
 
 # unindexed items need a label, unknown items must be allowed, and index
@@ -130,7 +130,7 @@ def is_valid_term(term: Term, allow_unknown: bool = False) -> bool:
         return term.has_label
     elif term.is_unknown:
         return allow_unknown
-    elif term.obj_type in SELECTABLE_OBJ_TYPES:
+    elif term.kind in SELECTABLE_KINDS:
         return searched_at_position(term)
     return True
 
@@ -144,10 +144,10 @@ def is_placeholder(term: Term) -> bool:
 # index items are denormalized, others (e.g., unindexed) are full IRIs already
 def selection_iri(selection: Selection, manager: KgManager) -> str:
     identifier = selection.kg_item.identifier
-    if selection.obj_type in SELECTABLE_OBJ_TYPES:
+    if selection.kind in SELECTABLE_KINDS:
         denormalized = manager.denormalize(
             identifier,
-            selection.obj_type.index_name,
+            selection.kind.index_name,
             selection.variant,
         )
         assert denormalized is not None, f"Failed to denormalize {identifier}"
@@ -213,7 +213,7 @@ class IRI(BaseModel):
             identifier=selection_iri(term.selection, manager),
             label=label,
             aliases=aliases,
-            selectable=term.obj_type in SELECTABLE_OBJ_TYPES,
+            selectable=term.kind in SELECTABLE_KINDS,
         )
 
 
@@ -323,8 +323,8 @@ class Constraint:
 # next, the constraint shared by all wordings, and identifiers already offered
 @dataclass
 class Candidates:
-    obj_types: list[ObjType]
-    identifier_maps: dict[ObjType, dict[str, list[str]] | None]
+    kinds: list[TermKind]
+    identifier_maps: dict[TermKind, dict[str, list[str]] | None]
     constraint: Constraint = field(default_factory=Constraint)
     kg_items: OrderedKgItems = field(default_factory=list)
     next_query: int = 0
@@ -356,17 +356,17 @@ class Info:
     # one entry per wording, so index i is the same wording for every type
     def build_queries(
         self,
-        obj_types: dict[ObjType, bool],
+        kinds: dict[TermKind, bool],
     ) -> Queries:
         queries = {}
-        for obj_type, supports_variants in obj_types.items():
+        for kind, supports_variants in kinds.items():
             pairs = []
             for query, variant, value in zip(self.queries, self.variants, self.values):
                 if supports_variants and variant is not None:
                     pairs.append((query, variant))
                 else:
                     pairs.append((value, None))
-            queries[obj_type] = pairs
+            queries[kind] = pairs
         return queries
 
 
@@ -777,22 +777,22 @@ def ordered_kg_items_with_interleave(
 ) -> OrderedKgItems:
     # the variant hint comes from the first wording that gives one
     variants = {
-        obj_type: next((variant for _, variant in pairs if variant is not None), None)
-        for obj_type, pairs in queries.items()
+        kind: next((variant for _, variant in pairs if variant is not None), None)
+        for kind, pairs in queries.items()
     }
 
-    def bucket(obj_type: ObjType) -> OrderedKgItems:
+    def bucket(kind: TermKind) -> OrderedKgItems:
         return [
-            (kg_item, obj_type, variants.get(obj_type))
-            for kg_item in kg_item_groups.get(obj_type, [])
+            (kg_item, kind, variants.get(kind))
+            for kg_item in kg_item_groups.get(kind, [])
         ]
 
     # entities and classes as one list by score, ties by rank, entities first;
     # an identifier in both is a class, as in item extraction
     candidates = [
         (rank, kg_item)
-        for obj_type in [ObjType.ENTITY, ObjType.CLASS]
-        for rank, kg_item in enumerate(bucket(obj_type))
+        for kind in [TermKind.ENTITY, TermKind.CLASS]
+        for rank, kg_item in enumerate(bucket(kind))
     ]
     candidates.sort(
         key=lambda candidate: (-(candidate[1][0].score or 0.0), candidate[0])
@@ -805,10 +805,10 @@ def ordered_kg_items_with_interleave(
         if identifier not in positions:
             positions[identifier] = len(entities)
             entities.append(kg_item)
-        elif kg_item[1] == ObjType.CLASS:
+        elif kg_item[1] == TermKind.CLASS:
             entities[positions[identifier]] = kg_item
 
-    properties = bucket(ObjType.PROPERTY)
+    properties = bucket(TermKind.PROPERTY)
     if not interleave:
         return entities + properties
 
@@ -834,19 +834,19 @@ def format_kg_item_options(kg_items: OrderedKgItems) -> str:
 
     grouped = {}
 
-    for label, (kg_item, obj_type, _) in zip(ALT_LABELS, kg_items):
+    for label, (kg_item, kind, _) in zip(ALT_LABELS, kg_items):
         line = format_kg_item(
-            kg_item.sample(),
+            kg_item.trim(),
             show_matched_label=False,
             variants=[],
         )
-        grouped.setdefault(display_obj_type(obj_type), []).append(f"{label}. {line}")
+        grouped.setdefault(display_kind(kind), []).append(f"{label}. {line}")
 
     multiple_types = len(grouped) > 1
     alt_groups = []
-    for obj_type, alts in grouped.items():
+    for kind, alts in grouped.items():
         if multiple_types:
-            alt_group = f"{obj_type.value.capitalize()} alternatives:\n"
+            alt_group = f"{kind.value.capitalize()} alternatives:\n"
         else:
             alt_group = "Alternatives:\n"
         alt_group += "\n".join(alts)
@@ -870,7 +870,7 @@ def find_candidate_ids(
     skip_constraint: bool = False,
     max_candidates: int | None = None,
     constraint_timeout: float = 6.0,
-) -> tuple[list[ObjType], dict[ObjType, dict[str, list[str]] | None], Constraint]:
+) -> tuple[list[TermKind], dict[TermKind, dict[str, list[str]] | None], Constraint]:
     # prefix left of the current placeholder, with any unresolved placeholders
     # turned into variables so it parses
     prefix = replace_unresolved_placeholders(sparql.split(BOR, 1)[0])
@@ -902,10 +902,10 @@ def find_candidate_ids(
         # full search across both indices as fallback
         position = None
 
-    obj_types = searched_obj_types(selectable_obj_types(manager), position)
+    kinds = searched_kinds(selectable_kinds(manager), position)
 
-    identifier_maps: dict[ObjType, dict[str, list[str]] | None] = {
-        obj_type: None for obj_type in obj_types
+    identifier_maps: dict[TermKind, dict[str, list[str]] | None] = {
+        kind: None for kind in kinds
     }
     if not skip_constraint and position is not None and constraint_sparql is not None:
         constraint.sparql = constraint_sparql
@@ -923,11 +923,11 @@ def find_candidate_ids(
                 read_timeout=3.0,
             )
             maps = {
-                obj_type: manager.map_candidate_identifiers(
-                    obj_type.index_name,
+                kind: manager.map_candidate_identifiers(
+                    kind.index_name,
                     identifiers,
                 )
-                for obj_type in obj_types
+                for kind in kinds
             }
             logger.debug(
                 f"Got {sum(len(m) for m in maps.values())} candidate IRIs "
@@ -943,32 +943,32 @@ def find_candidate_ids(
             "Skipping constraint-based IRI filtering, full search will be performed"
         )
 
-    return obj_types, identifier_maps, constraint
+    return kinds, identifier_maps, constraint
 
 
 # alternatives for one wording, within what the constraint allows
 def search_kg_items(
     manager: KgManager,
-    obj_types: list[ObjType],
-    identifier_maps: dict[ObjType, dict[str, list[str]] | None],
+    kinds: list[TermKind],
+    identifier_maps: dict[TermKind, dict[str, list[str]] | None],
     queries: Queries,
     query_index: int,
     top_k: int,
     logger: Logger,
 ) -> KgItemGroups:
     kg_item_groups = {}
-    for obj_type in obj_types:
-        assert obj_type in queries, f"Missing query for object type {obj_type}"
-        query, _ = queries[obj_type][query_index]
-        logger.debug(f"Searching with query '{query}' in '{obj_type.index_name}' index")
+    for kind in kinds:
+        assert kind in queries, f"Missing query for object type {kind}"
+        query, _ = queries[kind][query_index]
+        logger.debug(f"Searching with query '{query}' in '{kind.index_name}' index")
         kg_items = manager.search_index(
-            obj_type.index_name,
+            kind.index_name,
             query,
             top_k,
-            identifier_maps[obj_type],
+            identifier_maps[kind],
         )
         if kg_items:
-            kg_item_groups[obj_type] = kg_items
+            kg_item_groups[kind] = kg_items
 
     logger.debug(
         "Found "
@@ -988,7 +988,7 @@ def find_kg_item_groups(
     skip_constraint: bool = False,
     max_candidates: int | None = None,
 ) -> KgItemGroups:
-    obj_types, identifier_maps, _ = find_candidate_ids(
+    kinds, identifier_maps, _ = find_candidate_ids(
         manager,
         sparql,
         logger,
@@ -997,7 +997,7 @@ def find_kg_item_groups(
     )
     return search_kg_items(
         manager,
-        obj_types,
+        kinds,
         identifier_maps,
         queries,
         0,
@@ -1152,7 +1152,7 @@ def gold_sparql_to_nl_skeleton(
             "invalid items: "
             + ", ".join(
                 f"{it.kg_item.get_identifier()} "
-                f"({it.obj_type.name} at {it.position or 'unknown'} position)"
+                f"({it.kind.name} at {it.position or 'unknown'} position)"
                 for it in invalid
             )
         )
@@ -1664,7 +1664,7 @@ def prepare_selection(
     sparql = materialize_sparql(sample.sparql)
 
     variants_support = supports_variants(manager)
-    obj_types = selectable_obj_types(manager)
+    kinds = selectable_kinds(manager)
 
     # items line up with the placeholders, but only index items can be targets
     _, terms = extract_sparql_terms(sparql, manager)
@@ -1680,7 +1680,7 @@ def prepare_selection(
     random.shuffle(order)
     skeleton = Skeleton.parse(skeleton, parser, order=order)
 
-    targets = [j for j, i in enumerate(order) if terms[i].obj_type in obj_types]
+    targets = [j for j, i in enumerate(order) if terms[i].kind in kinds]
     assert len(targets) > 0, "No item to select found in sample"
     upper = random.choice(targets)
     for j in range(upper):
@@ -1727,9 +1727,9 @@ def prepare_selection(
             alt.infos.clear()
 
     target_option: int | None = None
-    for i, (alt, obj_type, _) in enumerate(kg_items):
+    for i, (alt, kind, _) in enumerate(kg_items):
         # by group, an IRI in both indices may only be found as an entity
-        same_group = display_obj_type(obj_type) == display_obj_type(term.obj_type)
+        same_group = display_kind(kind) == display_kind(term.kind)
         if alt != target_alt or not same_group:
             continue
 
@@ -2019,10 +2019,10 @@ def main(args: argparse.Namespace) -> None:
                 invalid += 1
                 invalid_str = format_list(
                     format_kg_item(
-                        term.kg_item.sample(),
+                        term.kg_item.trim(),
                         variants=[term.variant] if term.variant else None,
                     )
-                    + f" ({term.obj_type} at {term.position or 'unknown'} position)"
+                    + f" ({term.kind} at {term.position or 'unknown'} position)"
                     for term in invalid_terms
                 )
 

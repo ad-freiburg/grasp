@@ -19,7 +19,7 @@ from universal_ml_utils.io import load_json, load_text
 from grasp.configs import KgInfo, NamedIndexConfig
 from grasp.manager.normalizer import Normalizer
 from grasp.search_params import SearchParams, resolve_index_search_params
-from grasp.sparql.types import STANDARD_INDEX_NAMES, ObjType
+from grasp.sparql.types import STANDARD_INDEX_NAMES, TermKind
 from grasp.sparql.utils import find_longest_prefix
 from grasp.utils import get_index_dir
 
@@ -359,11 +359,11 @@ def get_common_sparql_prefixes() -> dict[str, str]:
     }
 
 
-def find_obj_type_from_prefixes(
+def find_term_kind(
     iri: str,
     prefixes: dict[str, str],
     common_prefixes: dict[str, str],
-) -> ObjType:
+) -> TermKind:
     # we have three cases:
     # 1. the IRI matches a common prefix but not a known prefix -> COMMON (e.g. rdf:type)
     # 2. the IRI matches a known prefix -> UNINDEXED (e.g. wd:Q42)
@@ -372,11 +372,11 @@ def find_obj_type_from_prefixes(
     is_known = find_longest_prefix(iri, prefixes) is not None
 
     if is_common:
-        return ObjType.COMMON
+        return TermKind.COMMON
     elif is_known:
-        return ObjType.UNINDEXED
+        return TermKind.UNINDEXED
     else:
-        return ObjType.UNKNOWN
+        return TermKind.UNKNOWN
 
 
 def load_image_from_url(url: str) -> np.ndarray:

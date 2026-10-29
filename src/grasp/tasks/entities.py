@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from grasp.functions import parse_iri_or_literal
 from grasp.manager import KgManager, format_kgs
 from grasp.model import ToolCallResult
-from grasp.sparql.types import KgItem, ObjType, format_kg_item
+from grasp.sparql.types import KgItem, TermKind, format_kg_item
 from grasp.utils import (
     FunctionCallException,
     format_enumerate,
@@ -59,12 +59,12 @@ def prepare_entity(manager: KgManager, identifier: str) -> Entity:
 
     identifier = binding.identifier()
 
-    norm = manager.normalize(identifier, ObjType.ENTITY.index_name)
+    norm = manager.normalize(identifier, TermKind.ENTITY.index_name)
     if norm is not None:
         identifier, _ = norm
 
     all_infos = manager.get_info_for_identifiers_from_index(
-        [identifier], ObjType.ENTITY.index_name
+        [identifier], TermKind.ENTITY.index_name
     )
     info = all_infos.get(identifier, {})
 
@@ -118,7 +118,7 @@ def annotated_entities(annotations: Iterable[Entity]) -> list[KgItem]:
 
         entities[annot.identifier] = annot.to_kg_item()
 
-    return [item.sample() for _, item in sorted(entities.items())]
+    return [item.trim() for _, item in sorted(entities.items())]
 
 
 def format_annotated_entities(entities: list[KgItem]) -> str:

@@ -20,7 +20,7 @@ from grasp.sparql.types import (
     KgItem,
     AskResult,
     Binding,
-    ObjType,
+    TermKind,
     Position,
     Selection,
     SelectResult,
@@ -938,18 +938,18 @@ def update_known_from_index_iris(
     iris: list[str],
     manager: KgManager,
 ) -> None:
-    for obj_type in iri_indices():
+    for kind in iri_indices():
         update_known_from_iris(
             known,
             iris,
-            manager.get_normalizer(obj_type.index_name),
+            manager.get_normalizer(kind.index_name),
         )
 
 
 class SearchResult(ToolCallResult):
     type: str = "search"
     note: str = ""
-    # sampled, with the aliases and infos shown to the model
+    # trimmed, with the aliases and infos shown to the model
     items: list[KgItem]
     start: int
     page: int
@@ -1185,11 +1185,11 @@ def update_known_from_selections(
     selections: list[Selection],
     manager: KgManager,
 ):
-    for obj_type in iri_indices():
+    for kind in iri_indices():
         update_known_from_alts(
             known,
-            (sel.kg_item for sel in selections if sel.obj_type == obj_type),
-            manager.get_normalizer(obj_type.index_name),
+            (sel.kg_item for sel in selections if sel.kind == kind),
+            manager.get_normalizer(kind.index_name),
         )
 
 
@@ -1658,9 +1658,9 @@ class SelectionGroup(BaseModel):
     items: list[SelectedItem]
 
 
-SELECTION_GROUP_NAMES = [
-    (obj_type, obj_type.index_name) for obj_type in iri_indices()
-] + [(ObjType.UNINDEXED, "other (non-indexed) items")]
+SELECTION_GROUP_NAMES = [(kind, kind.index_name) for kind in iri_indices()] + [
+    (TermKind.UNINDEXED, "other (non-indexed) items")
+]
 
 
 def selection_groups(
@@ -1668,18 +1668,18 @@ def selection_groups(
     manager: KgManager | None = None,
     sparql: str | None = None,
 ) -> list[SelectionGroup]:
-    # the sampled items of a SPARQL query per type; with the manager and the
+    # the trimmed items of a SPARQL query per type; with the manager and the
     # query, also where the items are in it
     grouped = group_selections(selections)
 
     groups = []
-    for obj_type, name in SELECTION_GROUP_NAMES:
-        if obj_type not in grouped:
+    for kind, name in SELECTION_GROUP_NAMES:
+        if kind not in grouped:
             continue
 
         items = [
-            SelectedItem(**{**item.sample().model_dump(), "variants": variants})
-            for item, variants in grouped[obj_type]
+            SelectedItem(**{**item.trim().model_dump(), "variants": variants})
+            for item, variants in grouped[kind]
         ]
         groups.append(SelectionGroup(name=name, items=items))
 
@@ -1777,7 +1777,7 @@ def format_search_results(
     suffix = format_page_suffix(page, total_pages, more)
     start = (page - 1) * k
 
-    items = [item.sample() for item in kg_items]
+    items = [item.trim() for item in kg_items]
     if items:
         formatted = f"Results ({suffix}):\n" + "\n".join(
             f"{start + i + 1}. {format_kg_item(item)}" for i, item in enumerate(items)

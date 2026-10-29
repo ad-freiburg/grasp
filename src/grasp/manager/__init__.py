@@ -466,8 +466,8 @@ class KgManager:
         return data.main_field(id) or data.field(id, 0)
 
     def get_iri_label(self, identifier: str) -> str | None:
-        for obj_type in iri_indices():
-            label = self.get_label(identifier, obj_type.index_name)
+        for kind in iri_indices():
+            label = self.get_label(identifier, kind.index_name)
             if label is not None:
                 return label
         return None

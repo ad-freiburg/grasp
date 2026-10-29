@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from itertools import chain
 
 from grasp.manager import KgManager
-from grasp.manager.utils import find_obj_type_from_prefixes, get_common_sparql_prefixes
-from grasp.sparql.types import KgItem, ObjType, Position, Selection, iri_indices
+from grasp.manager.utils import find_term_kind, get_common_sparql_prefixes
+from grasp.sparql.types import KgItem, TermKind, Position, Selection, iri_indices
 from grasp.sparql.utils import (
     find_all,
     infer_position_from_prefix,
@@ -27,7 +27,7 @@ class Term:
     text: str
     suffix: str
     kg_item: KgItem
-    obj_type: ObjType
+    kind: TermKind
     variant: str | None
     # inferred for IRIs, None if unknown
     position: Position | None = None
@@ -37,19 +37,19 @@ class Term:
 
     @property
     def is_literal(self) -> bool:
-        return self.obj_type == ObjType.LITERAL
+        return self.kind == TermKind.LITERAL
 
     @property
     def is_unindexed(self) -> bool:
-        return self.obj_type == ObjType.UNINDEXED
+        return self.kind == TermKind.UNINDEXED
 
     @property
     def is_unknown(self) -> bool:
-        return self.obj_type == ObjType.UNKNOWN
+        return self.kind == TermKind.UNKNOWN
 
     @property
     def is_common(self) -> bool:
-        return self.obj_type == ObjType.COMMON
+        return self.kind == TermKind.COMMON
 
     @property
     def has_label(self) -> bool:
@@ -57,7 +57,7 @@ class Term:
 
     @property
     def selection(self) -> Selection:
-        return Selection(self.kg_item, self.obj_type, self.variant)
+        return Selection(self.kg_item, self.kind, self.variant)
 
 
 def byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int, int]:
@@ -114,7 +114,7 @@ def get_term(
                 label=binding.value,
                 infos=[info] if info else [],
             ),
-            obj_type=ObjType.LITERAL,
+            kind=TermKind.LITERAL,
             variant=None,
             **kwargs,
         )
@@ -127,20 +127,20 @@ def get_term(
     except Exception:
         position = None
 
-    obj_types = iri_indices(position)
+    kinds = iri_indices(position)
 
     # check whether the iri is a valid entity, class, or property
-    for obj_type in obj_types:
-        norm = manager.normalize(iri, obj_type.index_name)
+    for kind in kinds:
+        norm = manager.normalize(iri, kind.index_name)
         if norm is None:
             continue
 
         identifier, variant = norm
-        if not manager.check_identifier(identifier, obj_type.index_name):
+        if not manager.check_identifier(identifier, kind.index_name):
             continue
 
         infos = manager.get_info_for_identifiers_from_index(
-            [identifier], obj_type.index_name
+            [identifier], kind.index_name
         )
         kg_item = manager.build_kg_item_with_info(
             identifier,
@@ -150,32 +150,32 @@ def get_term(
 
         return Term(
             kg_item=kg_item,
-            obj_type=obj_type,
+            kind=kind,
             variant=variant,
             position=position,
             **kwargs,
         )
 
-    term_obj_type = find_obj_type_from_prefixes(iri, manager.prefixes, COMMON_PREFIXES)
+    term_kind = find_term_kind(iri, manager.prefixes, COMMON_PREFIXES)
 
     variant = None
-    if term_obj_type == ObjType.UNINDEXED:
+    if term_kind == TermKind.UNINDEXED:
         # try to get infos from live endpoint
         infos = {}
-        for obj_type in obj_types:
-            norm = manager.normalize(iri, obj_type.index_name)
+        for kind in kinds:
+            norm = manager.normalize(iri, kind.index_name)
             if norm is None:
                 continue
 
-            identifier, obj_type_variant = norm
-            if obj_type_variant:
-                variant = obj_type_variant
+            identifier, norm_variant = norm
+            if norm_variant:
+                variant = norm_variant
 
-            obj_type_infos = manager.get_info_for_identifiers_from_index(
-                [identifier], obj_type.index_name
+            index_infos = manager.get_info_for_identifiers_from_index(
+                [identifier], kind.index_name
             )
             # merge infos across types
-            for key, value in obj_type_infos.get(identifier, {}).items():
+            for key, value in index_infos.get(identifier, {}).items():
                 if key not in infos or not isinstance(infos[key], list):
                     infos[key] = value
                 else:
@@ -191,7 +191,7 @@ def get_term(
             info=infos,
             variants=[variant] if variant else None,
         ),
-        obj_type=term_obj_type,
+        kind=term_kind,
         variant=None,
         position=position,
         **kwargs,
