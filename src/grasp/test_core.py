@@ -5,8 +5,9 @@ import pytest
 
 import grasp.core as core
 from grasp.configs import GraspConfig
-from grasp.core import Limits, format_duration, generate
+from grasp.core import Limits, generate
 from grasp.model import Model, Response, ToolCall
+from grasp.model.base import format_duration
 from grasp.tasks.base import GraspTask
 
 TASK_FNS = {"work", "submit"}

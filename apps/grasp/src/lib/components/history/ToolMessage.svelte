@@ -40,6 +40,17 @@
 
   const qleverLink = null;
 
+  // step and time limits after this call, only set with show_limits
+  const limits = message?.limits ?? null;
+  const limitParts = limits
+    ? [
+        `Step ${limits.steps} of ${limits.max_steps}`,
+        ...(typeof limits.max_time === 'number'
+          ? [`${Math.round(limits.elapsed)} s of ${Math.round(limits.max_time)} s`]
+          : [])
+      ]
+    : [];
+
   function coerceArgValue(value) {
     if (value === null || value === undefined) {
       return '';
@@ -106,6 +117,10 @@
     <AnnotationsResult {result} />
   {:else if result?.formatted}
     <MarkdownContent content={nestBulletsUnderEnumeration(result.formatted)} />
+  {/if}
+
+  {#if limitParts.length}
+    <footer class="limits">{limitParts.join(' · ')}</footer>
   {/if}
 </MessageCard>
 
@@ -174,6 +189,13 @@
 
   .arg-chip__value--truncated::after {
     display: block;
+  }
+
+  .limits {
+    margin-top: var(--spacing-sm);
+    font-size: 0.75rem;
+    color: var(--text-subtle);
+    text-align: right;
   }
 
 </style>

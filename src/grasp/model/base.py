@@ -1,4 +1,5 @@
 import json
+import math
 import time
 from typing import Any
 
@@ -14,6 +15,37 @@ class ToolCallResult(BaseModel):
     formatted: str
 
 
+def format_duration(seconds: int) -> str:
+    minutes, seconds = divmod(seconds, 60)
+    if minutes == 0:
+        return f"{seconds}s"
+    elif seconds == 0:
+        return f"{minutes:,}m"
+    return f"{minutes:,}m {seconds}s"
+
+
+class LimitUsage(BaseModel):
+    # steps and seconds used after a function call, out of the limits
+    steps: int
+    max_steps: int
+    elapsed: float
+    max_time: float | None = None
+
+    def format(self) -> str:
+        steps = min(self.steps, self.max_steps)
+        parts = [
+            f"{steps:,} of {self.max_steps:,} steps ({self.max_steps - steps:,} left)"
+        ]
+        if self.max_time is not None:
+            used = min(self.elapsed, self.max_time)
+            parts.append(
+                f"{format_duration(math.floor(used))} of "
+                f"{format_duration(math.ceil(self.max_time))} "
+                f"({format_duration(math.ceil(self.max_time - used))} left)"
+            )
+        return f"Used {', '.join(parts)}."
+
+
 class ToolCall(BaseModel):
     id: str
     name: str
@@ -23,6 +55,8 @@ class ToolCall(BaseModel):
     error: str | None = None
     # wall-clock time in seconds spent executing this function call
     elapsed: float | None = None
+    # step and time limits after this call, if shown to the model
+    limits: LimitUsage | None = None
 
     @field_validator("result", mode="before")
     @classmethod
