@@ -50,6 +50,10 @@
           : [])
       ]
     : [];
+  const limitReached =
+    limits !== null &&
+    (limits.steps >= limits.max_steps ||
+      (typeof limits.max_time === 'number' && limits.elapsed >= limits.max_time));
 
   function coerceArgValue(value) {
     if (value === null || value === undefined) {
@@ -120,7 +124,9 @@
   {/if}
 
   {#if limitParts.length}
-    <footer class="limits">{limitParts.join(' · ')}</footer>
+    <footer class="limits" class:limits--reached={limitReached}>
+      {limitParts.join(' · ')}{limitReached ? ' · limit reached' : ''}
+    </footer>
   {/if}
 </MessageCard>
 
@@ -196,6 +202,11 @@
     font-size: 0.75rem;
     color: var(--text-subtle);
     text-align: right;
+  }
+
+  .limits--reached {
+    color: var(--color-uni-red);
+    font-weight: 600;
   }
 
 </style>
