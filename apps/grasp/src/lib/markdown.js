@@ -13,10 +13,24 @@ marked.setOptions({
   gfm: true
 });
 
+// raw html in model outputs or notes (e.g. a placeholder like <Title>) is
+// shown as text; the browser would otherwise parse it as a tag
+const escapeHtml = (text) =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+marked.use({
+  renderer: {
+    html({ text }) {
+      return escapeHtml(text);
+    }
+  }
+});
+
 export function renderMarkdown(content) {
   const dirty = marked.parse(content ?? '');
-  return DOMPurify.sanitize(dirty, {
-    ADD_TAGS: ['iframe'],
-    ADD_ATTR: ['allow']
-  });
+  return DOMPurify.sanitize(dirty);
 }
