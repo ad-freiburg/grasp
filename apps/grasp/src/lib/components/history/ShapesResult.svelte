@@ -61,14 +61,31 @@
 
   // properties of a section that are not shown, as a sentence
   function hiddenText(omitted, filtered) {
-    const count = (n) => `${n.toLocaleString()} more ${n === 1 ? 'property' : 'properties'}`;
     const parts = [];
-    if (omitted) parts.push(`${count(omitted)} not shown`);
-    if (filtered) parts.push(`${count(filtered)} hidden because few instances have them`);
+    if (omitted) parts.push(`${count(omitted)} more not shown`);
+    if (filtered) parts.push(`${count(filtered)} more hidden because few instances have them`);
+    return parts.join(', ');
+  }
+
+  const count = (n) => `${n.toLocaleString()} ${n === 1 ? 'property' : 'properties'}`;
+
+  // a page of the outgoing or incoming properties, with what is not shown
+  function pageText(shape) {
+    const parts = [];
+    if (shape.total_pages > 1) parts.push(`page ${shape.page} of ${shape.total_pages}, ${count(shape.total)}`);
+    if (shape.rare) parts.push(`${count(shape.rare)} more hidden because few instances have them`);
+    if (shape.other) parts.push(`${count(shape.other)} ${shape.direction === 'in' ? 'outgoing' : 'incoming'}`);
     return parts.join(', ');
   }
 
   function sections(shape) {
+    if (shape.direction) {
+      const props = shape.direction === 'in' ? incoming(shape) : outgoing(shape);
+      return [
+        { name: shape.direction === 'in' ? 'Incoming' : 'Outgoing', props, hidden: pageText(shape) }
+      ];
+    }
+    // older results show both directions with counts of hidden properties
     return [
       { name: 'Outgoing', props: outgoing(shape), hidden: hiddenText(shape.omitted, shape.filtered) },
       {
@@ -80,7 +97,9 @@
   }
 
   function noteText(shape) {
-    const hidden = shape.omitted + shape.filtered + shape.incoming_omitted + shape.incoming_filtered;
+    const hidden = shape.direction
+      ? shape.total + shape.rare + shape.other
+      : shape.omitted + shape.filtered + shape.incoming_omitted + shape.incoming_filtered;
     return shape.properties.length || hidden ? '' : 'No properties found for this class';
   }
 
