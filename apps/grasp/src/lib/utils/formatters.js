@@ -8,6 +8,37 @@ export function prettyJson(data) {
   }
 }
 
+export function normalizeWhitespace(text) {
+  return String(text).replace(/\s+/g, ' ').trim();
+}
+
+export function toPreviewText(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return normalizeWhitespace(value);
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  try {
+    return normalizeWhitespace(JSON.stringify(value));
+  } catch (error) {
+    console.warn('Failed to stringify function argument', error);
+    return normalizeWhitespace(String(value));
+  }
+}
+
+export function truncatePreview(text, maxLength = 40) {
+  const normalized = normalizeWhitespace(text);
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
 export function flattenFunctionArgs(args, prefix = '') {
   const entries = [];
   if (!args || typeof args !== 'object') {

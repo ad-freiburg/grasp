@@ -76,8 +76,28 @@ class OpenAICompletionsModel(Model):
         msgs = []
         for msg in messages:
             if isinstance(msg.content, str):
-                msgs.append(msg.model_dump())
+                msgs.append({
+                    "role": msg.role,
+                    "content": msg.content,
+                })
                 continue
+
+            if isinstance(msg.content, list):
+                content = []
+                for part in msg.content:
+                    if part.get("type") == "image_url":
+                        url = (part.get("image_url") or {}).get("url")
+                        if url is not None:
+                            content.append({"type": "image_url", "image_url": {"url": url}})
+                    else:
+                        content.append(dict(part))
+                msgs.append({
+                    "role": msg.role,
+                    "content": content,
+                })
+                continue
+
+            assert isinstance(msg.content, Response)
 
             if msg.content.raw is not None:
                 assert isinstance(msg.content.raw, ChatCompletion)
@@ -129,15 +149,20 @@ class OpenAICompletionsModel(Model):
         if config is None:
             config = self.config
 
-        response: ChatCompletion = self.client.chat.completions.create(
-            model=config.model,
-            messages=self.prepare_messages(messages),  # type: ignore
-            tools=[{"type": "function", "function": fn} for fn in fns],  # type: ignore
-            tool_choice=config.tool_choice,  # type: ignore
-            parallel_tool_calls=config.parallel_tool_calls,
-            max_completion_tokens=config.max_completion_tokens,
-            **config.model_kwargs,
-        )
+        # remove reasoning and tools if model doesn't support it
+        kwargs = dict(config.model_kwargs or {})
+        # OpenAICompletions does not support reasoning
+        reasoning = kwargs.pop("reasoning", None)
+
+        kwargs["model"] = config.model
+        kwargs["messages"] = self.prepare_messages(messages)
+        kwargs["max_completion_tokens"] = config.max_completion_tokens
+        if fns:
+            kwargs["tools"] = [{"type": "function", "function": fn} for fn in fns]
+            kwargs["tool_choice"] = config.tool_choice
+            kwargs["parallel_tool_calls"] = config.parallel_tool_calls
+
+        response: ChatCompletion = self.client.chat.completions.create(**kwargs)
 
         check_api_response(response, ChatCompletion, config.model_endpoint)
 
@@ -234,7 +259,40 @@ class OpenAIResponsesModel(Model):
 
         for msg in messages:
             if isinstance(msg.content, str):
-                msgs.append(msg.model_dump())
+                role = msg.role if msg.role != "feedback" else "user"
+                msgs.append({
+                    "type": "message",
+                    "role": role,
+                    "content": [{"type": "input_text", "text": msg.content}],
+                })
+                continue
+
+            if isinstance(msg.content, list):
+                role = msg.role if msg.role != "feedback" else "user"
+                parts = []
+                for part in msg.content:
+                    if part.get("type") == "text":
+                        parts.append({"type": "input_text", "text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        url = part.get("image_url", {}).get("url")
+                        if url is not None:
+                            parts.append({"type": "input_image", "image_url": url})
+                    elif part.get("type") == "input_audio":
+                        audio = part.get("input_audio", {})
+                        data = audio.get("data")
+                        fmt = audio.get("format")
+                        if data is not None and fmt is not None:
+                            parts.append(
+                                {
+                                    "type": "input_audio",
+                                    "input_audio": {"data": data, "format": fmt},
+                                }
+                            )
+                msgs.append({
+                    "type": "message",
+                    "role": role,
+                    "content": parts,
+                })
                 continue
 
             if msg.content.raw is not None:
@@ -327,18 +385,23 @@ class OpenAIResponsesModel(Model):
         if config is None:
             config = self.config
 
+        # remove reasoning and tools if model doesn't support it
+        kwargs = dict(config.model_kwargs or {})
+        if not kwargs.get("reasoning"):
+            kwargs.pop("reasoning", None)
+
+        kwargs["model"] = config.model
+        kwargs["input"] = self.prepare_input(messages)
+        kwargs["max_output_tokens"] = config.max_completion_tokens
+        kwargs["store"] = False
+        kwargs["include"] = ["message.input_image.image_url"]
+        if fns:
+            kwargs["tools"] = [{"type": "function", **fn} for fn in fns]
+            kwargs["tool_choice"] = config.tool_choice
+            kwargs["parallel_tool_calls"] = config.parallel_tool_calls
+
         # use responses API
-        response = self.client.responses.create(
-            model=config.model,
-            input=self.prepare_input(messages),  # type: ignore
-            tools=[{"type": "function", **fn} for fn in fns],  # type: ignore
-            tool_choice=config.tool_choice,  # type: ignore
-            parallel_tool_calls=config.parallel_tool_calls,
-            max_output_tokens=config.max_completion_tokens,
-            **config.model_kwargs,
-            store=False,
-            include=["reasoning.encrypted_content", "message.input_image.image_url"],
-        )
+        response = self.client.responses.create(**kwargs)
 
         check_api_response(response, OpenAIResponse, config.model_endpoint)
 

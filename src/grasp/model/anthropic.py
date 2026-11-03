@@ -46,6 +46,41 @@ class AnthropicModel(Model):
                     msgs.append({"role": "user", "content": msg.content})
                 continue
 
+            if isinstance(msg.content, list):
+                blocks = []
+                for part in msg.content:
+                    part_type = part.get("type")
+                    if part_type == "text":
+                        blocks.append({"type": "text", "text": part.get("text", "")})
+                    elif part_type == "image_url":
+                        url = part.get("image_url", {}).get("url")
+                        if url is not None:
+                            if url.startswith("data:"):
+                                header, _, data = url.partition(",")
+                                media_type = header.removeprefix("data:").split(";", 1)[0]
+                                source: dict[str, Any] = {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": data,
+                                }
+                            else:
+                                source = {"type": "url", "url": url}
+                            blocks.append({"type": "image", "source": source})
+                    elif part_type == "input_audio":
+                        # anthropic does not support audio input
+                        raise ValueError(
+                            "Anthropic models do not support audio inputs."
+                        )
+
+                if msg.role == "system":
+                    system_parts.extend(
+                        block["text"] for block in blocks if block["type"] == "text"
+                    )
+                else:
+                    # user input and feedback
+                    msgs.append({"role": "user", "content": blocks})
+                continue
+
             assert isinstance(msg.content, Response)
             cnt = msg.content
 
