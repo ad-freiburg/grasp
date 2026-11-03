@@ -36,6 +36,15 @@ from grasp.utils import (
 )
 
 
+def format_limits(config: GraspConfig, steps: int, elapsed: float) -> str:
+    remaining = [f"{max(0, config.max_steps - steps):,} of {config.max_steps:,} steps"]
+    if config.max_time is not None:
+        remaining.append(
+            f"{max(0, config.max_time - elapsed):,.0f} of {config.max_time:,.0f} seconds"
+        )
+    return f"Remaining: {', '.join(remaining)}."
+
+
 def system_instructions(
     task: GraspTask,
     managers: list[KgManager],
@@ -95,7 +104,7 @@ def system_instructions(
             "can be used implicitly in SPARQL queries and function calls."
         )
 
-    rules = general_rules() + task.rules()
+    rules = general_rules(task.config) + task.rules()
     if rules:
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
@@ -267,7 +276,8 @@ def generate(
     for msg in messages:
         logger.debug(format_message(msg))
 
-    num_messages = len(messages)
+    # model responses, injected user messages do not count
+    steps = 0
     error: dict | None = None
 
     # keep track of last serialized message to detect loops
@@ -277,7 +287,31 @@ def generate(
     # loops before giving up
     loops = 0
     retries = 0
-    while len(messages) - num_messages < config.max_steps:
+    # one last step once the step or time limit is reached
+    over_limit = False
+    while True:
+        elapsed = time.monotonic() - start
+        if steps >= config.max_steps or (
+            config.max_time is not None and elapsed >= config.max_time
+        ):
+            if over_limit:
+                error = {
+                    "content": "Step or time limit reached",
+                    "reason": "limit",
+                }
+                logger.error(format_error(**error))
+                break
+
+            over_limit = True
+            task.last_step = True
+            limit_msg = (
+                "The step or time limit is reached. You have one last step, "
+                "finish now with your best result."
+            )
+            messages.append(Message.user(limit_msg, name="limit"))
+            yield {"type": "limit", "content": limit_msg}
+            logger.warning(f"Limit reached after {steps:,} steps and {elapsed:.1f}s")
+
         try:
             response = model(messages, fns)
         except APIConnectionError:
@@ -305,6 +339,7 @@ def generate(
             break
 
         messages.append(Message.assistant(response))
+        steps += 1
 
         resp_hash = response.hash()
         if last_resp_hash == resp_hash:
@@ -372,12 +407,19 @@ def generate(
 
             tool_call.result = result
             tool_call.elapsed = time.monotonic() - fn_start
+            if config.show_limits:
+                # only shown to the model
+                tool_call.result += "\n\n" + format_limits(
+                    config,
+                    steps,
+                    time.monotonic() - start,
+                )
 
             yield {
                 "type": "tool",
                 "name": tool_call.name,
                 "args": tool_call.args,
-                "result": tool_call.result,
+                "result": result,
                 "elapsed": tool_call.elapsed,
             }
 

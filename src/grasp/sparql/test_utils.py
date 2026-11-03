@@ -2,6 +2,8 @@ import json
 
 import pytest
 
+from grasp.configs import GraspConfig, KgInfo
+from grasp.manager import KgManager
 from grasp.sparql.types import Position
 from grasp.sparql.utils import (
     SPARQLException,
@@ -17,6 +19,7 @@ from grasp.sparql.utils import (
     parse_string,
     parse_to_string_with_whitespace,
     query_type,
+    backend_params,
 )
 
 SPARQL_PARSER = load_sparql_parser()
@@ -39,6 +42,9 @@ class _FakeResponse:
         chunk_size = self.chunk_size if chunk_size is None else chunk_size
         for i in range(0, len(self.data), chunk_size):
             yield self.data[i : i + chunk_size]
+
+    def raise_for_status(self) -> None:
+        pass
 
     def close(self) -> None:
         self.closed = True
@@ -668,3 +674,47 @@ class TestParseToStringWithWhitespace:
         assert clause is not None
         out = parse_to_string_with_whitespace(clause, sparql.encode())
         assert out == "SELECT ?x"
+
+
+class TestServerTimeout:
+    @pytest.fixture
+    def posted(self, monkeypatch):
+        # capture the POST data and answer with an ASK result
+        posted: list[dict] = []
+
+        def post(endpoint, data, **kwargs):
+            posted.append(data)
+            return _FakeResponse({"boolean": True})
+
+        monkeypatch.setattr("grasp.sparql.utils.requests.post", post)
+        return posted
+
+    def manager(self, **kwargs) -> KgManager:
+        info = KgInfo(endpoint="http://test", **kwargs)
+        return KgManager("test", **info.model_dump())
+
+    def test_backend_params(self):
+        assert backend_params("qlever", (4.0, 6.0)) == {"timeout": "6000ms"}
+        assert backend_params("qlever", 5.5) == {"timeout": "5500ms"}
+        assert backend_params("qlever", None) == {}
+        assert backend_params("other", 30) == {}
+
+    def test_execute_and_info_timeouts(self, posted):
+        manager = self.manager()
+        manager.execute_sparql(
+            "ASK { ?s ?p ?o }",
+            GraspConfig().sparql_request_timeout,
+        )
+        # same timeouts as for info queries
+        manager.execute_sparql("ASK { ?s ?p ?o }", (4.0, 6.0))
+        assert [data["timeout"] for data in posted] == ["30000ms", "6000ms"]
+
+    def test_disabled(self, posted):
+        manager = self.manager(backend="other")
+        manager.execute_sparql("ASK { ?s ?p ?o }", (6.0, 30.0))
+        assert "timeout" not in posted[0]
+
+    def test_params_win(self, posted):
+        manager = self.manager(params={"timeout": "120s"})
+        manager.execute_sparql("ASK { ?s ?p ?o }", (6.0, 30.0))
+        assert posted[0]["timeout"] == "120s"

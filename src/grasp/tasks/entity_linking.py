@@ -6,29 +6,28 @@ from pydantic import BaseModel
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
 from grasp.functions import find_manager
-from grasp.manager import KgManager, format_kgs
+from grasp.manager import KgManager
 from grasp.model import Message
-from grasp.sparql.types import Alternative
 from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.tasks.entities import Entity, prepare_entity
-from grasp.utils import (
-    FunctionCallException,
-    format_enumerate,
-    format_list,
-    format_notes,
-    format_section,
+from grasp.tasks.entities import (
+    Entity,
+    annotation_feedback_instructions,
+    annotation_feedback_system_message,
+    format_annotated_entities,
+    prepare_annotation,
 )
+from grasp.utils import FunctionCallException
 
 
 class TextAnnotation(Entity):
-    start_index: int
-    end_index: int
+    start: int
+    end: int
 
 
 class Text(BaseModel):
     data: str
-    annotate_from: int | None = None
-    annotate_up_to: int | None = None
+    annotate_start: int | None = None
+    annotate_end: int | None = None
     special_instructions: str | None = None
 
     @property
@@ -37,13 +36,11 @@ class Text(BaseModel):
 
     @property
     def start(self) -> int:
-        return self.annotate_from if self.annotate_from is not None else 0
+        return self.annotate_start if self.annotate_start is not None else 0
 
     @property
     def end(self) -> int:
-        return (
-            self.annotate_up_to if self.annotate_up_to is not None else len(self.data)
-        )
+        return self.annotate_end if self.annotate_end is not None else len(self.data)
 
     def trim(self, context: int | None = None) -> tuple["Text", int]:
         # Trims the Text to the start/end values if context is 0, trims the Text to
@@ -52,12 +49,12 @@ class Text(BaseModel):
             raise ValueError(f"context '{context}' must be non negative.")
         if self.start < 0 or self.start >= self.length:
             raise ValueError(
-                f"annotate_from '{self.start}' must be greater than or equal to zero "
+                f"annotate_start '{self.start}' must be greater than or equal to zero "
                 f"and less than length '{self.length}'."
             )
         if self.end <= self.start or self.end > self.length:
             raise ValueError(
-                f"annotate_up_to '{self.end}' must be greater than annotate_from "
+                f"annotate_end '{self.end}' must be greater than annotate_start "
                 f"'{self.start}' and less than or equal to length '{self.length}'."
             )
 
@@ -80,8 +77,8 @@ class Text(BaseModel):
 
         trimmed = Text(
             data=self.data[new_start:new_end],
-            annotate_from=window_start,
-            annotate_up_to=window_end,
+            annotate_start=window_start,
+            annotate_end=window_end,
         )
         return trimmed, new_start
 
@@ -110,49 +107,47 @@ class AnnotationState:
 
     def annotate(
         self,
-        start_index: int,
-        end_index: int,
+        start: int,
+        end: int,
         annotation: Entity | None,
     ) -> Entity | None:
         aws = self.annotation_window.stop - self.annotation_window.start
-        if start_index < 0 or start_index >= aws:
-            raise ValueError(f"Start_index {start_index} out of bounds")
-        if end_index <= start_index or end_index > aws:
-            raise ValueError(f"End_index {end_index} out of bounds")
-        start_index += self.annotation_window.start
-        end_index += self.annotation_window.start
-        current = self.annotations.pop((start_index, end_index), None)
+        if start < 0 or start >= aws:
+            raise ValueError(f"Start {start} out of bounds")
+        if end <= start or end > aws:
+            raise ValueError(f"End {end} out of bounds")
+        start += self.annotation_window.start
+        end += self.annotation_window.start
+        current = self.annotations.pop((start, end), None)
         if annotation is not None:
-            self.annotations[(start_index, end_index)] = annotation
+            self.annotations[(start, end)] = annotation
         return current
 
-    def get(self, start_index: int, end_index: int) -> Entity | None:
-        return self.annotations.get((start_index, end_index), None)
+    def get(self, start: int, end: int) -> Entity | None:
+        return self.annotations.get((start, end), None)
 
     def to_dict(self) -> dict:
         return {
             "formatted": self.format(),
-            "predictions": [
-                {
-                    "entity_reference": a.entity,
-                    "start_char": s + self.offset,
-                    "end_char": e + self.offset,
-                    "identifier": a.identifier,
-                    "label": a.label,
-                }
-                for (s, e), a in self.annotations.items()
+            "annotations": [
+                TextAnnotation(
+                    start=start + self.offset,
+                    end=end + self.offset,
+                    **annot.model_dump(),
+                ).model_dump()
+                for (start, end), annot in self.annotations.items()
             ],
         }
 
     def format(
         self,
-        only_current_window: bool = False,
+        only_annotation_window: bool = False,
         list_entities: bool = True,
     ) -> str:
         # Returns a string with the current annotation state of the text.
         # Annotations are visualized in the following format: '[annotated words](q123)',
         # '[[Nested [annotations](q123)](q456) are supported](q789)'.
-        # If only_current_window is true, only the text of the current annotation window
+        # If only_annotation_window is true, only the text of the current annotation window
         # is shown. If list_entities is true, the used entities are listed at the end.
         result = self.text.data
         # item[0] is (start, end), we sort by end first, then by negative start
@@ -181,7 +176,7 @@ class AnnotationState:
             # prepend current start to the nested list
             nested_list = [start_idx] + nested_list
 
-            if only_current_window and (
+            if only_annotation_window and (
                 start_idx < self.annotation_window.start
                 or end_idx > self.annotation_window.stop
             ):
@@ -193,7 +188,7 @@ class AnnotationState:
             result = prefix + "[" + words + "](" + ann[1].entity + ")" + suffix
 
         # trim to only show the current window
-        if only_current_window:
+        if only_annotation_window:
             added_length = len(result) - self.text.length
             result = result[
                 self.annotation_window.start : self.annotation_window.stop
@@ -201,18 +196,7 @@ class AnnotationState:
             ]
 
         if list_entities:
-            entities: dict[str, Alternative] = {}
-            for annot in self.annotations.values():
-                if annot.identifier in entities:
-                    continue
-
-                entities[annot.identifier] = annot.to_alternative()
-
-            if entities:
-                annotations = format_list(
-                    alt.get_selection_string() for _, alt in sorted(entities.items())
-                )
-                result += f"\n\nAnnotated entities:\n{annotations}"
+            result += format_annotated_entities(self.annotations.values())
 
         return result
 
@@ -221,7 +205,7 @@ def rules() -> list[str]:
     return [
         (
             "If you cannot find any suitable entity mention in the text excerpt, "
-            "leave the excerpt unannotated and just finalize."
+            "leave the excerpt unannotated and just stop."
         ),
         (
             "If an entity is cut off at the end of the text or beginning of the text, "
@@ -257,7 +241,7 @@ You need to **exactly follow these step-by-step instructions** to annotate the t
 2. Determine what the text might be about and think about how the entity mentions might be represented with entities in the knowledge graph(s). 
 3. Use the provided functions to search and explore the knowledge graph(s) to find the entities.
 4. Use the annotate function to annotate every entity mention.
-5. When you are certain that the annotation of the current excerpt is correct and complete use the finalize function."""
+5. When you are certain that the annotation of the current excerpt is correct and complete use the stop function."""
 
 
 def functions(managers: list[KgManager]) -> list[dict]:
@@ -331,14 +315,15 @@ so always keep that in mind and adjust the occurrence_index accordingly.""",
             "strict": True,
         },
         {
-            "name": "show_current_annotations",
-            "description": "Show the current annotation state of the excerpt of the text to annotate.",
+            "name": "show_annotations",
+            "description": "Show the current annotations of the text excerpt, "
+            "including information about the annotated entities.",
             # an empty object schema makes some vllm models generate endlessly
             "parameters": {},
         },
         {
-            "name": "finalize",
-            "description": "Finalize your annotations in the given excerpt and stop the annotation process.",
+            "name": "stop",
+            "description": "Finalize your annotations and stop the annotation process.",
             "parameters": {},
         },
     ]
@@ -387,7 +372,7 @@ def annotate(
     entity: str | None,
     state: AnnotationState,
     known: set[str],
-    know_before_annotate: bool = False,
+    know_before_annotate: bool = True,
     show_state_after_annotation: bool = True,
 ) -> str:
     # A function for the llm to call to annotate the words_to_be_annotated in the text
@@ -399,19 +384,7 @@ def annotate(
     start_idx, end_idx = find_matches(words_to_be_annotated, sequence, occurrence_index)
 
     try:
-        if entity is None:
-            annotation = Entity(identifier="<NIL>", entity="<NIL>")
-        else:
-            annotation = prepare_entity(manager, entity)
-            if know_before_annotate and annotation.identifier not in known:
-                raise FunctionCallException(
-                    f"The entity {entity} cannot be used for annotation "
-                    "without being known from previous function call results. "
-                    "This does not mean it is invalid, but you should verify "
-                    "that it indeed exists (e.g., by listing example triples) "
-                    "in the knowledge graphs first."
-                )
-
+        annotation = prepare_annotation(manager, entity, known, know_before_annotate)
         current = state.annotate(start_idx, end_idx, annotation)
 
     except ValueError as e:
@@ -430,7 +403,7 @@ def annotate(
     if show_state_after_annotation:
         result += (
             "\n\nThe current annotation state of the text excerpt is the following:\n"
-            f"{state.format(only_current_window=True, list_entities=False)}"
+            f"{state.format(only_annotation_window=True, list_entities=False)}"
         )
     return result
 
@@ -466,7 +439,7 @@ def delete_annotation(
     if show_state_after_annotation:
         result += (
             "\n\nThe current annotation state of the text excerpt is the following:\n"
-            f"{state.format(only_current_window=True, list_entities=False)}"
+            f"{state.format(only_annotation_window=True, list_entities=False)}"
         )
     return result
 
@@ -478,11 +451,11 @@ def input_instructions(
         "This is the full text only for context to better understand entities "
         "that are not clear from the excerpt alone.\n\n"
         "=== START FULL TEXT FOR CONTEXT ===\n"
-        f"{state.format(only_current_window=False)}\n"
+        f"{state.format(only_annotation_window=False)}\n"
         "=== END FULL TEXT FOR CONTEXT ===\n\n"
         "The following is the excerpt of the text that you need to annotate:\n\n"
         "=== START TEXT EXCERPT TO ANNOTATE ===\n"
-        f"{state.format(only_current_window=True)}\n"
+        f"{state.format(only_annotation_window=True)}\n"
         "=== END TEXT EXCERPT TO ANNOTATE ===\n"
     )
     if special_instructions:
@@ -504,7 +477,7 @@ def input_and_state(
     except Exception as e:
         raise ValueError(
             "Entity Linking task input must be a dict with a 'data' and optional "
-            "'annotate_from', 'annotate_up_to', and 'special_instructions' fields."
+            "'annotate_start', 'annotate_end', and 'special_instructions' fields."
         ) from e
 
     el_kwargs = config.task_kwargs.get("entity-linking", {})
@@ -555,57 +528,14 @@ def call_function(
             show_state_after_annotate,
         )
 
-    elif fn_name == "show_current_annotations":
-        return state.format(only_current_window=True, list_entities=True)
+    elif fn_name == "show_annotations":
+        return state.format(only_annotation_window=True, list_entities=True)
 
-    elif fn_name == "finalize":
-        return "Finalized the annotation process."
+    elif fn_name == "stop":
+        return "Stopping"
 
     else:
         raise ValueError(f"Unknown function '{fn_name}'")
-
-
-def feedback_system_message(
-    managers: list[KgManager],
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
-) -> str:
-    return "\n\n".join(
-        [
-            "You are a text annotation assistant providing feedback on the "
-            "output of a text annotation system for a given input text.",
-            format_section(
-                "Available knowledge graphs",
-                format_kgs(managers, kg_notes),
-            ),
-            format_section(
-                "General notes across knowledge graphs",
-                format_notes(notes, enumerated=True),
-            ),
-            format_section(
-                "Rules to follow",
-                format_enumerate(rules()) if rules() else "None",
-            ),
-            "Provide your feedback with the give_feedback function.",
-        ]
-    )
-
-
-def feedback_instructions(inputs: list[str], output: dict) -> str:
-    assert inputs, "At least one input is required for feedback"
-
-    sections = []
-    if len(inputs) > 1:
-        sections.append(
-            format_section(
-                "Previous inputs",
-                "\n\n".join(i.strip() for i in inputs[:-1]),
-            )
-        )
-
-    sections.append(format_section("Input", inputs[-1].strip()))
-    sections.append(format_section("Annotations", output["formatted"]))
-    return "\n\n".join(sections)
 
 
 class EntityLinkingTask(GraspTask, FeedbackTask):
@@ -638,7 +568,7 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         )
 
     def done(self, fn_name: str) -> bool:
-        return fn_name == "finalize"
+        return fn_name == "stop"
 
     def setup(self, input: Any) -> str:
         instructions, self.state = input_and_state(input, self.config)
@@ -656,9 +586,17 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
         return EntityLinkingSample
 
     def feedback_system_message(
-        self, kg_notes: dict[str, list[str]], notes: list[str]
+        self,
+        kg_notes: dict[str, list[str]],
+        notes: list[str],
     ) -> str:
-        return feedback_system_message(self.managers, kg_notes, notes)
+        return annotation_feedback_system_message(
+            self.managers,
+            kg_notes,
+            notes,
+            rules(),
+            "text",
+        )
 
     def feedback_instructions(self, inputs: list[str], output: dict) -> str:
-        return feedback_instructions(inputs, output)
+        return annotation_feedback_instructions(inputs, output)

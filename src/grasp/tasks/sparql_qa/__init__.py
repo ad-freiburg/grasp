@@ -527,8 +527,8 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         know_before_answer = task_kwargs.get("know_before_answer", True)
         result = "Stopping"
 
-        if not know_before_answer:
-            # no need to check for known IRIs; accept the answer/cancel call
+        if not know_before_answer or self.last_step:
+            # no check, or no step left to fix unknown IRIs; accept
             return result
 
         # locate the final query to verify: the answer's query, or a

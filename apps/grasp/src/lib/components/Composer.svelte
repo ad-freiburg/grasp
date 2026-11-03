@@ -721,8 +721,8 @@
     // restored data was normalized on submit, so raw and normalized
     // offsets are identical here
     const length = elText.length;
-    const from = payload.annotate_from;
-    const to = payload.annotate_up_to;
+    const from = payload.annotate_start;
+    const to = payload.annotate_end;
     if (
       Number.isInteger(from) &&
       Number.isInteger(to) &&
@@ -778,8 +778,8 @@
       const to =
         from + normalizeElText(elText.slice(elWindow.from, elWindow.to)).length;
       if (from < data.length && to > from) {
-        payload.annotate_from = from;
-        payload.annotate_up_to = Math.min(to, data.length);
+        payload.annotate_start = from;
+        payload.annotate_end = Math.min(to, data.length);
       }
     }
     const instructions = elSpecialInstructions.trim();

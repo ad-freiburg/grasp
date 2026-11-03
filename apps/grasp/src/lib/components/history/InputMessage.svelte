@@ -10,11 +10,14 @@
       ? message.elInput
       : null;
   $: elData = elInput?.data ?? '';
-  $: elFrom = Number.isInteger(elInput?.annotate_from)
-    ? Math.max(0, Math.min(elInput.annotate_from, elData.length))
+  // older inputs use annotate_from and annotate_up_to
+  $: elStartRaw = elInput?.annotate_start ?? elInput?.annotate_from;
+  $: elEndRaw = elInput?.annotate_end ?? elInput?.annotate_up_to;
+  $: elFrom = Number.isInteger(elStartRaw)
+    ? Math.max(0, Math.min(elStartRaw, elData.length))
     : null;
-  $: elUpTo = Number.isInteger(elInput?.annotate_up_to)
-    ? Math.max(0, Math.min(elInput.annotate_up_to, elData.length))
+  $: elUpTo = Number.isInteger(elEndRaw)
+    ? Math.max(0, Math.min(elEndRaw, elData.length))
     : null;
   $: elHasWindow =
     elInput !== null &&

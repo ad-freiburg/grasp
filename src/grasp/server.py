@@ -86,8 +86,20 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
     app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")  # type: ignore
     logger = get_logger("GRASP SERVER", log_level)
 
+    # the agent stops itself at max_time, abort only after a grace time
+    hard_limit = config.max_time + config.grace_time
+
     # keep track of connections and limit to 10 concurrent connections
     active_connections = 0
+
+    # generation workers still finishing their current step after an abort
+    workers: set[asyncio.Task] = set()
+
+    def worker_done(task: asyncio.Task) -> None:
+        workers.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            logger.error(f"Generator worker failed:\n{task.exception()}")
+
     rate_limiter: RateLimiter | None = None
     if config.rate_limit is not None:
         rate_limiter = RateLimiter(config.rate_limit, config.rate_limit_window)
@@ -303,18 +315,16 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             try:
                 output = await asyncio.wait_for(
                     asyncio.to_thread(run_generate),
-                    timeout=config.max_generation_time,
+                    timeout=hard_limit,
                 )
             except asyncio.TimeoutError:
                 stop_event.set()
                 logger.warning(
-                    f"{prefix} Generation hit time limit of {config.max_generation_time:,} seconds"
+                    f"{prefix} Generation hit time limit of {hard_limit:,.0f} seconds"
                 )
                 raise HTTPException(
                     status_code=504,
-                    detail=(
-                        f"Generation hit time limit of {config.max_generation_time:,} seconds"
-                    ),
+                    detail=f"Generation hit time limit of {hard_limit:,.0f} seconds",
                 )
             except HTTPException as e:
                 raise e
@@ -473,18 +483,21 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
 
                 try:
                     while True:
-                        kind, payload = await queue.get()
+                        # abort at the hard limit, also during a running step
+                        remaining = hard_limit - (time.monotonic() - start_time)
+                        try:
+                            kind, payload = await asyncio.wait_for(
+                                queue.get(),
+                                timeout=max(0.0, remaining),
+                            )
+                        except asyncio.TimeoutError:
+                            msg = f"Generation hit time limit of {hard_limit:,.0f} seconds"
+                            logger.warning(f"{prefix} {msg}")
+                            stop_event.set()
+                            await websocket.send_json({"error": msg})
+                            break
 
                         if kind == "data":
-                            # Check if we've exceeded the time limit
-                            current_time = time.monotonic()
-                            if current_time - start_time > config.max_generation_time:
-                                msg = f"Generation hit time limit of {config.max_generation_time:,} seconds"
-                                logger.warning(f"{prefix} {msg}")
-                                stop_event.set()
-                                await websocket.send_json({"error": msg})
-                                break
-
                             output = payload
                             if output["type"] == "output" and output_logger is not None:
                                 output_logger.info(json.dumps(output))
@@ -515,10 +528,10 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
 
                 finally:
                     stop_event.set()
-                    try:
-                        await producer
-                    except Exception as exc:
-                        logger.error(f"{prefix} Generator worker failed:\n{exc}")
+                    # a running step cannot be interrupted, so do not wait for
+                    # the worker, it stops after its current step
+                    workers.add(producer)
+                    producer.add_done_callback(worker_done)
 
         except WebSocketDisconnect:
             pass

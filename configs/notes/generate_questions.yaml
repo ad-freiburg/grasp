@@ -1,4 +1,4 @@
-model: env(MODEL:gpt-5.6-terra)
+model: env(MODEL:gpt-6.1-sol)
 model_provider: env(MODEL_PROVIDER:openai/responses)
 model_endpoint: env(MODEL_ENDPOINT:null)
 model_api_key: env(OPENAI_API_KEY)

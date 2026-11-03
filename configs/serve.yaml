@@ -1,4 +1,4 @@
-model: env(MODEL:gpt-5.6-terra)
+model: env(MODEL:gpt-6.1-sol)
 model_provider: env(MODEL_PROVIDER:openai/responses)
 model_endpoint: env(MODEL_ENDPOINT:null)
 model_api_key: env(MODEL_API_KEY:null)
@@ -20,7 +20,7 @@ tool_choice: env(TOOL_CHOICE:auto)
 
 task_kwargs:
   cea:
-    context_rows: env(CEA_CONTEXT_ROWS:10)
+    context: env(CEA_CONTEXT_ROWS:10)
 
 seed: env(SEED:null)
 
@@ -51,7 +51,8 @@ knowledge_graphs:
 port: env(PORT:6789)
 max_connections: env(MAX_CONNECTIONS:10)
 max_idle_time: env(MAX_IDLE_TIME:300)
-max_generation_time: env(MAX_GENERATION_TIME:300)
+max_time: env(MAX_TIME:300)
+grace_time: env(GRACE_TIME:120)
 log_outputs: env(LOG_OUTPUTS:null)
 log_file: env(LOG_FILE:null)
 share: env(SHARE:null)

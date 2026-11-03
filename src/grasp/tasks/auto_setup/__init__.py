@@ -193,11 +193,13 @@ about and what data it contains.
 You should follow a step-by-step approach:
 1. Look at and understand the current setup. It might also help to look at the \
 default reference setup below.
-2. Thorougly explore the knowledge graph using the provided functions to understand \
+2. Thoroughly explore the knowledge graph using the provided functions to understand \
 its structure. If the current setup is non-empty, validate it and \
 try to find potential issues or improvements.
 3. Update the setup based on your findings. Make sure to verify \
-and execute SPARQL queries against the knowledge graph before setting them.
+and execute SPARQL queries against the knowledge graph before setting them, \
+and check that all {name} you want to be searchable are included in the result \
+of the index SPARQL.
 4. Perform a final review of the setup. If you see any issues, \
 go back to step 2 and repeat, otherwise stop.
 
@@ -232,7 +234,7 @@ is about.
 
 You should follow a step-by-step approach:
 1. Look at and understand the current setup.
-2. Thorougly explore the knowledge graph using the provided functions to \
+2. Thoroughly explore the knowledge graph using the provided functions to \
 discover its scope, structure, and frequently used IRI namespaces. If \
 the current setup is non-empty, validate it and try to find potential issues \
 or improvements.
@@ -256,8 +258,9 @@ and repeat, otherwise stop."""
             "as the indexing and info retrieval processes will take care of that. "
             "The info SPARQL should run in a fraction of a second, whereas "
             "the index SPARQL is allowed to take many minutes or even hours on the full knowledge graph. "
-            "The latter should be tested on a subset of the data (e.g., using VALUES) to stay "
-            "within the lower time limits during development.",
+            "The latter should be tested on multiple diverse subsets of the data (e.g., using VALUES) "
+            "to stay within the lower time limits during development and to make sure that it "
+            "returns the expected results across the board.",
             f"Do not use different scores for the same id in the {name} index SPARQL, as the ids are "
             "required to be returned in contiguous blocks for the indexing process.",
         ]

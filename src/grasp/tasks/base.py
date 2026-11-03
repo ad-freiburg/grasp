@@ -35,6 +35,8 @@ class GraspTask(ABC):
         self.state: Any = None
         self.known = known or set()
         self.example_indices = example_indices or {}
+        # set for the last step after a limit, to relax checks on stopping
+        self.last_step = False
 
     @abstractmethod
     def system_information(self) -> str: ...

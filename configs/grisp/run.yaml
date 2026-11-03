@@ -22,6 +22,7 @@ constraint_timeout: env(CONSTRAINT_TIMEOUT:1.0)
 selection_max_time: env(SELECTION_MAX_TIME:30.0)
 backtrack: env(BACKTRACK:true)
 rerank: env(RERANK:true)
+rerank_discard_below_none: env(RERANK_DISCARD_BELOW_NONE:true)
 check_empty: env(CHECK_EMPTY:true)
 
 fill_order: env(FILL_ORDER:triple-wise-entities-then-properties)

@@ -181,7 +181,7 @@ grasp run configs/run.yaml --task cea --input-format json \
 
 # For entity linking (entity-linking), the input is a JSON object with a "text"
 # field containing "data" (the text to annotate) and optionally
-# "annotate_from"/"annotate_up_to" (character offsets restricting the span to
+# "annotate_start"/"annotate_end" (character offsets restricting the span to
 # annotate) and "special_instructions". The task links mentions in the text to
 # entities in the knowledge graph.
 grasp run configs/run.yaml --task entity-linking --input-format json \
@@ -308,7 +308,7 @@ When running `grasp serve`, the server exposes the following HTTP endpoints (by 
 Server-specific config options (see `ServerConfig` in the
 [config code](src/grasp/configs.py)):
 
-- `port`, `max_connections`, `max_generation_time`, `max_idle_time`
+- `port`, `max_connections`, `max_time` / `grace_time`, `max_idle_time`
 - `log_outputs` / `log_file`: log all outputs / server logs to these files
 - `share`: directory to store shared web app states in
 - `rate_limit` / `rate_limit_window`: max requests per client IP per window (seconds)
@@ -428,6 +428,10 @@ knowledge_graphs:
 
 Fields set under `info` in the config overwrite the ones from `info.json`.
 
+GRASP sends its query timeout to QLever endpoints, so QLever stops queries
+GRASP has given up on. For other SPARQL servers, set `backend: other` under
+`info`.
+
 **Basic Auth**
 
 If an endpoint requires Basic Auth, set the env variables
@@ -467,8 +471,9 @@ task_kwargs:
   sparql-qa:
     know_before_answer: true   # only allow IRIs seen in earlier function call results
   cea:
-    context_rows: null         # rows of table context shown to the model
+    context: null              # rows of table context shown to the model
     know_before_annotate: true
+    show_state_after_annotate: false  # show the rows to annotate after each (de-)annotation
   entity-linking:
     context: null              # characters of surrounding text shown to the model
     know_before_annotate: true

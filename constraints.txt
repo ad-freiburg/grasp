@@ -1,5 +1,7 @@
-# Exact versions of the grasp:latest image built 2026-10-12 (Python 3.12.13), known to work.
+# Exact versions of the grasp:latest image built 2026-10-12 (Python 3.12.13), known to work;
+# accelerate, peft and psutil (grisp extra) from the grisp-server image built 2026-10-22.
 # Used as pip constraints (`-c`) in the Dockerfile; regenerate from a working image with `pip freeze`.
+accelerate==1.15.0
 altair==6.3.0
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -63,8 +65,10 @@ open_clip_torch==3.3.0
 openai==3.10.0
 packaging==26.3
 pandas==3.0.6
+peft==0.19.1
 pillow==12.3.0
 protobuf==7.36.2
+psutil==7.2.2
 pyarrow==25.0.1
 pydantic==2.13.5
 pydantic_core==2.46.5
