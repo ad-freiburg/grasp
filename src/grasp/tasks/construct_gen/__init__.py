@@ -1,3 +1,4 @@
+import re
 from typing import Any, Literal
 
 from grasp.configs import GraspConfig
@@ -86,9 +87,11 @@ what you find in the knowledge graph decide, but together the queries must cover
 all the data without loss."""
 
 _STEPS_WRITE_TEST = """\
-3. Write each CONSTRUCT query and test it independently using propose_construct. \
-Give it a name the first time you test it, and reuse that same name in submit_construct. \
-Check that it runs and produces non-empty, well-formed output."""
+3. Write each CONSTRUCT query and test it independently using propose_construct under a \
+short, descriptive name. Every test saves the query text under that name; testing the same \
+name again replaces the saved text. Check that it runs and produces non-empty, well-formed \
+output. Do not add a LIMIT yourself — the test applies its own, and the saved query must \
+cover all the data."""
 
 # inserted before submission, only when competency questions are given
 _STEPS_COMPETENCY_CHECK = """\
@@ -100,7 +103,8 @@ missing something that has to be fixed. Do not narrow or make the model redundan
 to make the competency questions easier to answer."""
 
 _STEPS_SUBMIT = """\
-{n}. Once every query you planned is ready, submit all queries together using submit_construct.
+{n}. Once every query you planned is ready, call submit_construct with the names of all \
+queries that make up the set. The saved text of each named query is what gets submitted.
 """
 
 
@@ -185,12 +189,16 @@ names and namespace for the same concept across queries, so the queries \
 combine into one coherent, non-conflicting graph.",
 "A field name may carry information the value itself doesn't — a unit, a currency, a scale. \
 Keep that information in the model rather than losing it with the name.",
-"When resubmitting after reviewer feedback, send only the queries you changed \
-or added; to change a query, send it again under the same name. Queries you do \
-not send are kept as they are. To delete a query, list it in the `removed` \
-argument with the reason. The reply lists the full current set; check that it \
-is what you intend."
+"When resubmitting after reviewer feedback, change a query by testing the new \
+version with propose_construct under the same name, then call submit_construct \
+with the names of all queries in the set. The names you send are the whole set: \
+a name you leave out is dropped, and its reason goes in the `removed` argument. \
+Use list_constructs and get_construct to check the saved names and texts instead \
+of relying on earlier messages."
 ]
+
+# trailing LIMIT / OFFSET modifiers, in either order, at the end of a query
+_TRAILING_LIMIT = re.compile(r"(\s*\b(?:LIMIT|OFFSET)\s+\d+)+\s*$", re.IGNORECASE)
 
 class ConstructGenTask(GraspTask):
     name = "construct-gen"
@@ -214,7 +222,11 @@ class ConstructGenTask(GraspTask):
         self.ontology_mode: Literal["guided", "custom"] = "custom"
         self.competency_questions: list[str] = []
 
-        # output state: the current set of submitted queries, by name
+        # latest tested version of every query, by name; written by
+        # propose_construct, "ok" is whether that test produced triples
+        self.drafts: dict[str, dict] = {}
+        # output state: the current set of submitted queries, by name,
+        # copied from drafts by submit_construct
         self.queries: dict[str, dict] = {}
         # whether the most recent submit_construct call was accepted
         self.submit_ok = False
@@ -242,8 +254,10 @@ class ConstructGenTask(GraspTask):
                 "description": (
                     "Test a SPARQL CONSTRUCT query by running it with LIMIT 10. "
                     "Returns the first triples produced so you can verify the output "
-                    "looks semantically correct. Use this to iteratively refine your "
-                    "query before submitting. Give each query a short unique identifier."
+                    "looks semantically correct. The query text is saved under the "
+                    "given name, replacing any earlier text saved under that name; "
+                    "submit_construct submits saved queries by name. Use this to "
+                    "iteratively refine your query before submitting."
                 ),
                 "parameters": {
                     "type": "object",
@@ -255,9 +269,8 @@ class ConstructGenTask(GraspTask):
                         "name": {
                             "type": "string",
                             "description": (
-                                "Short, descriptive identifier for this query. Use the "
-                                "same name when you later include it in "
-                                "submit_construct."
+                                "Short, descriptive identifier for this query. Testing "
+                                "again under the same name replaces the saved text."
                             ),
                         },
                     },
@@ -267,49 +280,64 @@ class ConstructGenTask(GraspTask):
                 "strict": True,
             },
             {
-                "name": "submit_construct",
+                "name": "list_constructs",
                 "description": (
-                    "Submit or update the SPARQL CONSTRUCT queries. The current "
-                    "set will be saved and executed to produce the semantic "
-                    "RDF output. Only call this once you are satisfied with the "
-                    "queries after testing them with propose_construct."
+                    "List the names of all saved queries, with whether each is in "
+                    "the submitted set and whether its last test succeeded."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+            {
+                "name": "get_construct",
+                "description": (
+                    "Return the exact saved text of a query, i.e. the version from "
+                    "its latest propose_construct test."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "queries": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the saved query.",
+                        },
+                    },
+                    "required": ["name"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            },
+            {
+                "name": "submit_construct",
+                "description": (
+                    "Submit the set of SPARQL CONSTRUCT queries by name. The saved "
+                    "text of each named query (its latest propose_construct test) is "
+                    "executed to produce the semantic RDF output. Only call this once "
+                    "you are satisfied with the queries after testing them."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "names": {
                             "type": "array",
                             "description": (
-                                "On your first call, all queries. On later calls, "
-                                "only queries that are new or changed. A query with "
-                                "the same name as a submitted one replaces it; "
-                                "submitted queries you do not send are kept unchanged."
+                                "Names of all queries in the set, every time you call "
+                                "this. A previously submitted query whose name is not "
+                                "listed is dropped from the set."
                             ),
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "name": {
-                                        "type": "string",
-                                        "description": (
-                                            "Short, unique, descriptive identifier "
-                                            "for this query."
-                                        ),
-                                    },
-                                    "sparql": {
-                                        "type": "string",
-                                        "description": "The SPARQL CONSTRUCT query.",
-                                    },
-                                },
-                                "required": ["name", "sparql"],
-                                "additionalProperties": False,
-                            },
+                            "items": {"type": "string"},
                         },
                         "removed": {
                             "type": ["array", "null"],
                             "description": (
-                                "Submitted queries to delete, each with the reason "
-                                "it is no longer needed. Use null or an empty list "
-                                "when nothing is deleted."
+                                "For previously submitted queries you are dropping, "
+                                "the reason each is no longer needed. Use null or an "
+                                "empty list when nothing is dropped."
                             ),
                             "items": {
                                 "type": "object",
@@ -335,7 +363,7 @@ class ConstructGenTask(GraspTask):
                             },
                         },
                     },
-                    "required": ["queries", "removed"],
+                    "required": ["names", "removed"],
                     "additionalProperties": False,
                 },
                 "strict": True,
@@ -350,55 +378,106 @@ class ConstructGenTask(GraspTask):
         example_indices: dict | None,
     ) -> str:
         if fn_name == "propose_construct":
-            sparql = fn_args["sparql"].strip()
             name = fn_args["name"].strip()
+            if not name:
+                return "The query needs a non-empty name. Please test it again with a name."
 
-            if "LIMIT" not in sparql.upper():
-                sparql += "\nLIMIT 10"
+            # the saved text becomes the submitted query, so a LIMIT/OFFSET the
+            # model added for testing would truncate the full output
+            sparql = fn_args["sparql"].strip()
+            saved = _TRAILING_LIMIT.sub("", sparql).strip()
+            note = (
+                "\nNote: the trailing LIMIT/OFFSET was removed from the saved "
+                "query, since the saved query must cover all the data."
+                if saved != sparql else ""
+            )
+
+            # save before running, so the latest test is always what is saved,
+            # also when it fails
+            self.drafts[name] = {"name": name, "sparql": saved, "ok": False}
 
             manager = self.data_manager
 
             try:
                 result = _construct_request(
-                    sparql,
+                    saved + "\nLIMIT 10",
                     manager.endpoint,
                     manager.headers,
                     manager.params,
                     timeout=self.config.sparql_query_timeout,
                 )
             except FunctionCallException as e:
-                return str(e)
+                return f"{e}\nSaved as '{name}', but it cannot be submitted until a test succeeds.{note}"
             except Exception as e:
-                return f"Error executing CONSTRUCT query:\n{e}"
+                return (
+                    f"Error executing CONSTRUCT query:\n{e}\nSaved as '{name}', "
+                    f"but it cannot be submitted until a test succeeds.{note}"
+                )
 
             lines = [ln for ln in result.strip().splitlines() if ln.strip()]
             if not lines:
                 return (
                     f"Query '{name}' returned no triples. "
-                    "Check your WHERE clause, table filter, and NULL handling."
+                    "Check your WHERE clause, table filter, and NULL handling. "
+                    f"Saved as '{name}', but it cannot be submitted until a test "
+                    f"succeeds.{note}"
                 )
 
+            self.drafts[name]["ok"] = True
             preview = "\n".join(lines[:20]) # at most 20 triples
-            return f"Preview for '{name}' ({len(lines)} triples with LIMIT 10):\n{preview}"
+            return (
+                f"Preview for '{name}' ({len(lines)} triples with LIMIT 10):\n{preview}\n"
+                f"Saved as '{name}'.{note}"
+            )
+
+        elif fn_name == "list_constructs":
+            if not self.drafts:
+                return "No queries saved yet. Test a query with propose_construct to save it."
+
+            rows = []
+            for name, draft in self.drafts.items():
+                submitted = self.queries.get(name)
+                if not draft["ok"]:
+                    status = "last test failed"
+                    if submitted is not None:
+                        status += "; the submitted set holds an earlier working version"
+                elif submitted is None:
+                    status = "not submitted"
+                elif submitted["sparql"] != draft["sparql"]:
+                    status = "submitted, but tested again since; resubmit to send the new version"
+                else:
+                    status = "submitted"
+                rows.append(f"{name}: {status}")
+            return (
+                f"Saved queries ({len(rows)}), submitted set has {len(self.queries)}:\n"
+                + format_enumerate(rows)
+            )
+
+        elif fn_name == "get_construct":
+            name = fn_args["name"].strip()
+            draft = self.drafts.get(name)
+            if draft is None:
+                return (
+                    f"No saved query named '{name}'. Saved names: "
+                    f"{', '.join(self.drafts) or 'none'}."
+                )
+            status = "last test succeeded" if draft["ok"] else "last test failed"
+            return f"Saved text of '{name}' ({status}):\n{draft['sparql']}"
 
         elif fn_name == "submit_construct":
             self.submit_ok = False
-            queries = fn_args.get("queries") or []
+            names = [n.strip() for n in fn_args.get("names") or []]
             removed = fn_args.get("removed") or []
 
-            if not queries and not removed:
+            if not names:
                 return (
-                    "Your call contained no queries and no removals, so nothing "
-                    "was changed. Call submit_construct again."
+                    "Your call contained no query names, so nothing was changed. "
+                    "Call submit_construct again with the names of all queries in the set."
                 )
 
-            names = [q["name"].strip() for q in queries]
             if any(not n for n in names):
-                return (
-                    "Every query needs a non-empty name. Please resubmit with "
-                    "a descriptive name for each query."
-                )
- 
+                return "Every name must be non-empty. Nothing was changed."
+
             seen: set[str] = set()
             duplicates: set[str] = set()
             for n in names:
@@ -407,29 +486,47 @@ class ConstructGenTask(GraspTask):
                 seen.add(n)
             if duplicates:
                 return (
-                    "Query names must be unique. Found duplicate name(s): "
-                    f"{', '.join(sorted(duplicates))}. Please resubmit with a "
-                    "unique name for each query."
+                    f"Duplicate name(s): {', '.join(sorted(duplicates))}. Each "
+                    "query is listed once. Nothing was changed."
                 )
 
-            unknown = [r["name"].strip() for r in removed if r["name"].strip() not in self.queries]
+            unknown = [n for n in names if n not in self.drafts]
             if unknown:
                 return (
-                    f"Cannot remove {', '.join(unknown)}: no submitted query has "
-                    "that name. Nothing was changed."
+                    f"No saved query named {', '.join(unknown)}. Test each query with "
+                    "propose_construct first. Saved names: "
+                    f"{', '.join(self.drafts) or 'none'}. Nothing was changed."
                 )
 
-            # update a copy, so a rejected call leaves the current set untouched
-            new = dict(self.queries)
-            for r in removed:
-                new.pop(r["name"].strip())
-            added = [n for n in names if n not in new]
-            replaced = [n for n in names if n in new]
-            for q in queries:
-                new[q["name"].strip()] = {"name": q["name"].strip(), "sparql": q["sparql"].strip()}
+            failed = [n for n in names if not self.drafts[n]["ok"]]
+            if failed:
+                return (
+                    f"The latest test of {', '.join(failed)} failed or returned no "
+                    "triples. Fix and test again with propose_construct before "
+                    "submitting. Nothing was changed."
+                )
 
-            if not new:
-                return "This would leave no queries at all. Nothing was changed."
+            removed_names = [r["name"].strip() for r in removed]
+            bad_removed = [
+                n for n in removed_names
+                if n not in self.queries or n in seen
+            ]
+            if bad_removed:
+                return (
+                    f"Cannot give a removal reason for {', '.join(bad_removed)}: "
+                    "`removed` is only for previously submitted queries that are not "
+                    "in `names`. Nothing was changed."
+                )
+
+            old = self.queries
+            new = {
+                n: {"name": n, "sparql": self.drafts[n]["sparql"]}
+                for n in names
+            }
+            added = [n for n in new if n not in old]
+            updated = [n for n in new if n in old and old[n]["sparql"] != new[n]["sparql"]]
+            dropped = [n for n in old if n not in new]
+            not_submitted = [n for n, d in self.drafts.items() if d["ok"] and n not in new]
 
             self.queries = new
             self.removed_queries.extend( # accumulated reasons across rounds
@@ -439,11 +536,12 @@ class ConstructGenTask(GraspTask):
             self.submit_ok = True
             return (
                 f"CONSTRUCT queries saved. Added: {', '.join(added) or 'none'}. "
-                f"Replaced: {', '.join(replaced) or 'none'}. "
-                f"Removed: {', '.join(r['name'].strip() for r in removed) or 'none'}. "
-                f"Current set ({len(new)}): {', '.join(new)}."
+                f"Updated: {', '.join(updated) or 'none'}. "
+                f"Dropped: {', '.join(dropped) or 'none'}. "
+                f"Current set ({len(new)}): {', '.join(new)}. "
+                f"Tested but not in the set: {', '.join(not_submitted) or 'none'}."
             )
- 
+
         raise FunctionCallException(f"Unknown function: {fn_name}")
  
     def done(self, fn_name: str) -> bool:
