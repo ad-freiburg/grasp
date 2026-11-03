@@ -79,6 +79,13 @@ Use rdfs:label or similar properties to get labels instead.',
 relevant information to solve the task is recommended. \
     ",
     ]
+    if config.show_limits:
+        rules.append(
+            "Function call results end with your remaining steps and optionally time. \
+When only few steps or little time remain, stop exploring and settle on your best \
+result so far. Once a limit is reached, you get one last step to finish."
+        )
+    return rules
 
 
 def multimodal_rules(isMultimodal: bool) -> list[str]:
@@ -88,13 +95,6 @@ def multimodal_rules(isMultimodal: bool) -> list[str]:
         "You MUST use ALL user provided inputs before canceling the task.",
         "When the Answer can not be provided by structured text data alone, try to use images or other data queried from the KG"
     ]
-    if config.show_limits:
-        rules.append(
-            "Function call results end with your remaining steps and optionally time. \
-When only few steps or little time remain, stop exploring and settle on your best \
-result so far. Once a limit is reached, you get one last step to finish."
-        )
-    return rules
     if (isMultimodal):
         rules.append("The current conversation includes directly accessible image input.")
         rules.append("When a current-message image is relevant, first inspect it yourself using your\
