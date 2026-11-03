@@ -444,7 +444,7 @@ def prepare_ground_truth(
         for annot in sample.annotations:
             full_annot = prepare_entity(manager, annot.entity)
             # indices are relative to the annotation window, as in annotate
-            annots.annotate(annot.start_index, annot.end_index, full_annot)
+            annots.annotate(annot.start, annot.end, full_annot)
 
         return annots.format()
 

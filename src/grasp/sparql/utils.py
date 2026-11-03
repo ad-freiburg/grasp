@@ -970,6 +970,21 @@ def stream_with_timeout(
         response.close()
 
 
+def backend_params(
+    backend: str,
+    request_timeout: float | tuple[float, float] | None,
+) -> dict[str, str]:
+    if backend == "qlever":
+        if isinstance(request_timeout, tuple):
+            request_timeout = request_timeout[1]
+        if request_timeout is None:
+            return {}
+        # stops QLever from running queries we gave up on
+        return {"timeout": f"{round(request_timeout * 1000)}ms"}
+
+    return {}
+
+
 def execute(
     sparql: str,
     endpoint: str,
@@ -980,6 +995,7 @@ def execute(
     params: dict[str, str] | None = None,
     sparql_result_max_rows: int | None = None,
     auth: tuple[str, str] | None = None,
+    backend: str = "other",
     **kwargs: Any,
 ) -> SelectResult | AskResult:
     if headers is None:
@@ -998,7 +1014,11 @@ def execute(
                     "User-Agent": "grasp-rdf",
                     **headers,
                 },
-                data={**params, "query": sparql},
+                data={
+                    **backend_params(backend, request_timeout),
+                    **params,
+                    "query": sparql,
+                },
                 timeout=request_timeout,
                 auth=auth,
                 stream=True,

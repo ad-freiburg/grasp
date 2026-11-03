@@ -67,8 +67,8 @@ def get_task(
     return _REGISTRY[task](managers, config, known, example_indices)
 
 
-def rules() -> list[str]:
-    return [
+def rules(config: GraspConfig) -> list[str]:
+    rules = [
         "Explain your thought process before each step and function call.",
         "Do not ask the user for clarification, neither on the initial input nor on \
 follow-up inputs or feedback. When the task input is incomplete or \
@@ -82,3 +82,10 @@ Use rdfs:label or similar properties to get labels instead.',
         "If example or shape indices are available, using them early on to quickly find \
 relevant information to solve the task is recommended.",
     ]
+    if config.show_limits:
+        rules.append(
+            "Function call results end with your remaining steps and optionally time. \
+When only few steps or little time remain, stop exploring and settle on your best \
+result so far. Once a limit is reached, you get one last step to finish."
+        )
+    return rules

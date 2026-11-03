@@ -1,7 +1,7 @@
 <script>
   export let text = '';
-  export let annotateFrom = null;
-  export let annotateUpTo = null;
+  export let annotateStart = null;
+  export let annotateEnd = null;
   export let predictions = [];
 
   const NIL = '<NIL>';
@@ -44,8 +44,9 @@
   function buildSpans(value, preds) {
     const spans = [];
     for (const [index, pred] of (Array.isArray(preds) ? preds : []).entries()) {
-      const start = pred?.start_char;
-      const end = pred?.end_char;
+      // older outputs use start_char, end_char, and entity_reference
+      const start = pred?.start ?? pred?.start_char;
+      const end = pred?.end ?? pred?.end_char;
       if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
       if (start < 0 || end <= start || end > value.length) continue;
       spans.push({
@@ -53,8 +54,8 @@
         start,
         end,
         entity:
-          typeof pred.entity_reference === 'string'
-            ? pred.entity_reference
+          typeof (pred.entity ?? pred.entity_reference) === 'string'
+            ? pred.entity ?? pred.entity_reference
             : '',
         identifier:
           typeof pred.identifier === 'string' ? pred.identifier : null,
@@ -106,12 +107,12 @@
   $: normalizedText = normalize(text);
   $: spans = buildSpans(normalizedText, predictions);
   $: windowStart =
-    Number.isInteger(annotateFrom) && annotateFrom > 0
-      ? Math.min(annotateFrom, normalizedText.length)
+    Number.isInteger(annotateStart) && annotateStart > 0
+      ? Math.min(annotateStart, normalizedText.length)
       : null;
   $: windowEnd =
-    Number.isInteger(annotateUpTo) && annotateUpTo < normalizedText.length
-      ? Math.max(annotateUpTo, 0)
+    Number.isInteger(annotateEnd) && annotateEnd < normalizedText.length
+      ? Math.max(annotateEnd, 0)
       : null;
   $: hasWindow = windowStart !== null || windowEnd !== null;
   $: segments = buildSegments(normalizedText, spans, windowStart, windowEnd);

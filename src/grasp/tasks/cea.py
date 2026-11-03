@@ -7,18 +7,17 @@ from universal_ml_utils.table import generate_table
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
 from grasp.functions import find_manager
-from grasp.manager import KgManager, format_kgs
+from grasp.manager import KgManager
 from grasp.model import Message
-from grasp.sparql.types import Alternative
 from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.tasks.entities import Entity, prepare_entity
-from grasp.utils import (
-    FunctionCallException,
-    format_enumerate,
-    format_list,
-    format_notes,
-    format_section,
+from grasp.tasks.entities import (
+    Entity,
+    annotation_feedback_instructions,
+    annotation_feedback_system_message,
+    format_annotated_entities,
+    prepare_annotation,
 )
+from grasp.utils import FunctionCallException
 
 
 class CellAnnotation(Entity):
@@ -46,17 +45,17 @@ class Table(BaseModel):
             return self, 0
         elif self.annotate_rows is None:
             # all rows are to be annotated
-            # context_rows does not apply
+            # context does not apply
             return self, 0
 
         start = max(0, min(self.annotate_rows) - context)
         end = min(self.height, max(self.annotate_rows) + context + 1)
 
-        trimmed = Table(
-            header=self.header,
-            data=self.data[start:end],
-            annotate_rows=[r - start for r in self.annotate_rows],
-            annotate_columns=self.annotate_columns,
+        trimmed = self.model_copy(
+            update={
+                "data": self.data[start:end],
+                "annotate_rows": [r - start for r in self.annotate_rows],
+            }
         )
         return trimmed, start
 
@@ -64,11 +63,11 @@ class Table(BaseModel):
         def clean(s: str) -> str:
             return " ".join(s.strip().split())
 
-        cleaned = Table(
-            header=[clean(h) for h in self.header],
-            data=[[clean(cell) for cell in row] for row in self.data],
-            annotate_rows=self.annotate_rows,
-            annotate_columns=self.annotate_columns,
+        cleaned = self.model_copy(
+            update={
+                "header": [clean(h) for h in self.header],
+                "data": [[clean(cell) for cell in row] for row in self.data],
+            }
         )
         return cleaned
 
@@ -86,17 +85,17 @@ class CeaSample(Sample):
 
 
 class AnnotationState:
-    def __init__(self, table: Table, context_rows: int | None = None) -> None:
+    def __init__(self, table: Table, context: int | None = None) -> None:
         assert len(table.header) > 0, "Header must not be empty"
         assert all(len(row) == len(table.header) for row in table.data), (
             "All rows must have the same length as the header"
         )
 
-        if context_rows is None:
+        if context is None:
             self.table = table
             self.offset = 0
         else:
-            trimmed, offset = table.trim(context_rows)
+            trimmed, offset = table.trim(context)
             self.table = trimmed
             self.offset = offset
 
@@ -160,7 +159,14 @@ class AnnotationState:
         for r in range(self.table.height):
             yield [self.get(r, c) for c in range(self.table.width)]
 
-    def format(self) -> str:
+    def format(
+        self,
+        only_annotation_window: bool = False,
+        list_entities: bool = True,
+    ) -> str:
+        # If only_annotation_window is true, only the rows to annotate are shown
+        # (with their original row indices). If list_entities is true, the used
+        # entities are listed at the end.
         data = [
             [str(i)]
             + [
@@ -168,6 +174,7 @@ class AnnotationState:
                 for col, annot in zip(row, annots)
             ]
             for i, (row, annots) in enumerate(zip(self.table.data, self.iter()))
+            if not only_annotation_window or self.rows is None or i in self.rows
         ]
         header = ["Row"] + [
             f"Column {i}: {name}" for i, name in enumerate(self.table.header)
@@ -178,25 +185,17 @@ class AnnotationState:
             max_column_width=sys.maxsize,
         )
 
-        entities: dict[str, Alternative] = {}
-        for annot in self.annotations.values():
-            if annot.identifier in entities:
-                continue
-
-            entities[annot.identifier] = annot.to_alternative()
-
-        if entities:
-            annotations = format_list(
-                alt.get_selection_string() for _, alt in sorted(entities.items())
-            )
-            table += f"\n\nAnnotated entities:\n{annotations}"
+        if list_entities:
+            table += format_annotated_entities(self.annotations.values())
 
         return table
 
 
 def rules() -> list[str]:
     return [
-        "If you cannot find a suitable entity for a cell, leave it unannotated.",
+        "If a cell does not refer to an entity, leave it unannotated.",
+        "If a cell refers to an entity that you cannot find in the knowledge graphs, "
+        "annotate it with null.",
         "If there are multiple suitable entities for a cell, choose the one that "
         "fits best in the context of the table, or the one that is more popular/general.",
         "If you find common patterns within or across rows and columns, executing a corresponding SPARQL query "
@@ -248,8 +247,8 @@ This function overwrites any previous annotation of the cell.""",
                         "description": "The column index of the cell to annotate (0-based, ignoring header)",
                     },
                     "entity": {
-                        "type": "string",
-                        "description": "The IRI of the entity to annotate the cell with",
+                        "type": ["string", "null"],
+                        "description": "The IRI of the entity to annotate the cell with, or null if unknown",
                     },
                 },
                 "required": ["kg", "row", "column", "entity"],
@@ -279,7 +278,8 @@ This function overwrites any previous annotation of the cell.""",
         },
         {
             "name": "show_annotations",
-            "description": "Show the current annotations for the table.",
+            "description": "Show the current annotations of the rows to annotate, "
+            "including information about the annotated entities.",
             # an empty object schema makes some vllm models generate endlessly
             "parameters": {},
         },
@@ -297,35 +297,45 @@ def annotate(
     kg: str,
     row: int,
     column: int,
-    entity: str,
+    entity: str | None,
     state: AnnotationState,
     known: set[str],
-    know_before_annotate: bool = False,
+    know_before_annotate: bool = True,
+    show_state_after_annotation: bool = False,
 ) -> str:
     manager, _ = find_manager(managers, kg)
 
     try:
-        annotation = prepare_entity(manager, entity)
-        if know_before_annotate and annotation.identifier not in known:
-            raise FunctionCallException(
-                f"The entity {entity} cannot be used for annotation "
-                "without being known from previous function call results. "
-                "This does not mean it is invalid, but you should verify "
-                "that it indeed exists (e.g., by listing example triples) "
-                "in the knowledge graphs first."
-            )
-
+        annotation = prepare_annotation(manager, entity, known, know_before_annotate)
         current = state.annotate(row, column, annotation)
     except ValueError as e:
         raise FunctionCallException(str(e)) from e
 
     if current is None:
-        return f"Annotated cell ({row}, {column}) with entity {entity}"
+        result = f"Annotated cell ({row}, {column}) with entity {annotation.entity}"
     else:
-        return f"Updated annotation of cell ({row}, {column}) from {current.entity} to {entity}"
+        result = (
+            f"Updated annotation of cell ({row}, {column}) "
+            f"from {current.entity} to {annotation.entity}"
+        )
+    if show_state_after_annotation:
+        result += format_state_after_annotation(state)
+    return result
 
 
-def delete(row: int, column: int, state: AnnotationState) -> str:
+def format_state_after_annotation(state: AnnotationState) -> str:
+    return (
+        "\n\nThe current annotation state of the rows to annotate is the following:\n"
+        f"{state.format(only_annotation_window=True, list_entities=False)}"
+    )
+
+
+def delete_annotation(
+    row: int,
+    column: int,
+    state: AnnotationState,
+    show_state_after_annotation: bool = False,
+) -> str:
     try:
         current = state.annotate(row, column, None)
     except ValueError as e:
@@ -334,7 +344,10 @@ def delete(row: int, column: int, state: AnnotationState) -> str:
     if current is None:
         raise FunctionCallException(f"Cell ({row}, {column}) is not annotated")
 
-    return f"Deleted annotation {current.entity} from cell ({row}, {column})"
+    result = f"Deleted annotation {current.entity} from cell ({row}, {column})"
+    if show_state_after_annotation:
+        result += format_state_after_annotation(state)
+    return result
 
 
 def input_instructions(state: AnnotationState) -> str:
@@ -375,9 +388,9 @@ def input_and_state(input: Any, config: GraspConfig) -> tuple[str, AnnotationSta
         ) from e
 
     task_kwargs = config.task_kwargs.get("cea", {})
-    context_rows = task_kwargs.get("context_rows", None)
+    context = task_kwargs.get("context", None)
 
-    annots = AnnotationState(table, context_rows)
+    annots = AnnotationState(table, context)
     instructions = input_instructions(annots)
     return instructions, annots
 
@@ -398,6 +411,7 @@ def call_function(
 
     cea_kwargs = config.task_kwargs.get("cea", {})
     know_before_annotate = cea_kwargs.get("know_before_annotate", True)
+    show_state_after_annotate = cea_kwargs.get("show_state_after_annotate", False)
 
     if fn_name == "annotate":
         return annotate(
@@ -409,62 +423,25 @@ def call_function(
             state,
             known,
             know_before_annotate,
+            show_state_after_annotate,
         )
 
     elif fn_name == "delete_annotation":
-        return delete(fn_args["row"], fn_args["column"], state)
+        return delete_annotation(
+            fn_args["row"],
+            fn_args["column"],
+            state,
+            show_state_after_annotate,
+        )
 
     elif fn_name == "show_annotations":
-        return state.format()
+        return state.format(only_annotation_window=True)
 
     elif fn_name == "stop":
         return "Stopping"
 
     else:
         raise ValueError(f"Unknown function {fn_name}")
-
-
-def feedback_system_message(
-    managers: list[KgManager],
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
-) -> str:
-    return "\n\n".join(
-        [
-            "You are a table annotation assistant providing feedback on the "
-            "output of a table annotation system for a given input table.",
-            format_section(
-                "Available knowledge graphs",
-                format_kgs(managers, kg_notes),
-            ),
-            format_section(
-                "General notes across knowledge graphs",
-                format_notes(notes, enumerated=True),
-            ),
-            format_section(
-                "Rules to follow",
-                format_enumerate(rules()) if rules() else "None",
-            ),
-            "Provide your feedback with the give_feedback function.",
-        ]
-    )
-
-
-def feedback_instructions(inputs: list[str], output: dict) -> str:
-    assert inputs, "At least one input is required for feedback"
-
-    sections = []
-    if len(inputs) > 1:
-        sections.append(
-            format_section(
-                "Previous inputs",
-                "\n\n".join(i.strip() for i in inputs[:-1]),
-            )
-        )
-
-    sections.append(format_section("Input", inputs[-1].strip()))
-    sections.append(format_section("Annotations", output["formatted"]))
-    return "\n\n".join(sections)
 
 
 class CeaTask(GraspTask, FeedbackTask):
@@ -515,9 +492,17 @@ class CeaTask(GraspTask, FeedbackTask):
         return CeaSample
 
     def feedback_system_message(
-        self, kg_notes: dict[str, list[str]], notes: list[str]
+        self,
+        kg_notes: dict[str, list[str]],
+        notes: list[str],
     ) -> str:
-        return feedback_system_message(self.managers, kg_notes, notes)
+        return annotation_feedback_system_message(
+            self.managers,
+            kg_notes,
+            notes,
+            rules(),
+            "table",
+        )
 
     def feedback_instructions(self, inputs: list[str], output: dict) -> str:
-        return feedback_instructions(inputs, output)
+        return annotation_feedback_instructions(inputs, output)

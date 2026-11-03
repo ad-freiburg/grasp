@@ -211,12 +211,23 @@ def display_nl_iri(nl_iri: dict, index: int = 0) -> str:
     return f"{BOI}{values[min(index, len(values) - 1)]}{EOI}"
 
 
+# constraint of a placeholder, for the webapp
+@dataclass
+class Constraint:
+    sparql: str | None = None
+    # None if unconstrained
+    candidates: int | None = None
+    # why unconstrained
+    reason: str | None = None
+
+
 # per-placeholder state: alternatives left to try, which wording to search
 # next, the constraint shared by all wordings, and identifiers already offered
 @dataclass
 class Candidates:
     obj_types: list[ObjType]
     identifier_maps: dict[ObjType, dict[str, list[str]] | None]
+    constraint: Constraint = field(default_factory=Constraint)
     alternatives: OrderedAlternatives = field(default_factory=list)
     next_query: int = 0
     seen: set[str] = field(default_factory=set)
@@ -751,12 +762,13 @@ def find_candidate_ids(
     skip_constraint: bool = False,
     max_candidates: int | None = None,
     constraint_timeout: float = 6.0,
-) -> tuple[list[ObjType], dict[ObjType, dict[str, list[str]] | None]]:
+) -> tuple[list[ObjType], dict[ObjType, dict[str, list[str]] | None], Constraint]:
     # prefix left of the current placeholder, with any unresolved placeholders
     # turned into variables so it parses
     prefix = replace_unresolved_placeholders(sparql.split(BOR, 1)[0])
     sparql_query_type = query_type(prefix, manager.sparql_parser, is_prefix=True)
     constraint_sparql = None
+    constraint = Constraint()
 
     try:
         if not skip_constraint and sparql_query_type == "select":
@@ -766,7 +778,10 @@ def find_candidate_ids(
                 limit=None if max_candidates is None else max_candidates + 1,
             )
             logger.debug(f"Derived constraint SPARQL:\n{constraint_sparql}")
+            if constraint_sparql is None:
+                constraint.reason = "no resolved neighbours"
         else:
+            constraint.reason = "disabled" if skip_constraint else "no SELECT query"
             position = infer_position_from_prefix(prefix, manager.sparql_parser)
 
         logger.debug(
@@ -775,6 +790,7 @@ def find_candidate_ids(
         )
     except Exception as e:
         logger.debug(f"Error analyzing SPARQL:\n{e}")
+        constraint.reason = "query could not be analyzed"
         # full search across both indices as fallback
         position = None
 
@@ -791,6 +807,7 @@ def find_candidate_ids(
     if not skip_constraint and position is not None and constraint_sparql is not None:
         # can only be one
         obj_type = obj_types[0]
+        constraint.sparql = constraint_sparql
         try:
             logger.debug(
                 f"Searching for candidate IRIs at position {position.value} "
@@ -808,14 +825,16 @@ def find_candidate_ids(
                 f"Got {len(identifier_map)} candidate IRIs for position {position.value}"
             )
             identifier_maps[obj_type] = identifier_map
+            constraint.candidates = len(identifier_map)
         except Exception as e:
             logger.warning(f"Error getting candidate IRIs: {e}")
+            constraint.reason = str(e)
     else:
         logger.debug(
             "Skipping constraint-based IRI filtering, full search will be performed"
         )
 
-    return obj_types, identifier_maps
+    return obj_types, identifier_maps, constraint
 
 
 # alternatives for one wording, within what the constraint allows
@@ -860,7 +879,7 @@ def find_alternative_groups(
     skip_constraint: bool = False,
     max_candidates: int | None = None,
 ) -> AlternativeGroups:
-    obj_types, identifier_maps = find_candidate_ids(
+    obj_types, identifier_maps, _ = find_candidate_ids(
         manager,
         sparql,
         logger,

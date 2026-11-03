@@ -9,6 +9,8 @@ class KgInfo(BaseModel):
     endpoint: str | None = None
     headers: dict[str, str] | None = None
     params: dict[str, str] | None = None
+    # SPARQL server behind the endpoint
+    backend: Literal["qlever", "other"] = "qlever"
 
 
 class IndexConfig(BaseModel):
@@ -96,7 +98,7 @@ class ModelConfig(BaseModel):
     seed: int | None = None
 
     # model parameters
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-6.1-sol"
     model_provider: Literal[
         "openai/completions",
         "openai/responses",
@@ -167,6 +169,10 @@ class GraspConfig(ModelConfig):
 
     # interaction parameters
     max_steps: int = 100
+    # in seconds, one last step once reached (as for max_steps)
+    max_time: float | None = None
+    # remaining steps and time in function results
+    show_limits: bool = False
     # how many times the model is allowed to repeat the same response
     # (loop) before we give up; each repetition counts as one loop
     max_loops: int = 1
@@ -190,7 +196,7 @@ class GraspConfig(ModelConfig):
 
 
 class SpeechToTextConfig(BaseModel):
-    model: str = "gpt-4o-transcribe"
+    model: str = "gpt-transcribe"
     model_endpoint: str | None = None
     model_api_key: str | None = Field(default=None, exclude=True)
     model_timeout: float = 30.0
@@ -206,7 +212,10 @@ class SpeechToTextConfig(BaseModel):
 class ServerConfig(GraspConfig):
     port: int = 6789
     max_connections: int = 10
-    max_generation_time: int = 300
+    # generation is always time limited in the server
+    max_time: float = 300
+    # extra time for the last step before aborting
+    grace_time: float = 120
     max_idle_time: int = 300
     log_outputs: str | None = None
     log_file: str | None = None

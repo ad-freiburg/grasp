@@ -5,7 +5,7 @@ import random
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from logging import Logger
 from typing import Generator, Literal
 
@@ -262,6 +262,8 @@ class GRISPRunConfig(BaseModel):
     constrain: bool = True
     backtrack: bool = True
     rerank: bool = True
+    # drop alternatives ranked below None, otherwise kept for reranking
+    rerank_discard_below_none: bool = True
     check_empty: bool = True
 
     # order in which the natural-language placeholders of a skeleton are
@@ -646,6 +648,8 @@ def select_iris(
     start = time.monotonic()
     # init empty memo
     memo: dict[str, Candidates] = {}
+    # None ranked first, alternatives may be left though
+    next_wording = False
 
     # deepest set of selections reached; preserved across backtracking so a
     # partial (unresolved) skeleton still carries the items it managed to fill.
@@ -724,7 +728,7 @@ def select_iris(
         # depends on resolved neighbours on both sides of the current placeholder
         if info.sparql not in memo:
             t = time.monotonic()
-            obj_types, identifier_maps = find_candidate_ids(
+            obj_types, identifier_maps, constraint = find_candidate_ids(
                 manager,
                 info.sparql,
                 logger,
@@ -732,14 +736,17 @@ def select_iris(
                 max_candidates=MAX_IRIS,
                 constraint_timeout=cfg.constraint_timeout,
             )
-            memo[info.sparql] = Candidates(obj_types, identifier_maps)
+            memo[info.sparql] = Candidates(obj_types, identifier_maps, constraint)
             timings["constraint"] = time.monotonic() - t
 
         candidates = memo[info.sparql]
 
         # the next wording is searched only once the current one is used up, so
         # the combination the best skeleton proposed is explored first
-        while not candidates.alternatives and candidates.next_query < info.num_queries:
+        while (
+            not candidates.alternatives or next_wording
+        ) and candidates.next_query < info.num_queries:
+            next_wording = False
             t = time.monotonic()
             alternative_groups = search_alternatives(
                 manager,
@@ -751,7 +758,8 @@ def select_iris(
                 logger,
             )
             candidates.next_query += 1
-            candidates.alternatives = [
+            known = {(a[0].identifier, a[2]) for a in candidates.alternatives}
+            candidates.alternatives = candidates.alternatives + [
                 alternative
                 for alternative in ordered_alternatives_with_interleave(
                     alternative_groups,
@@ -759,6 +767,7 @@ def select_iris(
                     interleave=not cfg.rerank,
                 )
                 if alternative[0].identifier not in candidates.seen
+                and (alternative[0].identifier, alternative[2]) not in known
             ]
             timings["search"] += time.monotonic() - t
 
@@ -790,6 +799,9 @@ def select_iris(
         yield {
             "type": "alternatives",
             "index": skeleton.replaced,
+            # position of the placeholder in the skeleton
+            "placeholder": skeleton.order[skeleton.replaced],
+            "query_index": query_index,
             "prefix": info.prefix_for_query(query_index),
             "sparql": query_sparql,
             "query": info.queries[query_index],
@@ -801,30 +813,35 @@ def select_iris(
                     "identifier": alternative.get_identifier(),
                     "label": alternative.get_label(),
                     "variants": alternative.variants,
+                    # shown in the selection prompt
+                    "aliases": alternative.aliases,
+                    "info": alternative.info,
                     "obj_type": obj_type.value,
                     "variant": variant,
                 }
                 for alternative, obj_type, variant in alternatives
             ],
             "ranking": ranking,
+            "constraint": asdict(candidates.constraint),
             "timings": timings,
         }
 
         if ranking is not None:
-            # apply ranking
-            ranked_alts = []
+            above = []
             for index, _ in ranking:
                 if index is None:
                     break
+                above.append(index)
 
-                ranked_alts.append(alternatives[index])
-
-            alternatives = ranked_alts
-            candidates.alternatives = alternatives
+            # the pool keeps the search order, only the best ranked one is tried
+            if cfg.rerank_discard_below_none:
+                candidates.alternatives = [alternatives[i] for i in sorted(above)]
+            alternatives = [alternatives[i] for i in above[:1]]
 
         # a used-up wording is only a dead end once none are left
         if len(alternatives) == 0 and candidates.next_query < info.num_queries:
             logger.debug("Alternatives used up, trying the next wording")
+            next_wording = True
             continue
 
         if len(alternatives) == 0:
@@ -850,10 +867,12 @@ def select_iris(
             yield {"type": "backtrack", "reason": "no_alternatives"}
             continue
 
-        # just try out next alternative in order
-        alternative, obj_type, variant = alternatives[0]
-        alternatives = alternatives[1:]
-        candidates.alternatives = alternatives
+        # try out the best alternative
+        selected = alternatives[0]
+        alternative, obj_type, variant = selected
+        candidates.alternatives = [
+            a for a in candidates.alternatives if a is not selected
+        ]
         candidates.seen.add(alternative.identifier)
         if not alternative.variants:
             # just to be sure to have no parsing errors
@@ -1042,7 +1061,11 @@ def generate(
         skeletons_end = time.monotonic()
         yield {
             "type": "skeletons",
-            "skeletons": [skeleton.nl_sparql for skeleton in skeletons],
+            "fill_order": cfg.fill_order,
+            "skeletons": [
+                {"skeleton": skeleton.nl_sparql, "order": skeleton.order}
+                for skeleton in skeletons
+            ],
             "beams": beams,
         }
 
@@ -1202,7 +1225,10 @@ def generate(
                     yield {
                         "type": "improvement",
                         "skeleton": cur_idx,
-                        "skeletons": [s.nl_sparql for s in improved],
+                        "skeletons": [
+                            {"skeleton": s.nl_sparql, "order": s.order}
+                            for s in improved
+                        ],
                     }
 
                 if sparql is not None:

@@ -3,8 +3,9 @@
   import { wsEndpoint, kgEndpoint, COPYRIGHT, MATERIAL_URL } from '../constants.js';
   import StepCard from './StepCard.svelte';
   import OutputCard from './OutputCard.svelte';
-  import SparqlBlock from './SparqlBlock.svelte';
+  import SkeletonTrace from './SkeletonTrace.svelte';
   import examples from '../examples.json';
+  import { buildTrace, liveStatus, formatFillOrder } from '../trace.js';
 
   let question = '';
   let connectionStatus = 'initial';
@@ -31,41 +32,16 @@
   $: hasResult = hasSteps || hasOutput || error !== null;
   $: question, autoResize();
 
-  // Group selection steps by skeleton for display
-  $: groupedSteps = (() => {
-    const result = [];
-    const skeletonsStep = steps.find(s => s.type === 'skeletons');
-    if (skeletonsStep) {
-      result.push(skeletonsStep);
-    }
-
-    // Group selections by skeleton number
-    const selectionsByskeleton = new Map();
-    steps.filter(s => s.type === 'selection').forEach(step => {
-      const skeletonId = step.skeleton;
-      if (!selectionsByskeleton.has(skeletonId)) {
-        selectionsByskeleton.set(skeletonId, []);
-      }
-      selectionsByskeleton.get(skeletonId).push(step.selection);
-    });
-
-    // Add grouped selections with skeleton code
-    for (const [skeletonId, selections] of selectionsByskeleton.entries()) {
-      const skeletonCode = skeletonsStep?.skeletons?.[skeletonId] ?? null;
-      result.push({
-        type: 'skeleton-selections',
-        skeleton: skeletonId,
-        selections,
-        skeletonCode
-      });
-    }
-
-    return result;
-  })();
+  $: skeletonsStep = steps.find(s => s.type === 'skeletons') ?? null;
+  $: trace = buildTrace(steps, hasOutput);
 
   onMount(async () => {
+    // ?q=<question> prefills the question, &run also submits it
+    const params = new URLSearchParams(window.location.search);
+    question = params.get('q') ?? '';
     await initialize();
     autoResize();
+    if (question && params.has('run')) handleSubmit();
     if (typeof document !== 'undefined') {
       document.addEventListener('click', handleClickOutside);
     }
@@ -168,7 +144,12 @@
       }
 
       if (payload.type === 'skeletons') {
-        steps = [...steps, { type: 'skeletons', skeletons: payload.skeletons, beams: payload.beams ?? null }];
+        steps = [...steps, {
+          type: 'skeletons',
+          skeletons: payload.skeletons,
+          beams: payload.beams ?? null,
+          fill_order: payload.fill_order ?? null,
+        }];
       } else if (payload.type === 'selection') {
         steps = [...steps, {
           type: 'selection',
@@ -199,13 +180,15 @@
   }
 
   function handleSubmit() {
-    if (!canSubmit) return;
+    // not canSubmit, which may be stale right after connecting
+    if (connectionStatus !== 'connected' || running || !question.trim()) return;
 
     statusMessage = '';
     error = null;
     steps = [];
     output = null;
     running = true;
+    setQuestionParam(question.trim());
 
     try {
       socket?.send(JSON.stringify({ question: question.trim() }));
@@ -221,8 +204,21 @@
     pendingCancelSignal = true;
   }
 
+  // keeps the current question in the address bar, so the URL can be shared
+  function setQuestionParam(value) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('run');
+    if (value) {
+      url.searchParams.set('q', value);
+    } else {
+      url.searchParams.delete('q');
+    }
+    window.history.replaceState(window.history.state, '', url);
+  }
+
   function handleReset() {
     question = '';
+    setQuestionParam('');
     steps = [];
     output = null;
     error = null;
@@ -393,18 +389,7 @@
       <div class="progress-section">
         <div class="progress-bar">
           <span class="spinner" aria-hidden="true"></span>
-          <span class="progress-text">
-            {#if steps.length === 0}
-              Generating skeletons...
-            {:else}
-              {@const latestSelection = steps.filter(s => s.type === 'selection').slice(-1)[0]}
-              {#if latestSelection}
-                Selecting knowledge graph items for skeleton {latestSelection.skeleton + 1}...
-              {:else}
-                Starting selection...
-              {/if}
-            {/if}
-          </span>
+          <span class="progress-text">{liveStatus(trace)}</span>
         </div>
       </div>
     {/if}
@@ -426,27 +411,27 @@
 
     <!-- Intermediate steps (shown when expanded) -->
     {#if hasSteps && expanded}
-      {#each groupedSteps as step, i (i)}
-        {#if step.type === 'skeletons'}
-          <div class="steps-section">
-            <div class="steps-header">
-              Generated Skeletons ({step.skeletons?.length ?? 0})
-            </div>
-            <div class="steps-list">
-              <StepCard {step} index={i} />
-            </div>
+      {#if skeletonsStep}
+        <div class="steps-section">
+          <div class="steps-header">
+            Generated Skeletons ({skeletonsStep.skeletons?.length ?? 0})
           </div>
-        {:else if step.type === 'skeleton-selections'}
-          <div class="steps-section">
-            <div class="steps-header">
-              Skeleton #{step.skeleton + 1} - Selection
-            </div>
-            <div class="steps-list">
-              <StepCard {step} index={i} />
-            </div>
+          <div class="steps-list">
+            <StepCard step={skeletonsStep} />
           </div>
-        {/if}
-      {/each}
+        </div>
+      {/if}
+      {#if trace}
+        <div class="resolution-header">
+          <span>Resolution</span>
+          {#if trace.fillOrder}
+            <span class="fill-order">fill order: {formatFillOrder(trace.fillOrder)}</span>
+          {/if}
+        </div>
+        {#each trace.skeletons as sk (sk.idx)}
+          <SkeletonTrace skeleton={sk} isAnswer={trace.answer === sk.idx} />
+        {/each}
+      {/if}
     {/if}
     </main>
   </div>
@@ -964,6 +949,21 @@
     color: var(--text-subtle);
     background: rgba(52, 74, 154, 0.02);
     border-bottom: 1px solid var(--border-default);
+  }
+
+  .resolution-header {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-sm);
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-subtle);
+    padding: 0 var(--spacing-xs);
+  }
+
+  .fill-order {
+    font-weight: 400;
+    font-size: 0.8rem;
   }
 
   .steps-list {

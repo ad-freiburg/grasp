@@ -32,6 +32,10 @@ Example questions are defined in `src/lib/examples.json`. You can customize thes
 
 The examples dropdown will automatically populate with these entries.
 
+## Linking a question
+
+`?q=<question>` prefills the question, `&run` also submits it once connected, e.g. `…/?q=Who%20voiced%20Kovu%20in%20The%20Lion%20King%20II%3F&run`. The address bar always holds the current question.
+
 ## Development
 
 ```bash

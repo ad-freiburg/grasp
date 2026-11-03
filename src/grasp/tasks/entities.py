@@ -1,8 +1,20 @@
+from typing import Iterable
+
 from pydantic import BaseModel
 
 from grasp.functions import parse_iri_or_literal
-from grasp.manager import KgManager
+from grasp.manager import KgManager, format_kgs
 from grasp.sparql.types import Alternative, ObjType
+from grasp.utils import (
+    FunctionCallException,
+    format_enumerate,
+    format_list,
+    format_notes,
+    format_section,
+)
+
+# placeholder for mentions that refer to an entity not in the knowledge graphs
+NIL = "<NIL>"
 
 
 class Entity(BaseModel):
@@ -20,6 +32,14 @@ class Entity(BaseModel):
             aliases=self.aliases,
             info=self.infos,
         )
+
+    @property
+    def is_nil(self) -> bool:
+        return self.identifier == NIL
+
+
+def nil_entity() -> Entity:
+    return Entity(identifier=NIL, entity=NIL)
 
 
 def prepare_entity(manager: KgManager, identifier: str) -> Entity:
@@ -57,3 +77,87 @@ def prepare_entity(manager: KgManager, identifier: str) -> Entity:
         aliases=aliases,
         infos=infos,
     )
+
+
+def prepare_annotation(
+    manager: KgManager,
+    entity: str | None,
+    known: set[str],
+    know_before_annotate: bool,
+) -> Entity:
+    # None means the mention refers to an entity not in the knowledge graphs
+    if entity is None:
+        return nil_entity()
+
+    annotation = prepare_entity(manager, entity)
+    if know_before_annotate and annotation.identifier not in known:
+        raise FunctionCallException(
+            f"The entity {entity} cannot be used for annotation "
+            "without being known from previous function call results. "
+            "This does not mean it is invalid, but you should verify "
+            "that it indeed exists (e.g., by listing example triples) "
+            "in the knowledge graphs first."
+        )
+    return annotation
+
+
+def format_annotated_entities(annotations: Iterable[Entity]) -> str:
+    entities: dict[str, Alternative] = {}
+    for annot in annotations:
+        if annot.is_nil or annot.identifier in entities:
+            continue
+
+        entities[annot.identifier] = annot.to_alternative()
+
+    if not entities:
+        return ""
+
+    formatted = format_list(
+        alt.get_selection_string() for _, alt in sorted(entities.items())
+    )
+    return f"\n\nAnnotated entities:\n{formatted}"
+
+
+def annotation_feedback_system_message(
+    managers: list[KgManager],
+    kg_notes: dict[str, list[str]],
+    notes: list[str],
+    rules: list[str],
+    kind: str,
+) -> str:
+    return "\n\n".join(
+        [
+            f"You are a {kind} annotation assistant providing feedback on the "
+            f"output of a {kind} annotation system for a given input {kind}.",
+            format_section(
+                "Available knowledge graphs",
+                format_kgs(managers, kg_notes),
+            ),
+            format_section(
+                "General notes across knowledge graphs",
+                format_notes(notes, enumerated=True),
+            ),
+            format_section(
+                "Rules to follow",
+                format_enumerate(rules) if rules else "None",
+            ),
+            "Provide your feedback with the give_feedback function.",
+        ]
+    )
+
+
+def annotation_feedback_instructions(inputs: list[str], output: dict) -> str:
+    assert inputs, "At least one input is required for feedback"
+
+    sections = []
+    if len(inputs) > 1:
+        sections.append(
+            format_section(
+                "Previous inputs",
+                "\n\n".join(i.strip() for i in inputs[:-1]),
+            )
+        )
+
+    sections.append(format_section("Input", inputs[-1].strip()))
+    sections.append(format_section("Annotations", output["formatted"]))
+    return "\n\n".join(sections)
