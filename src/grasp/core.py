@@ -443,7 +443,7 @@ def generate(
         if should_stop and isinstance(task, ConstructGenTask):
             task_kwargs = config.task_kwargs.get("construct-gen", {})
             max_reviews = task_kwargs.get("max_reviews", 2)
-            review_trace_dir = task_kwargs.get("review_trace_dir", None) #TODO: remove/modify review traces saving process after debugging
+            review_trace_dir = task_kwargs.get("review_trace_dir", None)
             can_review = retries < max_reviews
  
             if not can_review:

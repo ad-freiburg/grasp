@@ -1379,6 +1379,9 @@ def construct_grasp(args: argparse.Namespace) -> None:
 
     os.makedirs(output_dir, exist_ok=True)
 
+    # review traces go next to trace.json, the queries, and the .nt file
+    config.task_kwargs.setdefault("construct-gen", {})["review_trace_dir"] = output_dir
+
     result = consume_generator(
         generate(
             "construct-gen",
