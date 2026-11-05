@@ -1,13 +1,14 @@
 import re
 from typing import Any, Literal
 
+import requests
+
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
 from grasp.model import Message
 from grasp.tasks.base import GraspTask
 from grasp.utils import FunctionCallException, format_enumerate, format_section
 
-import requests
 
 def _construct_request(
     sparql: str,
@@ -33,6 +34,7 @@ def _construct_request(
             f"{response.text[:500]}"
         )
     return response.text
+
 
 _ONTOLOGY_KG_NOTE = """\
 The following knowledge graphs are ontology/vocabulary references. \
@@ -113,9 +115,7 @@ def _steps(
     competency_questions: list[str],
 ) -> str:
     parts = [
-        _STEPS_GUIDED_DESIGN
-        if ontology_mode == "guided"
-        else _STEPS_CUSTOM_DESIGN
+        _STEPS_GUIDED_DESIGN if ontology_mode == "guided" else _STEPS_CUSTOM_DESIGN
     ]
     parts.append(_STEPS_WRITE_TEST)
     n = 4
@@ -124,6 +124,7 @@ def _steps(
         n += 1
     parts.append(_STEPS_SUBMIT.format(n=n))
     return "\n".join(parts)
+
 
 _COMPETENCY_QUESTIONS_NOTE = """\
 Treat each competency question listed below as a query someone may later write against your \
@@ -140,13 +141,14 @@ Modelling all of the source data completely still applies.
 
 def _system_base(kg_name: str) -> str:
     return (
-        f'You are a semantic RDF generation assistant. Your task is to analyse the '
+        f"You are a semantic RDF generation assistant. Your task is to analyse the "
         f'"{kg_name}" knowledge graph and produce one or more SPARQL CONSTRUCT '
-        f'queries that model it as a well-formed, semantically correct knowledge graph. '
-        f'The knowledge graph may already model some of its data well — where it does, '
-        f'preserve or refine that modelling; where it doesn\'t, remodel it properly. The goal '
-        f'is the best possible semantic model of the input data.'
+        f"queries that model it as a well-formed, semantically correct knowledge graph. "
+        f"The knowledge graph may already model some of its data well — where it does, "
+        f"preserve or refine that modelling; where it doesn't, remodel it properly. The goal "
+        f"is the best possible semantic model of the input data."
     )
+
 
 def system_information(
     ontology_mode: Literal["guided", "custom"],
@@ -174,31 +176,33 @@ def system_information(
         )
     return "\n\n".join(parts)
 
+
 _RULES_COMMON = [
-"Always add rdfs:label to every entity in the CONSTRUCT but never make the label \
+    "Always add rdfs:label to every entity in the CONSTRUCT but never make the label \
 a precondition for the entity's other triples — a missing label shouldn't drop \
 the entity from the query.",
-"Where a property may be missing for a particular entity, generate it independently (e.g. with \
+    "Where a property may be missing for a particular entity, generate it independently (e.g. with \
 OPTIONAL) so a missing value doesn't suppress triples for the other \
 properties of the same entity — but only where the data is actually \
 missing, not as a blanket pattern for every property.",
-"Never emit a triple with a null marker itself as the value.",
-"If the same entity type is referenced by more than one query, mint its \
+    "Never emit a triple with a null marker itself as the value.",
+    "If the same entity type is referenced by more than one query, mint its \
 IRIs using the exact same pattern in every query that touches it, and reuse the same predicate \
 names and namespace for the same concept across queries, so the queries \
 combine into one coherent, non-conflicting graph.",
-"A field name may carry information the value itself doesn't — a unit, a currency, a scale. \
+    "A field name may carry information the value itself doesn't — a unit, a currency, a scale. \
 Keep that information in the model rather than losing it with the name.",
-"When resubmitting after reviewer feedback, change a query by testing the new \
+    "When resubmitting after reviewer feedback, change a query by testing the new \
 version with propose_construct under the same name, then call submit_construct \
 with the names of all queries in the set. The names you send are the whole set: \
 a name you leave out is dropped, and its reason goes in the `removed` argument. \
 Use list_constructs and get_construct to check the saved names and texts instead \
-of relying on earlier messages."
+of relying on earlier messages.",
 ]
 
 # trailing LIMIT / OFFSET modifiers, in either order, at the end of a query
 _TRAILING_LIMIT = re.compile(r"(\s*\b(?:LIMIT|OFFSET)\s+\d+)+\s*$", re.IGNORECASE)
+
 
 class ConstructGenTask(GraspTask):
     name = "construct-gen"
@@ -222,11 +226,9 @@ class ConstructGenTask(GraspTask):
         self.ontology_mode: Literal["guided", "custom"] = "custom"
         self.competency_questions: list[str] = []
 
-        # latest tested version of every query, by name; written by
-        # propose_construct, "ok" is whether that test produced triples
+        # latest tested version of query
         self.drafts: dict[str, dict] = {}
-        # output state: the current set of submitted queries, by name,
-        # copied from drafts by submit_construct
+        # the current set of submitted queries
         self.queries: dict[str, dict] = {}
         # whether the most recent submit_construct call was accepted
         self.submit_ok = False
@@ -234,7 +236,6 @@ class ConstructGenTask(GraspTask):
         self.removed_queries: list[dict] = []
         # verdict of the last review round
         self.review: dict | None = None
-
 
     def system_information(self) -> str:
         return system_information(
@@ -389,11 +390,11 @@ class ConstructGenTask(GraspTask):
             note = (
                 "\nNote: the trailing LIMIT/OFFSET was removed from the saved "
                 "query, since the saved query must cover all the data."
-                if saved != sparql else ""
+                if saved != sparql
+                else ""
             )
 
-            # save before running, so the latest test is always what is saved,
-            # also when it fails
+            # save latest tested version
             self.drafts[name] = {"name": name, "sparql": saved, "ok": False}
 
             manager = self.data_manager
@@ -424,7 +425,7 @@ class ConstructGenTask(GraspTask):
                 )
 
             self.drafts[name]["ok"] = True
-            preview = "\n".join(lines[:20]) # at most 20 triples
+            preview = "\n".join(lines[:20])  # at most 20 triples
             return (
                 f"Preview for '{name}' ({len(lines)} triples with LIMIT 10):\n{preview}\n"
                 f"Saved as '{name}'.{note}"
@@ -508,8 +509,7 @@ class ConstructGenTask(GraspTask):
 
             removed_names = [r["name"].strip() for r in removed]
             bad_removed = [
-                n for n in removed_names
-                if n not in self.queries or n in seen
+                n for n in removed_names if n not in self.queries or n in seen
             ]
             if bad_removed:
                 return (
@@ -519,17 +519,18 @@ class ConstructGenTask(GraspTask):
                 )
 
             old = self.queries
-            new = {
-                n: {"name": n, "sparql": self.drafts[n]["sparql"]}
-                for n in names
-            }
+            new = {n: {"name": n, "sparql": self.drafts[n]["sparql"]} for n in names}
             added = [n for n in new if n not in old]
-            updated = [n for n in new if n in old and old[n]["sparql"] != new[n]["sparql"]]
+            updated = [
+                n for n in new if n in old and old[n]["sparql"] != new[n]["sparql"]
+            ]
             dropped = [n for n in old if n not in new]
-            not_submitted = [n for n, d in self.drafts.items() if d["ok"] and n not in new]
+            not_submitted = [
+                n for n, d in self.drafts.items() if d["ok"] and n not in new
+            ]
 
             self.queries = new
-            self.removed_queries.extend( # accumulated reasons across rounds
+            self.removed_queries.extend(  # accumulated reasons across rounds
                 {"name": r["name"].strip(), "reason": r["reason"].strip()}
                 for r in removed
             )
@@ -543,7 +544,7 @@ class ConstructGenTask(GraspTask):
             )
 
         raise FunctionCallException(f"Unknown function: {fn_name}")
- 
+
     def done(self, fn_name: str) -> bool:
         return fn_name == "submit_construct" and self.submit_ok
 
@@ -563,8 +564,7 @@ class ConstructGenTask(GraspTask):
 
         queries = list(self.queries.values())
         blocks = "\n\n".join(
-            f"### {q['name']}\n```sparql\n{q['sparql']}\n```"
-            for q in queries
+            f"### {q['name']}\n```sparql\n{q['sparql']}\n```" for q in queries
         )
         return {
             "type": "output",
@@ -572,8 +572,5 @@ class ConstructGenTask(GraspTask):
             "removed": self.removed_queries,
             "kg": self.data_manager.kg,
             "review": self.review,
-            "formatted": (
-                f"CONSTRUCT queries for {self.data_manager.kg}:\n\n{blocks}"
-            ),
+            "formatted": (f"CONSTRUCT queries for {self.data_manager.kg}:\n\n{blocks}"),
         }
-

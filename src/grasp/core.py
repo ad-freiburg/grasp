@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import traceback
 import uuid
@@ -7,8 +8,9 @@ from logging import Logger
 from typing import Any, Generator
 
 from openai import APIConnectionError
-from universal_ml_utils.io import load_json
+from universal_ml_utils.io import dump_json, load_json
 from universal_ml_utils.logging import get_logger
+from universal_ml_utils.ops import consume_generator
 
 from grasp.configs import GraspConfig
 from grasp.examples import ExampleIndex
@@ -23,6 +25,7 @@ from grasp.model import Message, Model, Response, ToolCall, get_model
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
+from grasp.tasks.construct_gen import ConstructGenTask
 from grasp.tasks.feedback import format_feedback, generate_feedback
 from grasp.tasks.sparql_qa.examples import find_examples
 from grasp.utils import (
@@ -34,10 +37,6 @@ from grasp.utils import (
     format_response,
     format_section,
 )
-from grasp.tasks.construct_gen import ConstructGenTask
-from universal_ml_utils.io import dump_json
-from universal_ml_utils.ops import consume_generator
-import os
 
 
 def format_limits(config: GraspConfig, steps: int, elapsed: float) -> str:
@@ -94,7 +93,7 @@ def system_instructions(
         )
 
     common_prefixes = (
-    get_common_sparql_prefixes() if task.include_common_prefixes else {}
+        get_common_sparql_prefixes() if task.include_common_prefixes else {}
     )
 
     if common_prefixes:
@@ -439,13 +438,13 @@ def generate(
 
         can_give_feedback = config.feedback and retries < config.max_feedbacks
 
-        # construct-gen review step
+        # construct-gen review step starts
         if should_stop and isinstance(task, ConstructGenTask):
             task_kwargs = config.task_kwargs.get("construct-gen", {})
             max_reviews = task_kwargs.get("max_reviews", 2)
             review_trace_dir = task_kwargs.get("review_trace_dir", None)
             can_review = retries < max_reviews
- 
+
             if not can_review:
                 # the review budget is spent; if the last verdict was not "done"
                 # the queries ship with issues the reviewer reported in last round
@@ -458,40 +457,46 @@ def generate(
                 break
 
             # a reviewer run without a verdict (crash, or no give_feedback
-            # call) is re-run on the same queries; these attempts do not
-            # count against max_reviews
+            # call) is re-run on the same queries
             max_review_attempts = task_kwargs.get("max_review_attempts", 3)
             review_result = None
             review_failure = None
             for attempt in range(max_review_attempts):
                 try:
-                    review_trace = consume_generator(generate(
-                        "construct-review",
-                        { 
-                            # "sparql": output["sparql"],
-                            "queries": output["queries"],
-                            "ontology_mode": task.ontology_mode,
-                            "competency_questions": task.competency_questions,
-                        },
-                        config,
-                        managers,
-                        kg_notes=kg_notes or {},
-                        notes=notes or [],
-                        logger=logger,
-                        yield_output=True,
-                    ))
+                    review_trace = consume_generator(
+                        generate(
+                            "construct-review",
+                            {
+                                # "sparql": output["sparql"],
+                                "queries": output["queries"],
+                                "ontology_mode": task.ontology_mode,
+                                "competency_questions": task.competency_questions,
+                            },
+                            config,
+                            managers,
+                            kg_notes=kg_notes or {},
+                            notes=notes or [],
+                            logger=logger,
+                            yield_output=True,
+                        )
+                    )
                 except Exception as e:
                     review_failure = f"the reviewer failed to run: {e}"
-                    logger.error(format_error(
-                        content=f"Failed to generate review:\n{e}",
-                        reason="review",
-                    ))
+                    logger.error(
+                        format_error(
+                            content=f"Failed to generate review:\n{e}",
+                            reason="review",
+                        )
+                    )
                     continue
 
                 if review_trace_dir:
                     os.makedirs(review_trace_dir, exist_ok=True)
-                    trace_name = f"review_{retries}.json" if attempt == 0 \
+                    trace_name = (
+                        f"review_{retries}.json"
+                        if attempt == 0
                         else f"review_{retries}_attempt{attempt}.json"
+                    )
                     dump_json(review_trace, os.path.join(review_trace_dir, trace_name))
 
                 review_result = review_trace.get("output", None)
@@ -538,11 +543,12 @@ def generate(
             yield {
                 "type": "feedback",
                 "status": review_result["status"],
-                "feedback": review_result["feedback"]
+                "feedback": review_result["feedback"],
             }
             retries += 1
-            last_resp_hash = None # reset loop detection
-            continue # main agent fixes issues and resubmits
+            last_resp_hash = None  # reset loop detection
+            continue  # main agent fixes issues and resubmits
+        # construct-gen review step ends
 
         if should_stop and not can_give_feedback:
             # done

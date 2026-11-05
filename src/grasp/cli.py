@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from importlib import metadata
 
+import requests
 from search_rdf.model import SentenceTransformerModel
 from termcolor import colored
 from tqdm import tqdm
@@ -1316,6 +1317,7 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
         search_params=get_embedding_search_params(args),
     )
 
+
 def load_competency_questions(file: str | None) -> list[str]:
     """Load competency questions from a JSON file holding a list of strings."""
     if file is None:
@@ -1353,7 +1355,9 @@ def construct_grasp(args: argparse.Namespace) -> None:
 
     task_kwargs = config.task_kwargs.get("construct-gen", {})
     ontology_mode = task_kwargs.get("ontology_mode", "custom")
-    ontology_kg_names = task_kwargs.get("ontology_kgs", []) if ontology_mode == "guided" else []
+    ontology_kg_names = (
+        task_kwargs.get("ontology_kgs", []) if ontology_mode == "guided" else []
+    )
     ontology_managers = [m for m in managers if m.kg in ontology_kg_names]
 
     competency_questions = load_competency_questions(
@@ -1366,7 +1370,7 @@ def construct_grasp(args: argparse.Namespace) -> None:
         )
 
     data_manager, _ = find_manager(managers, args.knowledge_graph)
-    
+
     notes, kg_notes = load_notes(config)
 
     output_dir = args.output_dir
@@ -1379,7 +1383,7 @@ def construct_grasp(args: argparse.Namespace) -> None:
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # review traces go next to trace.json, the queries, and the .nt file
+    # trace for review rounds
     config.task_kwargs.setdefault("construct-gen", {})["review_trace_dir"] = output_dir
 
     result = consume_generator(
@@ -1400,7 +1404,7 @@ def construct_grasp(args: argparse.Namespace) -> None:
         )
     )
 
-    # always save the trace
+    # save trace
     dump_json(result, os.path.join(output_dir, "trace.json"))
     logger.info(f"Trace written to {output_dir}/trace.json")
 
@@ -1409,7 +1413,6 @@ def construct_grasp(args: argparse.Namespace) -> None:
         logger.error("No output produced by the task")
         return
 
-    # sparql = task_output.get("sparql") #TODO: change to multiple queries
     queries = task_output.get("queries")
     kg = task_output.get("kg")
 
@@ -1417,67 +1420,54 @@ def construct_grasp(args: argparse.Namespace) -> None:
         logger.error("Task completed but no CONSTRUCT queries were returned")
         return
 
-    # save all construct queries into one file, labeled by name
     construct_text = "\n\n".join(
         f"# Query: {q['name']}\n{q['sparql']}" for q in queries
     )
     dump_text(construct_text, os.path.join(output_dir, "construct.sparql"))
     logger.info(f"CONSTRUCT queries written to {output_dir}/construct.sparql")
 
-    # ---------------------------------------------------------------
-    # DISABLED: executing the CONSTRUCT queries and writing semantic.nt.
-    # The queries themselves are still written to construct.sparql above,
-    # which is what is being analysed right now. Re-enable by removing the
-    # leading '# ' from the block below.
-    # ---------------------------------------------------------------
-    # # execute each query and concatenate the resulting triples into one .nt
-    # logger.info(f"Executing {len(queries)} CONSTRUCT query(ies)...")
-    # manager_for_kg, _ = find_manager(managers, kg)
+    # execute each query and write the resulting triples into one .nt file;
+    manager_for_kg, _ = find_manager(managers, kg or args.knowledge_graph)
+    nt_path = os.path.join(output_dir, "semantic.nt")
+    total, failed = 0, []
+    with open(nt_path, "w") as nt_file:
+        for q in queries:
+            try:
+                text = _run_construct(manager_for_kg, q["sparql"])
+            except Exception as e:
+                logger.error(f"CONSTRUCT query '{q['name']}' failed: {e}")
+                failed.append(q["name"])
+                continue
 
-    # import requests as req
+            triples = [ln for ln in text.split("\n") if ln.strip()]
+            nt_file.writelines(ln + "\n" for ln in triples)
+            total += len(triples)
+            logger.info(f"Query '{q['name']}' produced {len(triples):,} triples")
 
-    # nt_parts = []
-    # for q in queries:
-    #     # POST, not GET: a GET puts the query in the request line, and QLever
-    #     # (Boost.Beast) silently drops requests whose headers exceed 8 KiB, so a
-    #     # single wide CONSTRUCT would reset the connection and abandon the whole
-    #     # semantic.nt below. The body has no such limit.
-    #     req_headers = {
-    #         "Content-Type": "application/x-www-form-urlencoded",
-    #         "Accept": "text/plain",
-    #         **manager_for_kg.headers,
-    #     }
+    logger.info(f"Written {total:,} triples to {nt_path}")
+    if failed:
+        logger.error(
+            f"{len(failed)} of {len(queries)} CONSTRUCT queries failed, "
+            f"{nt_path} is incomplete: {', '.join(failed)}"
+        )
 
-    #     response = req.post(
-    #         manager_for_kg.endpoint,
-    #         data={**manager_for_kg.params, "query": q["sparql"]},
-    #         headers=req_headers,
-    #         timeout=300.0,
-    #     )
 
-    #     if response.status_code != 200:
-    #         logger.error(
-    #             f"CONSTRUCT query '{q['name']}' failed: "
-    #             f"HTTP {response.status_code}\n{response.text[:500]}"
-    #         )
-    #         return
-
-    #     triples = [ln for ln in response.text.splitlines() if ln.strip()]
-    #     logger.info(f"Query '{q['name']}' produced {len(triples)} triples")
-    #     nt_parts.extend(triples)
-
-    # nt_content = "\n".join(nt_parts) + "\n"
-    # nt_path = os.path.join(output_dir, "semantic.nt")
-    # dump_text(nt_content, nt_path)
-
-    # logger.info(f"Written {len(nt_parts)} total triples to {nt_path}")
-
-    logger.info(
-        f"semantic.nt generation is disabled; "
-        f"{len(queries)} CONSTRUCT query(ies) written to "
-        f"{output_dir}/construct.sparql"
+def _run_construct(manager, sparql: str, timeout: float = 600.0) -> str:
+    response = requests.post(
+        manager.endpoint,
+        data={**manager.params, "query": sparql},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/n-triples",
+            **manager.headers,
+        },
+        timeout=timeout,
     )
-    
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+    return response.text
+
+
 def main():
     args = parse_args()
     if args.all_loggers:

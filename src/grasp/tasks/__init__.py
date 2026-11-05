@@ -5,6 +5,8 @@ from grasp.manager import KgManager
 from grasp.tasks.auto_setup import AutoSetupTask
 from grasp.tasks.base import GraspTask
 from grasp.tasks.cea import CeaTask
+from grasp.tasks.construct_gen import ConstructGenTask
+from grasp.tasks.construct_gen.review import ConstructReviewTask
 from grasp.tasks.exploration import (
     FunctionalExplorationTask,
     StructuralExplorationTask,
@@ -18,8 +20,6 @@ from grasp.tasks.shapes_setup import ShapesSetupTask
 from grasp.tasks.sparql_qa import SparqlQaTask
 from grasp.tasks.sparql_to_question import SparqlToQuestionTask
 from grasp.tasks.wikidata_query_logs import WdqlTask
-from grasp.tasks.construct_gen import ConstructGenTask
-from grasp.tasks.construct_gen.review import ConstructReviewTask
 
 
 # official tasks supported by GRASP, excluding exploration
@@ -50,7 +50,7 @@ _REGISTRY: dict[str, type[GraspTask]] = {
         AutoSetupTask,
         ShapesSetupTask,
         ConstructGenTask,
-        ConstructReviewTask
+        ConstructReviewTask,
     ]
 }
 

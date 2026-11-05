@@ -11,10 +11,8 @@ from grasp.tasks.construct_gen.coverage import (
 from grasp.utils import (
     FunctionCallException,
     format_enumerate,
-    format_notes,
     format_section,
 )
-
 
 _REVIEW_SYSTEM_BASE = """\
 You are an independent validator reviewing a set of one or more proposed SPARQL CONSTRUCT queries. \
@@ -46,7 +44,9 @@ link to that entity, not left as a raw literal value.
 everywhere it's referenced, whether within a single query or across the query set.\
 """
 
-_REVIEW_CHECKLIST_GUIDED = _REVIEW_CHECKLIST_COMMON + """
+_REVIEW_CHECKLIST_GUIDED = (
+    _REVIEW_CHECKLIST_COMMON
+    + """
 - NAMESPACE CONSISTENCY: For any predicates or entity IRIs that fall back to \
 a custom namespace, verify that this namespace reflects the intended domain and semantics, and use that namespace consistently throughout \
 the queries.
@@ -62,13 +62,17 @@ range. Flag cases where a class is used to represent something other than what i
 for, an overly generic class is used when a more specific one exists, or the class conflicts \
 with how the ontology defines it should be used.\
 """
+)
 
-_REVIEW_CHECKLIST_CUSTOM = _REVIEW_CHECKLIST_COMMON + """
+_REVIEW_CHECKLIST_CUSTOM = (
+    _REVIEW_CHECKLIST_COMMON
+    + """
 - NAMESPACE CONSISTENCY: Verify that all custom predicates and entity IRIs \
 use the same namespace consistently throughout the queries and that this namespace reflects \
 the intended domain and semantics. Judge this from the expanded IRI, not the prefix \
 alias.\
 """
+)
 
 _REVIEW_CHECKLIST_CQ = """
 - COMPETENCY QUESTION COVERAGE: For each competency question listed, write the SPARQL query \
@@ -160,8 +164,8 @@ class ConstructReviewTask(GraspTask):
     def function_definitions(self) -> list[dict]:
         return [
             {
-                    "name": "give_feedback",
-                    "description": """\
+                "name": "give_feedback",
+                "description": """\
 Provide your final feedback on the proposed CONSTRUCT query (or queries) after \
 completing your investigation.
 
@@ -174,23 +178,23 @@ The feedback message should describe any issues found and what you \
 observed in the knowledge graph that confirms them. When reviewing multiple \
 queries, reference the relevant query name in the feedback so it's clear which \
 query an issue applies to. If status is done, briefly summarise what was verified.""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "status": {
-                                "type": "string",
-                                "enum": ["done", "refine", "retry"],
-                                "description": "The feedback status",
-                            },
-                            "feedback": {
-                                "type": "string",
-                                "description": "The detailed feedback message",
-                            },
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["done", "refine", "retry"],
+                            "description": "The feedback status",
                         },
-                        "required": ["status", "feedback"],
-                        "additionalProperties": False,
+                        "feedback": {
+                            "type": "string",
+                            "description": "The detailed feedback message",
+                        },
                     },
-                    "strict": True,
+                    "required": ["status", "feedback"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
             }
         ]
 
@@ -213,23 +217,22 @@ query an issue applies to. If status is done, briefly summarise what was verifie
         self.ontology_mode = input.get("ontology_mode", "custom")
         self.queries = input.get("queries", [])
         self.competency_questions = input.get("competency_questions", []) or []
- 
+
         if len(self.queries) == 1:
             sparql = self.queries[0]["sparql"]
             prompt = (
-                f'Review the following SPARQL CONSTRUCT query targeting the '
+                f"Review the following SPARQL CONSTRUCT query targeting the "
                 f'"{self.data_manager.kg}" knowledge graph:\n\n'
-                f'```sparql\n{sparql}\n```'
+                f"```sparql\n{sparql}\n```"
             )
         else:
             blocks = "\n\n".join(
-                f"### {q['name']}\n```sparql\n{q['sparql']}\n```"
-                for q in self.queries
+                f"### {q['name']}\n```sparql\n{q['sparql']}\n```" for q in self.queries
             )
             prompt = (
-                f'Review the following {len(self.queries)} SPARQL CONSTRUCT queries '
+                f"Review the following {len(self.queries)} SPARQL CONSTRUCT queries "
                 f'targeting the "{self.data_manager.kg}" knowledge graph. Together '
-                f'they are intended to produce one coherent semantic graph:\n\n{blocks}'
+                f"they are intended to produce one coherent semantic graph:\n\n{blocks}"
             )
 
         self.coverage = compute_source_coverage(

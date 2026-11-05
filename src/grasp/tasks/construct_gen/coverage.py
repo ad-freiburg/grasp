@@ -1,16 +1,3 @@
-"""
-Mechanical source-coverage check for a set of CONSTRUCT queries.
-
-The review checklist asks the reviewer to confirm that "all data from the
-source knowledge graph is accounted for". That is an LLM judgement over the
-whole schema, and whole column families can be missed by it. This module
-answers the same question by counting instead: it lists every predicate in the
-source graph and checks which ones the submitted queries actually mention.
-
-The result is handed to the reviewer as data, so the reviewer can spend its
-effort on *why* a predicate is unreferenced rather than on finding it.
-"""
-
 import re
 
 from grasp.manager import KgManager
@@ -20,8 +7,7 @@ RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 
 _RDFS = "http://www.w3.org/2000/01/rdf-schema#"
 _OWL = "http://www.w3.org/2002/07/owl#"
-# predicates that only describe the source schema (its T-Box), not row data;
-# the queries are not expected to carry these over, so they are not counted
+# predicates that only describe the source schema (its T-Box); to be skipped
 SCHEMA_PREDICATES = {
     _RDFS + "domain",
     _RDFS + "range",
@@ -37,10 +23,9 @@ SCHEMA_PREDICATES = {
 
 _PREFIX_RE = re.compile(r"PREFIX\s+([A-Za-z][\w.\-]*)?:\s*<([^>]*)>", re.IGNORECASE)
 _FULL_IRI_RE = re.compile(r"<([^>\s]+)>")
-# a prefixed name such as `player:player_api_id`; the lookbehind keeps it from
-# firing on the `http:` inside an already-matched full IRI
+# match a prefixed name
 _PNAME_RE = re.compile(r"(?<![\w<>/#:])([A-Za-z][\w.\-]*)?:([A-Za-z0-9_\-%.]+)")
-# a standalone `a` is SPARQL shorthand for rdf:type
+# standalone `a` is SPARQL shorthand for rdf:type
 _TYPE_SHORTHAND_RE = re.compile(r"(?:^|[\s;,\[])a\s", re.MULTILINE)
 
 _ALL_PREDICATES_SPARQL = """\
@@ -114,7 +99,9 @@ def compute_source_coverage(
     except Exception as e:
         return {"error": f"could not list source predicates: {e}"}
 
-    predicates = [(iri, count) for iri, count in predicates if iri not in SCHEMA_PREDICATES]
+    predicates = [
+        (iri, count) for iri, count in predicates if iri not in SCHEMA_PREDICATES
+    ]
     if not predicates:
         return {"error": "the source knowledge graph reported no predicates"}
 
