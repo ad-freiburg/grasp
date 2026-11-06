@@ -1,0 +1,61 @@
+model: ufr/coding-fast
+model_provider: openai/completions
+model_endpoint: https://openwebui.uni-freiburg.de/api
+model_api_key: env(UFR_API_KEY)
+model_timeout: 300
+
+# Qwen3.8-Flash-Next behind the unpriced ufr/coding-fast alias. Model card,
+# thinking mode (also used for its agentic benchmarks).
+model_kwargs:
+  temperature: 1.0
+  top_p: 0.95
+  presence_penalty: 0.0
+  extra_body:
+    top_k: 20
+    min_p: 0.0
+    repetition_penalty: 1.0
+    chat_template_kwargs:
+      enable_thinking: true
+      preserve_thinking: true
+
+tool_choice: env(TOOL_CHOICE:auto)
+
+task_kwargs:
+  wikidata-query-logs:
+    max_questions: env(MAX_QUESTIONS:3)
+
+seed: env(SEED:22)
+
+fn_set: env(FN_SET:search_extended)
+feedback: env(FEEDBACK:false)
+max_feedbacks: env(MAX_FEEDBACKS:1)
+know_before_use: env(KNOW_BEFORE_USE:false)
+notes_file: env(NOTES_FILE:null)
+
+max_steps: env(MAX_STEPS:1024)
+
+sparql_query_timeout: env(SPARQL_QUERY_TIMEOUT:60)
+sparql_read_timeout: env(SPARQL_READ_TIMEOUT:30)
+
+list_k: env(LIST_K:10)
+search_top_k: env(SEARCH_TOP_K:10)
+result_max_rows: env(RESULT_MAX_ROWS:10)
+result_max_columns: env(RESULT_MAX_COLUMNS:10)
+
+force_examples: env(FORCE_EXAMPLES:null)
+random_examples: env(RANDOM_EXAMPLES:false)
+num_examples: env(NUM_EXAMPLES:3)
+
+knowledge_graphs:
+  - kg: wikidata
+    example_index: env(KG_EXAMPLES:null)
+    notes_file: env(KG_NOTES_FILE:null)
+    # params replace those from info.json (access token not needed below the
+    # server's 600s default); QLever cancels queries the agent gave up on (60s)
+    info:
+      endpoint: env(KG_ENDPOINT:http://localhost:7011)
+      params:
+        timeout: env(KG_QUERY_TIMEOUT:90s)
+
+port: env(PORT:12345)
+max_generation_time: env(MAX_GENERATION_TIME:1200)

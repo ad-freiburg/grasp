@@ -1,9 +1,9 @@
 # Wikidata query logs (WDQL) runs
 
-The WDQL dataset was generated incrementally between November 2025 and
-October 2026. Each run used the GRASP code from the `main` branch as it was
-when the run's `grasp serve` process was (re)started; this branch only adds
-the configs and scripts for the runs.
+The WDQL dataset was generated incrementally since November 2025. Each run
+used the GRASP code from the `main` branch as it was when the run's `grasp
+serve` process was (re)started; this branch only adds the configs and scripts
+for the runs.
 
 Tags: `wdql-start` (first run) and `wdql-end` (last run, added once
 generation is finished).
@@ -15,13 +15,21 @@ generation is finished).
 | qwen36-35b-a3b | 2026-06-02 – 2026-06-19 | `9d30f1a` | – |
 | qwen36-27b | 2026-06-19 – 2026-07-21 | `c116acd` | `6fc3d3b` (07-12) |
 | qwen35-397b | 2026-07-24 – 2026-09-30 | `90b815f` | `5ca846a` (07-28), `3a33d1e` (08-17), `a8f2067` (09-17) |
-| deepseek-v41-flash | 2026-10-06 – | `a03b0ba` | – |
+| deepseek-v41-flash | 2026-10-06 – 2026-11-02 | `a03b0ba` | `f28403b` (10-21) |
+| qwen38-flash-next | 2026-11-03 – | `f28403b` | – |
 
 The qwen35-397b restart on 2026-09-17 picked up `477e1b0`, which changed the
 generation prompt to avoid IRIs in questions. Outputs of that run before and
 after this date used different prompts.
 
-This table was reconstructed after the fact:
+deepseek-v41-flash was stopped on 2026-11-03 after it hit the daily
+university API budget, to keep that budget for other GRASP work. It continued
+as qwen38-flash-next (`ufr/coding-fast`, which is not counted against the
+budget), with all earlier output directories as skip dirs.
+
+The deepseek-v41-flash restart and the qwen38-flash-next run are taken from
+run logs and image build dates. The rest of the table was reconstructed after
+the fact:
 
 - Output periods are from file modification times of the outputs. Files
   rewritten later (e.g. by `scripts/fix_prefixes.py`) carry the rewrite date.
