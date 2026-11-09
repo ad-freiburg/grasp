@@ -80,7 +80,7 @@ relevant information to solve the task is recommended.",
     ]
     if config.show_limits:
         rules.append(
-            "Function call results end with your remaining steps and optionally time. \
+            "Function call results end with your used and remaining steps and optionally time. \
 When only few steps or little time remain, stop exploring and settle on your best \
 result so far. Once a limit is reached, you get one last step to finish."
         )

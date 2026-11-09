@@ -71,6 +71,17 @@ class GraspTask(ABC):
     def default_input_field(self) -> str | None:
         return None
 
+    def limit_message(self) -> str:
+        # shown once the step or time limit is reached, before the last step
+        return (
+            "The step or time limit is reached. You have one last step, "
+            "finish now with your best result."
+        )
+
+    def limit_functions(self) -> list[str] | None:
+        # names of the functions offered in the last step, None for all
+        return None
+
     @classmethod
     def sample_cls(cls) -> type[Sample] | None:
         return None

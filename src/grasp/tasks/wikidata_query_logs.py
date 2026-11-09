@@ -268,6 +268,9 @@ class WdqlTask(GraspTask):
     def done(self, fn_name: str) -> bool:
         return fn_name in {"answer", "cancel"}
 
+    def limit_functions(self) -> list[str] | None:
+        return ["answer", "cancel"]
+
     def setup(self, input: Any) -> str:
         assert isinstance(input, str), (
             "Input for wikidata-query-logs must be a string (SPARQL query)"

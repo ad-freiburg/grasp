@@ -1,8 +1,10 @@
 import json
+import math
 import time
 import traceback
 import uuid
 from copy import deepcopy
+from dataclasses import dataclass, field
 from logging import Logger
 from typing import Any, Generator
 
@@ -36,13 +38,46 @@ from grasp.utils import (
 )
 
 
-def format_limits(config: GraspConfig, steps: int, elapsed: float) -> str:
-    remaining = [f"{max(0, config.max_steps - steps):,} of {config.max_steps:,} steps"]
-    if config.max_time is not None:
-        remaining.append(
-            f"{max(0, config.max_time - elapsed):,.0f} of {config.max_time:,.0f} seconds"
+def format_duration(seconds: int) -> str:
+    minutes, seconds = divmod(seconds, 60)
+    if minutes == 0:
+        return f"{seconds}s"
+    elif seconds == 0:
+        return f"{minutes:,}m"
+    return f"{minutes:,}m {seconds}s"
+
+
+@dataclass
+class Limits:
+    max_steps: int
+    max_time: float | None = None
+    start: float = field(default_factory=time.monotonic)
+    # model responses only
+    steps: int = 0
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self.start
+
+    @property
+    def reached(self) -> bool:
+        return self.steps >= self.max_steps or (
+            self.max_time is not None and self.elapsed >= self.max_time
         )
-    return f"Remaining: {', '.join(remaining)}."
+
+    def format(self) -> str:
+        steps = min(self.steps, self.max_steps)
+        parts = [
+            f"{steps:,} of {self.max_steps:,} steps ({self.max_steps - steps:,} left)"
+        ]
+        if self.max_time is not None:
+            used = min(self.elapsed, self.max_time)
+            parts.append(
+                f"{format_duration(math.floor(used))} of "
+                f"{format_duration(math.ceil(self.max_time))} "
+                f"({format_duration(math.ceil(self.max_time - used))} left)"
+            )
+        return f"Used {', '.join(parts)}."
 
 
 def system_instructions(
@@ -220,7 +255,7 @@ def generate(
     else:
         messages = [Message.system(content=system_instruction)]
 
-    start = time.monotonic()
+    limits = Limits(config.max_steps, config.max_time)
 
     # add user input
     messages.append(Message.user(content=input))
@@ -276,8 +311,6 @@ def generate(
     for msg in messages:
         logger.debug(format_message(msg))
 
-    # model responses, injected user messages do not count
-    steps = 0
     error: dict | None = None
 
     # keep track of last serialized message to detect loops
@@ -290,10 +323,7 @@ def generate(
     # one last step once the step or time limit is reached
     over_limit = False
     while True:
-        elapsed = time.monotonic() - start
-        if steps >= config.max_steps or (
-            config.max_time is not None and elapsed >= config.max_time
-        ):
+        if limits.reached:
             if over_limit:
                 error = {
                     "content": "Step or time limit reached",
@@ -304,13 +334,17 @@ def generate(
 
             over_limit = True
             task.last_step = True
-            limit_msg = (
-                "The step or time limit is reached. You have one last step, "
-                "finish now with your best result."
-            )
+            limit_msg = task.limit_message()
             messages.append(Message.user(limit_msg, name="limit"))
             yield {"type": "limit", "content": limit_msg}
-            logger.warning(f"Limit reached after {steps:,} steps and {elapsed:.1f}s")
+            logger.warning(
+                f"Limit reached after {limits.steps:,} steps and {limits.elapsed:.1f}s"
+            )
+
+            # the last step only offers the task's limit functions, if any
+            limit_fns = task.limit_functions()
+            if limit_fns is not None:
+                fns = [fn for fn in fns if fn["name"] in limit_fns]
 
         try:
             response = model(messages, fns)
@@ -339,7 +373,7 @@ def generate(
             break
 
         messages.append(Message.assistant(response))
-        steps += 1
+        limits.steps += 1
 
         resp_hash = response.hash()
         if last_resp_hash == resp_hash:
@@ -409,11 +443,7 @@ def generate(
             tool_call.elapsed = time.monotonic() - fn_start
             if config.show_limits:
                 # only shown to the model
-                tool_call.result += "\n\n" + format_limits(
-                    config,
-                    steps,
-                    time.monotonic() - start,
-                )
+                tool_call.result += "\n\n" + limits.format()
 
             yield {
                 "type": "tool",
@@ -507,7 +537,7 @@ def generate(
         "type": "output",
         "task": task_name,
         "output": output,
-        "elapsed": end - start,
+        "elapsed": end - limits.start,
         "error": error,
         "messages": [message.model_dump() for message in messages],
         "known": list(task.known),

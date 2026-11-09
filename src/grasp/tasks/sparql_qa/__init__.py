@@ -562,6 +562,9 @@ class SparqlQaTask(GraspTask, FeedbackTask):
     def done(self, fn_name: str) -> bool:
         return fn_name in {"answer", "cancel"} and not self.answer_rejected
 
+    def limit_functions(self) -> list[str] | None:
+        return ["answer", "cancel"]
+
     def output(self, messages: list[Message]) -> dict | None:
         return output(
             messages,

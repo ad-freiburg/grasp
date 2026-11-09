@@ -171,8 +171,8 @@ class GraspConfig(ModelConfig):
     max_steps: int = 100
     # in seconds, one last step once reached (as for max_steps)
     max_time: float | None = None
-    # remaining steps and time in function results
-    show_limits: bool = False
+    # used and remaining steps and time in function results
+    show_limits: bool = True
     # how many times the model is allowed to repeat the same response
     # (loop) before we give up; each repetition counts as one loop
     max_loops: int = 1
