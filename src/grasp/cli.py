@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from importlib import metadata
 
+import requests
 from search_rdf.model import SentenceTransformerModel
 from termcolor import colored
 from tqdm import tqdm
@@ -721,6 +722,24 @@ def parse_args() -> argparse.Namespace:
         help="Notes passed to the setup agent (single-phase runs only: info, entities, properties, literals, shapes)",
     )
 
+    # generate CONSTRUCT query for generic RDF
+    construct_parser = subparsers.add_parser(
+        "construct",
+        help="Generate a SPARQL CONSTRUCT query to semantify a generic RDF knowledge graph",
+    )
+    construct_parser.add_argument(
+        "knowledge_graph",
+        type=str,
+        help="Knowledge graph to generate the CONSTRUCT query for",
+    )
+    add_config_arg(construct_parser)
+    construct_parser.add_argument(
+        "output_dir",
+        type=str,
+        help="Directory to write the .nt file, CONSTRUCT query, and trace to",
+    )
+    add_overwrite_arg(construct_parser)
+
     # visualize trace from GRASP output
     show_parser = subparsers.add_parser(
         "show",
@@ -1299,6 +1318,156 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
     )
 
 
+def load_competency_questions(file: str | None) -> list[str]:
+    """Load competency questions from a JSON file holding a list of strings."""
+    if file is None:
+        return []
+
+    questions = load_json(file)
+    if not isinstance(questions, list) or not all(
+        isinstance(q, str) for q in questions
+    ):
+        raise ValueError(
+            f"Competency questions file {file} must contain a JSON list of strings"
+        )
+
+    # drop empties and duplicates, keeping the original order
+    seen: set[str] = set()
+    unique = []
+    for question in questions:
+        question = question.strip()
+        if not question or question in seen:
+            continue
+        seen.add(question)
+        unique.append(question)
+
+    return unique
+
+
+def construct_grasp(args: argparse.Namespace) -> None:
+    logger = get_logger("GRASP CONSTRUCT", args.log_level)
+    config = GraspConfig(**load_config(args.config))
+
+    managers, _ = setup(config)
+    if not managers:
+        logger.error("No KG managers available")
+        return
+
+    task_kwargs = config.task_kwargs.get("construct-gen", {})
+    ontology_mode = task_kwargs.get("ontology_mode", "custom")
+    ontology_kg_names = (
+        task_kwargs.get("ontology_kgs", []) if ontology_mode == "guided" else []
+    )
+    ontology_managers = [m for m in managers if m.kg in ontology_kg_names]
+
+    competency_questions = load_competency_questions(
+        task_kwargs.get("competency_questions_file")
+    )
+    if competency_questions:
+        logger.info(
+            f"Loaded {len(competency_questions)} competency question(s) from "
+            f"{task_kwargs['competency_questions_file']}"
+        )
+
+    data_manager, _ = find_manager(managers, args.knowledge_graph)
+
+    notes, kg_notes = load_notes(config)
+
+    output_dir = args.output_dir
+    if os.path.exists(output_dir) and not args.overwrite:
+        logger.error(
+            f"Output directory {output_dir} already exists. "
+            "Use --overwrite to overwrite."
+        )
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # trace for review rounds
+    config.task_kwargs.setdefault("construct-gen", {})["review_trace_dir"] = output_dir
+
+    result = consume_generator(
+        generate(
+            "construct-gen",
+            {
+                "kg": args.knowledge_graph,
+                "ontology_mode": ontology_mode,
+                "ontology_kgs": ontology_kg_names,
+                "competency_questions": competency_questions,
+            },
+            config,
+            [data_manager] + ontology_managers,
+            kg_notes=kg_notes,
+            notes=notes,
+            logger=logger,
+            yield_output=True,
+        )
+    )
+
+    # save trace
+    dump_json(result, os.path.join(output_dir, "trace.json"))
+    logger.info(f"Trace written to {output_dir}/trace.json")
+
+    task_output = result.get("output")
+    if not task_output:
+        logger.error("No output produced by the task")
+        return
+
+    queries = task_output.get("queries")
+    kg = task_output.get("kg")
+
+    if not queries:
+        logger.error("Task completed but no CONSTRUCT queries were returned")
+        return
+
+    construct_text = "\n\n".join(
+        f"# Query: {q['name']}\n{q['sparql']}" for q in queries
+    )
+    dump_text(construct_text, os.path.join(output_dir, "construct.sparql"))
+    logger.info(f"CONSTRUCT queries written to {output_dir}/construct.sparql")
+
+    # execute each query and write the resulting triples into one .nt file;
+    manager_for_kg, _ = find_manager(managers, kg or args.knowledge_graph)
+    nt_path = os.path.join(output_dir, "semantic.nt")
+    total, failed = 0, []
+    with open(nt_path, "w") as nt_file:
+        for q in queries:
+            try:
+                text = _run_construct(manager_for_kg, q["sparql"])
+            except Exception as e:
+                logger.error(f"CONSTRUCT query '{q['name']}' failed: {e}")
+                failed.append(q["name"])
+                continue
+
+            triples = [ln for ln in text.split("\n") if ln.strip()]
+            nt_file.writelines(ln + "\n" for ln in triples)
+            total += len(triples)
+            logger.info(f"Query '{q['name']}' produced {len(triples):,} triples")
+
+    logger.info(f"Written {total:,} triples to {nt_path}")
+    if failed:
+        logger.error(
+            f"{len(failed)} of {len(queries)} CONSTRUCT queries failed, "
+            f"{nt_path} is incomplete: {', '.join(failed)}"
+        )
+
+
+def _run_construct(manager, sparql: str, timeout: float = 600.0) -> str:
+    response = requests.post(
+        manager.endpoint,
+        data={**manager.params, "query": sparql},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/n-triples",
+            **manager.headers,
+        },
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+    return response.text
+
+
 def main():
     args = parse_args()
     if args.all_loggers:
@@ -1366,6 +1535,9 @@ def main():
             get_embedding_build_params(args),
             get_embedding_search_params(args),
         )
+
+    elif args.command == "construct":
+        construct_grasp(args)
 
 
 if __name__ == "__main__":
