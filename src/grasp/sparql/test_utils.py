@@ -18,6 +18,7 @@ from grasp.sparql.utils import (
     load_sparql_parser,
     parse_string,
     parse_to_string_with_whitespace,
+    prepare_identifier_for_sparql,
     query_type,
     backend_params,
 )
@@ -714,7 +715,30 @@ class TestServerTimeout:
         manager.execute_sparql("ASK { ?s ?p ?o }", (6.0, 30.0))
         assert "timeout" not in posted[0]
 
-    def test_params_win(self, posted):
-        manager = self.manager(params={"timeout": "120s"})
+    def test_request_timeout_wins(self, posted):
+        # a long params timeout (e.g. for data downloads) must not keep
+        # queries running on the server that the client gave up on
+        manager = self.manager(params={"timeout": "12h"})
         manager.execute_sparql("ASK { ?s ?p ?o }", (6.0, 30.0))
-        assert posted[0]["timeout"] == "120s"
+        manager.execute_sparql("ASK { ?s ?p ?o }", None)
+        assert [data["timeout"] for data in posted] == ["30000ms", "12h"]
+
+
+def test_prepare_identifier_for_sparql():
+    def prepare(identifier: str) -> str:
+        return prepare_identifier_for_sparql(identifier, IRI_PARSER)
+
+    assert prepare("http://example.org/a") == "<http://example.org/a>"
+    assert prepare('"a"@en') == '"a"@en'
+    # already escaped, kept as is
+    assert prepare('"say \\"hi\\""@en') == '"say \\"hi\\""@en'
+    # unescaped values as written by Binding.identifier()
+    assert prepare('"* R&B\n* pop"@en') == '"* R&B\\n* pop"@en'
+    assert prepare('"say "hi""@en') == '"say \\"hi\\""@en'
+    assert prepare('"1\n2"^^<http://example.org/dt>') == (
+        '"1\\n2"^^<http://example.org/dt>'
+    )
+    # long and single-quoted literals
+    assert prepare('"""* R&B\n* "pop" """@en') == '"* R&B\\n* \\"pop\\" "@en'
+    assert prepare("'''it's'''") == '"it\'s"'
+    assert prepare("'say \"hi\"'") == '"say \\"hi\\""'
