@@ -68,7 +68,12 @@ def note_taking_instructions(
                 format_section("Reference output", sample["reference"], level=3)
             )
 
-        formatted.append(format_section(f"Sample {i + 1}", "\n\n".join(parts)))
+        formatted.append(
+            format_section(
+                f"Sample {i + 1} over the {sample['kg']} knowledge graph",
+                "\n\n".join(parts),
+            )
+        )
 
     fmt = "\n\n".join(formatted)
 

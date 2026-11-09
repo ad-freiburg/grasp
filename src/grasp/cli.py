@@ -58,6 +58,7 @@ from grasp.utils import (
     get_available_knowledge_graphs,
     get_index_dir,
     is_invalid_output,
+    is_model_error,
     link,
     parse_key_value_pairs,
 )
@@ -87,6 +88,16 @@ def add_overwrite_arg(parser: argparse.ArgumentParser) -> None:
         "--overwrite",
         action="store_true",
         help="Overwrite existing output",
+    )
+
+
+def add_start_round_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--start-round",
+        type=int,
+        default=0,
+        help="Resume an earlier run in the same output directory at this round, "
+        "starting from the state its previous round saved",
     )
 
 
@@ -301,6 +312,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Consider None outputs as invalid when retrying failed inputs",
     )
+    file_parser.add_argument(
+        "--retry-agent-errors",
+        action="store_true",
+        help="Also retry inputs where the agent itself failed (step or time "
+        "limit reached, stuck in a loop) when retrying failed inputs",
+    )
     add_task_arg(file_parser)
     add_overwrite_arg(file_parser)
 
@@ -334,6 +351,7 @@ def parse_args() -> argparse.Namespace:
     )
     add_task_arg(note_samples_parser)
     add_overwrite_arg(note_samples_parser)
+    add_start_round_arg(note_samples_parser)
 
     note_interactions_parser = note_subparsers.add_parser(
         "outputs",
@@ -347,6 +365,7 @@ def parse_args() -> argparse.Namespace:
     )
     add_task_arg(note_interactions_parser)
     add_overwrite_arg(note_interactions_parser)
+    add_start_round_arg(note_interactions_parser)
 
     note_explore_parser = note_subparsers.add_parser(
         "explore",
@@ -360,6 +379,7 @@ def parse_args() -> argparse.Namespace:
         help="Save note taking results in this directory",
     )
     add_overwrite_arg(note_explore_parser)
+    add_start_round_arg(note_explore_parser)
 
     note_generate_parser = note_subparsers.add_parser(
         "generate-questions",
@@ -373,6 +393,7 @@ def parse_args() -> argparse.Namespace:
         help="Save generated samples in this directory",
     )
     add_overwrite_arg(note_generate_parser)
+    add_start_round_arg(note_generate_parser)
 
     # evaluate GRASP output
     eval_parser = subparsers.add_parser(
@@ -856,6 +877,7 @@ def run_grasp(args: argparse.Namespace) -> None:
             if not args.retry_failed or not is_invalid_output(
                 output,
                 args.none_output_invalid,
+                args.retry_agent_errors,
             ):
                 continue
 
@@ -936,6 +958,7 @@ def take_grasp_notes(args: argparse.Namespace) -> None:
             args.output_dir,
             args.overwrite,
             args.log_level,
+            args.start_round,
         )
     elif note_cmd == "outputs":
         take_notes_from_outputs(
@@ -944,6 +967,7 @@ def take_grasp_notes(args: argparse.Namespace) -> None:
             args.output_dir,
             args.overwrite,
             args.log_level,
+            args.start_round,
         )
     elif note_cmd == "explore":
         take_notes_from_exploration(
@@ -951,6 +975,7 @@ def take_grasp_notes(args: argparse.Namespace) -> None:
             args.output_dir,
             args.overwrite,
             args.log_level,
+            args.start_round,
         )
     elif note_cmd == "generate-questions":
         generate_questions(
@@ -958,6 +983,7 @@ def take_grasp_notes(args: argparse.Namespace) -> None:
             args.output_dir,
             args.overwrite,
             args.log_level,
+            args.start_round,
         )
 
 
@@ -1027,6 +1053,13 @@ def show_grasp(args: argparse.Namespace) -> None:
             print(f"\n{separator}\n")
         first = False
         print(format_trace(trace, skip_system=args.skip_system))
+
+
+def dump_failed_trace(path: str, result: dict, timestamp: str) -> str:
+    stem, ext = os.path.splitext(path)
+    stamped = f"{stem}.{timestamp}.failed{ext}"
+    dump_json(result, stamped, indent=2)
+    return stamped
 
 
 def setup_grasp(args: argparse.Namespace) -> None:
@@ -1115,6 +1148,15 @@ def setup_grasp(args: argparse.Namespace) -> None:
         )
 
         trace_path = os.path.join(trace_dir, "auto-setup.trace.json")
+        if is_model_error(result):
+            # no outputs and no latest link (which marks the phase as done),
+            # only the timestamped trace for inspection
+            stamped = dump_failed_trace(trace_path, result, timestamp)
+            logger.error(
+                f"Setup {p} phase failed with a model error, trace saved to {stamped}"
+            )
+            sys.exit(1)
+
         stamped = dump_latest(trace_path, result)
         logger.info(f"Saved setup {p} trace to {stamped} (latest: {trace_path})")
 
@@ -1196,6 +1238,13 @@ def shapes_setup_grasp(args: argparse.Namespace) -> None:
     os.makedirs(shapes_dir, exist_ok=True)
 
     trace_path = os.path.join(shapes_dir, "shapes-setup.trace.json")
+    if is_model_error(result):
+        stamped = dump_failed_trace(trace_path, result, timestamp)
+        logger.error(
+            f"Shapes setup failed with a model error, trace saved to {stamped}"
+        )
+        sys.exit(1)
+
     stamped = dump_latest(trace_path, result)
     logger.info(f"Saved setup trace to {stamped} (latest: {trace_path})")
 

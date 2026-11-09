@@ -6,7 +6,7 @@ import yaml
 from pydantic import BaseModel
 from search_rdf.model import SentenceTransformerModel
 from tqdm import tqdm, trange
-from universal_ml_utils.io import dump_json, dump_jsonl, load_jsonl
+from universal_ml_utils.io import dump_json, dump_jsonl, load_json, load_jsonl
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.ops import consume_generator
 
@@ -37,13 +37,81 @@ from grasp.tasks.notes_from_traces import NotesFromTracesState
 from grasp.tasks.question_generation import QuestionGenerationState
 from grasp.tasks.sparql_qa.examples import SparqlQaSample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
-from grasp.utils import link
+from grasp.utils import is_model_error, link
 
 
-def dump_config(config: BaseModel, out_dir: str) -> None:
+def check_model_error(output: dict, what: str) -> None:
+    # a round lost to a model error is not a round without findings
+    if is_model_error(output):
+        raise RuntimeError(
+            f"{what} failed with a model error: {output['error']['content'][:500]}"
+        )
+
+
+def dump_config(config: BaseModel, out_dir: str, start_round: int = 0) -> None:
     os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, "config.yaml"), "w") as f:
+    # a resumed run keeps the config of the original run next to its own
+    name = (
+        "config.yaml" if start_round == 0 else f"config.start_round_{start_round}.yaml"
+    )
+    with open(os.path.join(out_dir, name), "w") as f:
         yaml.dump(config.model_dump(), f)
+
+
+def prepare_out_dir(
+    out_dir: str,
+    overwrite: bool,
+    start_round: int,
+    num_rounds: int,
+) -> None:
+    if not 0 <= start_round < num_rounds:
+        raise ValueError(
+            f"Start round must be between 0 and {num_rounds - 1}, got {start_round}"
+        )
+    elif start_round > 0 and not os.path.isdir(out_dir):
+        raise FileNotFoundError(
+            f"Cannot resume at round {start_round}, "
+            f"output directory {out_dir} does not exist"
+        )
+    elif start_round == 0 and os.path.exists(out_dir) and not overwrite:
+        raise FileExistsError(f"Output directory {out_dir} already exists")
+
+
+def previous_round_file(out_dir: str, name: str, start_round: int) -> str:
+    path = os.path.join(out_dir, name)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Cannot resume at round {start_round}, {path} of the previous "
+            "round is missing"
+        )
+    return path
+
+
+def load_previous_kg_notes(
+    config: GraspConfig,
+    out_dir: str,
+    prefix: str,
+    start_round: int,
+) -> dict[str, list[str]]:
+    # a round only writes notes of KGs that have some
+    kg_notes = {}
+    for kg in config.knowledge_graphs:
+        name = f"notes.{prefix}.{kg.kg}.round_{start_round - 1}.json"
+        path = os.path.join(out_dir, name)
+        if os.path.exists(path):
+            kg_notes[kg.kg] = load_json(path)
+    return kg_notes
+
+
+def load_previous_notes(
+    config: GraspConfig,
+    out_dir: str,
+    prefix: str,
+    start_round: int,
+) -> tuple[list[str], dict[str, list[str]]]:
+    name = f"notes.{prefix}.round_{start_round - 1}.json"
+    notes = load_json(previous_round_file(out_dir, name, start_round))
+    return notes, load_previous_kg_notes(config, out_dir, prefix, start_round)
 
 
 def take_notes_from_samples(
@@ -52,9 +120,9 @@ def take_notes_from_samples(
     out_dir: str,
     overwrite: bool = False,
     log_level: str | int | None = None,
+    start_round: int = 0,
 ) -> None:
-    if os.path.exists(out_dir) and not overwrite:
-        raise FileExistsError(f"Output directory {out_dir} already exists")
+    prepare_out_dir(out_dir, overwrite, start_round, config.num_rounds)
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
@@ -72,6 +140,8 @@ def take_notes_from_samples(
         examples_model or config.embedding_model,
     )
     notes, kg_notes = load_notes(config)
+    if start_round > 0:
+        notes, kg_notes = load_previous_notes(config, out_dir, task, start_round)
 
     # optional dedicated note-taking model fully replaces the parent config's
     # model for the note-taking step; the agent runs on the parent config above
@@ -83,7 +153,7 @@ def take_notes_from_samples(
     assert sample_cls is not None, f"Task {task} does not support samples"
 
     assert config.seed is not None, "Seed must be set for adaptation"
-    dump_config(config, out_dir)
+    dump_config(config, out_dir, start_round)
 
     all_samples: list[tuple[str, Sample]] = []
     for sample_cfg in config.samples:
@@ -116,7 +186,7 @@ def take_notes_from_samples(
         else get_task(task, managers, config).system_information()
     )
 
-    for r in trange(config.num_rounds, desc="Taking notes from samples"):
+    for r in trange(start_round, config.num_rounds, desc="Taking notes from samples"):
         samples = sequence[r * n_per_round : (r + 1) * n_per_round]
 
         if config.ignore_ground_truth:
@@ -143,6 +213,7 @@ def take_notes_from_samples(
                         logger=agent_logger,
                     )
                 )
+                check_model_error(output, f"Agent run on a sample in round {r}")
                 outputs.append(output)
 
             state: NotesFromTracesState = NotesFromTracesState(
@@ -194,6 +265,7 @@ def take_notes_from_samples(
         ]
         output["traces"] = outputs
         dump_json(output, os.path.join(out_dir, f"output.{task}.round_{r}.json"))
+        check_model_error(output, f"Note-taking round {r}")
 
         for kg, kg_specific_notes in kg_notes.items():
             out_file = os.path.join(out_dir, f"notes.{task}.{kg}.round_{r}.json")
@@ -211,14 +283,16 @@ def take_notes_from_outputs(
     out_dir: str,
     overwrite: bool = False,
     log_level: str | int | None = None,
+    start_round: int = 0,
 ) -> None:
-    if os.path.exists(out_dir) and not overwrite:
-        raise FileExistsError(f"Output directory {out_dir} already exists")
+    prepare_out_dir(out_dir, overwrite, start_round, config.num_rounds)
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
     managers, _ = setup(config)
     notes, kg_notes = load_notes(config)
+    if start_round > 0:
+        notes, kg_notes = load_previous_notes(config, out_dir, task, start_round)
 
     note_taking_model = (
         get_model(config.note_taking_model) if config.note_taking_model else None
@@ -226,7 +300,7 @@ def take_notes_from_outputs(
 
     assert config.seed is not None, "Seed must be set for adaptation"
 
-    dump_config(config, out_dir)
+    dump_config(config, out_dir, start_round)
 
     all_outputs = []
     for output_file in config.outputs:
@@ -251,7 +325,7 @@ def take_notes_from_outputs(
         sequence.extend(random.sample(all_outputs, len(all_outputs)))
         epoch += 1
 
-    for r in trange(config.num_rounds, desc="Taking notes from outputs"):
+    for r in trange(start_round, config.num_rounds, desc="Taking notes from outputs"):
         outputs = sequence[r * n_per_round : (r + 1) * n_per_round]
 
         state = NotesFromTracesState(notes=notes, kg_notes=kg_notes, outputs=outputs)
@@ -273,6 +347,7 @@ def take_notes_from_outputs(
 
         output["traces"] = outputs
         dump_json(output, os.path.join(out_dir, f"output.{task}.round_{r}.json"))
+        check_model_error(output, f"Note-taking round {r}")
 
         for kg, kg_specific_notes in kg_notes.items():
             out_file = os.path.join(out_dir, f"notes.{task}.{kg}.round_{r}.json")
@@ -289,9 +364,10 @@ def take_notes_from_exploration(
     out_dir: str,
     overwrite: bool = False,
     log_level: str | int | None = None,
+    start_round: int = 0,
 ) -> None:
-    if os.path.exists(out_dir) and not overwrite:
-        raise FileExistsError(f"Output directory {out_dir} already exists")
+    assert isinstance(config, NotesFromExplorationConfig)
+    prepare_out_dir(out_dir, overwrite, start_round, config.num_rounds)
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
@@ -310,23 +386,41 @@ def take_notes_from_exploration(
     )
     notes, kg_notes = load_notes(config)
 
-    dump_config(config, out_dir)
+    dump_config(config, out_dir, start_round)
 
-    assert isinstance(config, NotesFromExplorationConfig)
     if config.mode == "functional":
         task_name = "exploration_functional"
+        if start_round > 0:
+            # the general notes are the only state, the KG notes are context
+            name = f"notes.exploration.round_{start_round - 1}.json"
+            notes = load_json(previous_round_file(out_dir, name, start_round))
         state = FunctionalExplorationState(notes=notes)
         # rebind
         notes = state.notes
     elif config.mode == "structural":
         task_name = "exploration_structural"
-        state = StructuralExplorationState(kg_notes=kg_notes)
+        explored = {}
+        if start_round > 0:
+            name = f"output.exploration.round_{start_round - 1}.json"
+            previous = load_json(previous_round_file(out_dir, name, start_round))
+            kg_notes = load_previous_kg_notes(
+                config, out_dir, "exploration", start_round
+            )
+            if not kg_notes:
+                raise FileNotFoundError(
+                    f"Cannot resume at round {start_round}, no KG notes of the "
+                    f"previous round in {out_dir}"
+                )
+            explored = (previous.get("output") or {}).get("explored") or {}
+        state = StructuralExplorationState(kg_notes=kg_notes, explored=explored)
         # rebind
         kg_notes = state.kg_notes
     else:
         raise ValueError(f"Unknown exploration mode: {config.mode}")
 
-    for r in trange(config.num_rounds, desc="Taking notes from exploration"):
+    for r in trange(
+        start_round, config.num_rounds, desc="Taking notes from exploration"
+    ):
         output = consume_generator(
             generate(
                 task_name,
@@ -341,6 +435,8 @@ def take_notes_from_exploration(
         )
 
         dump_json(output, os.path.join(out_dir, f"output.exploration.round_{r}.json"))
+
+        check_model_error(output, f"Exploration round {r}")
 
         if config.mode == "structural":
             for kg, kg_specific_notes in kg_notes.items():
@@ -360,20 +456,35 @@ def generate_questions(
     out_dir: str,
     overwrite: bool = False,
     log_level: str | int | None = None,
+    start_round: int = 0,
 ) -> None:
-    if os.path.exists(out_dir) and not overwrite:
-        raise FileExistsError(f"Output directory {out_dir} already exists")
+    prepare_out_dir(out_dir, overwrite, start_round, config.num_rounds)
 
     agent_logger = get_logger("GRASP AGENT", log_level)
 
     managers, _ = setup(config)
     notes, kg_notes = load_notes(config)
 
-    dump_config(config, out_dir)
+    dump_config(config, out_dir, start_round)
 
     state = QuestionGenerationState()
+    if start_round > 0:
+        # the previous round must have finished; it may have added no questions
+        name = f"question-generation.trace.round_{start_round - 1}.json"
+        previous = load_json(previous_round_file(out_dir, name, start_round))
+        if is_model_error(previous):
+            raise RuntimeError(
+                f"Cannot resume at round {start_round}, the previous round "
+                "failed with a model error"
+            )
+        for kg in config.knowledge_graphs:
+            name = f"samples.{kg.kg}.round_{start_round - 1}.jsonl"
+            path = os.path.join(out_dir, name)
+            if os.path.exists(path):
+                samples = load_jsonl(path)
+                state.questions[kg.kg] = [s["question"] for s in samples]
 
-    for r in trange(config.num_rounds, desc="Generating questions"):
+    for r in trange(start_round, config.num_rounds, desc="Generating questions"):
         output = consume_generator(
             generate(
                 "question-generation",
@@ -390,6 +501,7 @@ def generate_questions(
             output,
             os.path.join(out_dir, f"question-generation.trace.round_{r}.json"),
         )
+        check_model_error(output, f"Question generation round {r}")
 
         for kg, kg_questions in state.questions.items():
             samples = [

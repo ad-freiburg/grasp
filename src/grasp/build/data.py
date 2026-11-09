@@ -250,6 +250,10 @@ def get_value_from_id_binding(obj_id: Binding, prefixes: dict[str, str]) -> str:
     return label.strip()
 
 
+# field tags the search index supports (search_rdf FieldTag)
+FIELD_TAGS = {"main"}
+
+
 def parse_binding(
     binding: dict,
     parser: LR1Parser,
@@ -304,8 +308,20 @@ def prepare_items(
     # collect all labels for an id (which are consecutive in the stream)
     last_id_binding = None
     fields = []
+    unknown_tags = set()
     for num, binding in enumerate(bindings, start=1):
         id_binding, value_binding, tags = parse_binding(binding, parser)
+
+        # drop tags unknown to the search index (e.g. "alias"), the value
+        # is then indexed as a non-main value
+        new_unknown = {tag for tag in tags if tag and tag not in FIELD_TAGS}
+        if logger and new_unknown - unknown_tags:
+            logger.warning(
+                f"Ignoring unknown field tags {sorted(new_unknown - unknown_tags)}, "
+                f"supported are {sorted(FIELD_TAGS)}"
+            )
+        unknown_tags |= new_unknown
+        tags = [tag for tag in tags if tag in FIELD_TAGS]
 
         if logger and num % 1_000_000 == 0:
             logger.info(f"Processed {num:,} bindings so far")
