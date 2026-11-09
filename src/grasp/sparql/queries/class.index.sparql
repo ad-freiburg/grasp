@@ -1,0 +1,23 @@
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT DISTINCT ?id ?value ?tags WHERE {
+  # Get classes and their number of instances for score
+  { SELECT ?id (COUNT(?instance) AS ?score) WHERE { ?instance rdf:type ?id . FILTER(ISIRI(?id)) } GROUP BY ?id }
+
+  {
+    # Get label as main field
+    ?id rdfs:label ?value
+    BIND("main" AS ?tags)
+    FILTER(LANG(?value) = "en")
+  } UNION {
+    # Get aliases
+    ?id skos:altLabel ?value
+    FILTER(LANG(?value) = "en")
+  } UNION {
+    # Class IRIs are often meaningful, so make them searchable too
+    # (the indexer extracts the local name)
+    BIND(?id AS ?value)
+  }
+} ORDER BY DESC(?score) ?id DESC(?tags)

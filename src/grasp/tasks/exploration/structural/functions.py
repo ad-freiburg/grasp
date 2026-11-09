@@ -5,6 +5,7 @@ from grasp.functions import (
     parse_iri_or_literal,
 )
 from grasp.manager import KgManager
+from grasp.sparql.types import iri_indices
 from grasp.tasks.exploration.functions import (
     note_function_definitions as base_note_function_definitions,
 )
@@ -120,15 +121,11 @@ def show_explored(
 
     manager, _ = find_manager(managers, kg)
 
-    # seeds may be entities or properties; classify per-iri via cheap local
-    # lookups (same fallback pattern as KgManager.format_sparql_result), then
-    # batch-fetch info per index group
-    groups: dict[str, list[str]] = {"entities": [], "properties": []}
+    # group seeds by the first index containing them (entities otherwise)
+    # to batch-fetch their infos
+    groups: dict[str, list[str]] = {}
     for iri in page_items:
-        for idx in ("entities", "properties"):
-            if manager.normalize(iri, idx) is not None:
-                groups[idx].append(iri)
-                break
+        groups.setdefault(seed_index_name(iri, manager), []).append(iri)
 
     infos: dict[str, dict] = {}
     for idx, ids in groups.items():
@@ -141,3 +138,11 @@ def show_explored(
         items.append(alt.get_selection_string())
 
     return header + format_enumerate(items, start=start)
+
+
+def seed_index_name(iri: str, manager: KgManager) -> str:
+    for obj_type in iri_indices():
+        norm = manager.normalize(iri, obj_type.index_name)
+        if norm is not None and manager.check_identifier(norm[0], obj_type.index_name):
+            return obj_type.index_name
+    return "entities"

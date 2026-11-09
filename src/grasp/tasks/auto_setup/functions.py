@@ -33,7 +33,7 @@ def set_description_function(description: str) -> dict:
     }
 
 
-def index_functions(index_name: str = "entities") -> list[dict]:
+def index_functions(others: list[str]) -> list[dict]:
     fns: list[dict] = [
         {
             "name": "show_setup",
@@ -67,19 +67,27 @@ def index_functions(index_name: str = "entities") -> list[dict]:
         ),
     ]
 
-    # show_entity_setup is only useful while authoring the literals index,
-    # where the agent may want to inspect the entity index to avoid
-    # duplicating the literals it already covers as entity-associated labels.
-    if index_name == "literals":
+    # lets the agent check the other indices that are already set up,
+    # so that overlaps with them are deliberate
+    if others:
         fns.append(
             {
-                "name": "show_entity_setup",
-                "description": "Show the current entity index setup (index SPARQL, info "
-                "SPARQL, and description) for this knowledge graph. Use this while "
-                "authoring the literals index to see which literals the entity index "
-                "already covers, and avoid duplicating that coverage in the literals "
-                "index.",
-                "parameters": {},
+                "name": "show_index_setup",
+                "description": "Show the setup (index SPARQL, info SPARQL, and description) "
+                "of another index of this knowledge graph that is already set up.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "index": {
+                            "type": "string",
+                            "enum": others,
+                            "description": "The index to show the setup for",
+                        },
+                    },
+                    "required": ["index"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
             }
         )
 

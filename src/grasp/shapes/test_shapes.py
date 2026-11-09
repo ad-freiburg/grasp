@@ -1,5 +1,7 @@
+import pytest
 from unittest.mock import Mock
 
+from grasp.utils import FunctionCallException
 from grasp.build.shapes import (
     ClassMaps,
     build_per_class_property_frequency_query,
@@ -7,6 +9,7 @@ from grasp.build.shapes import (
     build_total_entities_query,
     ClassProfile,
     DirectedMaps,
+    InstanceSample,
     PropertyFreq,
     PropertyProfile,
     assemble_profile,
@@ -14,12 +17,14 @@ from grasp.build.shapes import (
     collect_iris,
     compute_shape,
     emit_pseudo_shex,
+    members_block,
+    select_shape_view,
 )
-from grasp.configs import GraspConfig, ShapeConfig
-from grasp.functions import call_shape_function
+from grasp.configs import ShapeConfig
+from grasp.functions import get_class_shape
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer, WikidataPropertyNormalizer
-from grasp.shapes import Shapes, ShapeSample, Target, TargetClass, TargetLiteral
+from grasp.shapes import Shapes, Target, TargetClass, TargetLiteral
 from grasp.sparql.types import AskResult, SelectResult
 from grasp.sparql.utils import load_iri_and_literal_parser
 
@@ -186,17 +191,18 @@ class TestAssembleProfile:
         assert shex == (
             "http://ex.org/C {\n"
             "  http://ex.org/common IRI ;\n"
-            "  ... 1 filtered (low coverage)\n"
+            "  # page 1 of 1, 1 outgoing property, 1 more used by "
+            "less than 50% of the instances (pass a query to rank all properties including these)\n"
             "}"
         )
 
-    def test_cap_omits(self):
+    def test_pages(self):
         manager = make_manager()
         freq_map = {
             f"http://ex.org/p{i}": {"triple_count": 100 - i, "entity_count": 100 - i}
             for i in range(5)
         }
-        shape_config = ShapeConfig(max_properties_per_class=3, min_property_share=0.0)
+        shape_config = ShapeConfig(min_property_share=0.0)
 
         profile = assemble_profile(
             "http://ex.org/C",
@@ -205,22 +211,29 @@ class TestAssembleProfile:
             shape_config=shape_config,
             manager=manager,
         )
-        shex = emit_pseudo_shex(profile, manager, shape_config)
+        shex = emit_pseudo_shex(profile, manager, shape_config, k=3)
+        assert [line for line in shex.splitlines() if line.endswith(";")] == [
+            f"  http://ex.org/p{i} IRI ;" for i in range(3)
+        ]
+        assert "# page 1 of 2, 5 outgoing properties" in shex
+        assert "less than" not in shex
 
-        assert "... 2 omitted (cap)" in shex
-        assert "filtered" not in shex
+        shex = emit_pseudo_shex(profile, manager, shape_config, k=3, page=2)
+        assert [line for line in shex.splitlines() if line.endswith(";")] == [
+            f"  http://ex.org/p{i} IRI ;" for i in range(3, 5)
+        ]
+        assert "# page 2 of 2" in shex
 
-    def test_cap_and_coverage_filter(self):
+    def test_rare_left_out_before_paging(self):
         manager = make_manager()
-        # p0: common, p1: rare (high triples, low entities → filtered within cap),
-        # p2: common, p3: omitted (beyond cap=3)
+        # p1 and p3 are rare (low entities), so p0 and p2 fit on one page
         freq_map = {
             "http://ex.org/p0": {"triple_count": 100, "entity_count": 100},
             "http://ex.org/p1": {"triple_count": 99, "entity_count": 1},
             "http://ex.org/p2": {"triple_count": 98, "entity_count": 98},
             "http://ex.org/p3": {"triple_count": 1, "entity_count": 1},
         }
-        shape_config = ShapeConfig(max_properties_per_class=3, min_property_share=0.5)
+        shape_config = ShapeConfig(min_property_share=0.5)
 
         profile = assemble_profile(
             "http://ex.org/C",
@@ -229,9 +242,36 @@ class TestAssembleProfile:
             shape_config=shape_config,
             manager=manager,
         )
-        shex = emit_pseudo_shex(profile, manager, shape_config)
+        shex = emit_pseudo_shex(profile, manager, shape_config, k=3)
 
-        assert "... 1 omitted (cap), 1 filtered (low coverage)" in shex
+        assert "http://ex.org/p0" in shex and "http://ex.org/p2" in shex
+        assert "http://ex.org/p1" not in shex and "http://ex.org/p3" not in shex
+        assert "# page 1 of 1, 2 outgoing properties, 2 more" in shex
+
+    def test_ranking_shows_all_best_first(self):
+        manager = make_manager()
+        freq_map = {
+            "http://ex.org/p0": {"triple_count": 100, "entity_count": 100},
+            "http://ex.org/p1": {"triple_count": 99, "entity_count": 1},
+            "http://ex.org/p2": {"triple_count": 98, "entity_count": 98},
+        }
+        shape_config = ShapeConfig(min_property_share=0.5)
+        profile = assemble_profile(
+            "http://ex.org/C",
+            make_maps(freq_map),
+            total_entities=100,
+            shape_config=shape_config,
+            manager=manager,
+        )
+
+        view = select_shape_view(profile, shape_config, 2, ranking=["http://ex.org/p1"])
+        # the rare p1 is included and ranked first, the rest keeps its order
+        assert [p.iri for p in view.properties] == [
+            "http://ex.org/p1",
+            "http://ex.org/p0",
+        ]
+        assert view.total_pages == 2
+        assert view.rare == 0
 
     def test_empty_freq_map(self):
         manager = make_manager()
@@ -245,11 +285,13 @@ class TestAssembleProfile:
         )
         shex = emit_pseudo_shex(profile, manager, shape_config)
 
-        assert shex == "http://ex.org/X {\n  # no properties found for this class\n}"
+        assert shex == (
+            "http://ex.org/X {\n  # no outgoing properties found for this class\n}"
+        )
 
-    def test_hint_suppressed_when_only_incoming(self):
-        # a class with no properties of its own but with inverse edges is not
-        # empty, so the hint must not fire.
+    def test_only_incoming_points_to_other_direction(self):
+        # a class with no properties of its own but with inverse edges says
+        # so and points to the incoming direction
         manager = make_manager()
         shape_config = ShapeConfig()
         profile = assemble_profile(
@@ -268,13 +310,22 @@ class TestAssembleProfile:
 
         assert shex == (
             "http://ex.org/Decision {\n"
+            "  # no outgoing properties found for this class, "
+            '1 incoming (direction="in")\n'
+            "}"
+        )
+
+        shex = emit_pseudo_shex(profile, manager, shape_config, direction="in")
+
+        assert shex == (
+            "http://ex.org/Decision {\n"
             "  ^http://ex.org/hasDecision http://ex.org/Paper ;\n"
             "}"
         )
 
-    def test_incoming_has_its_own_cap(self):
+    def test_directions_page_separately(self):
         manager = make_manager()
-        shape_config = ShapeConfig(max_incoming_per_class=2)
+        shape_config = ShapeConfig()
         incoming = make_directed(
             freq={f"http://ex.org/in{i}": {"triple_count": 100 - i} for i in range(5)},
         )
@@ -288,12 +339,24 @@ class TestAssembleProfile:
             shape_config=shape_config,
             manager=manager,
         )
-        shex = emit_pseudo_shex(profile, manager, shape_config)
+        shex = emit_pseudo_shex(profile, manager, shape_config, k=2)
 
-        # the outgoing property is untouched by the incoming cap
+        # outgoing only, with a pointer to the incoming ones
         assert "  http://ex.org/out IRI ;" in shex
+        assert "  ^" not in shex
+        assert '# page 1 of 1, 1 outgoing property, 5 incoming (direction="in")' in shex
+
+        shex = emit_pseudo_shex(profile, manager, shape_config, k=2, direction="in")
+        assert "http://ex.org/out IRI" not in shex
         assert shex.count("  ^") == 2
-        assert "... 3 incoming omitted (cap)" in shex
+        assert (
+            '# page 1 of 3, 5 incoming properties, 1 outgoing (direction="out")' in shex
+        )
+
+        shex = emit_pseudo_shex(
+            profile, manager, shape_config, k=2, direction="in", page=3
+        )
+        assert shex.count("  ^") == 1
 
     def test_blank_node_objects_split_out_of_the_iri_gap(self):
         manager = make_manager()
@@ -441,12 +504,12 @@ class TestComputeShape:
         )
         total_result = select(["totalEntities"], [{"totalEntities": literal("1000")}])
         manager.execute_sparql.side_effect = [
+            total_result,
             freq_result,
             lit_result,
             range_result,
             in_freq_result,
             in_source_result,
-            total_result,
         ]
 
         shape_config = ShapeConfig()
@@ -459,12 +522,30 @@ class TestComputeShape:
 
         # inverse edges render with a leading ^ and carry no cardinality tag,
         # even though the incoming entity counts are known.
-        assert emit_pseudo_shex(profile, manager, shape_config) == (
+        assert emit_pseudo_shex(profile, manager, shape_config, direction="in") == (
             "http://ex.org/Human {\n"
-            "  http://ex.org/name http://www.w3.org/2001/XMLSchema#string ? ;\n"
             "  ^http://ex.org/knows http://ex.org/Human ;\n"
+            '  # page 1 of 1, 1 incoming property, 1 outgoing (direction="out")\n'
             "}"
         )
+
+    def test_large_class_is_sampled(self):
+        manager = make_manager()
+        total_result = select(["totalEntities"], [{"totalEntities": literal("5000")}])
+        empty = select(["p"], [])
+        manager.execute_sparql.side_effect = [total_result] + [empty] * 5
+
+        profile = compute_shape(
+            "http://ex.org/Human",
+            manager,
+            instance_pattern="?instance a {CLASS} .",
+            shape_config=ShapeConfig(max_profile_instances=1000, profile_windows=4),
+        )
+
+        assert profile.total_entities == 5000
+        assert profile.profiled_entities == 1000
+        freq_query = manager.execute_sparql.call_args_list[1].args[0]
+        assert freq_query.count("LIMIT 250") == 4
 
     def test_query_failure_raises(self):
         manager = make_manager()
@@ -515,7 +596,9 @@ class TestComputeShape:
         )
 
         assert emit_pseudo_shex(profile, manager, shape_config) == (
-            "http://edas/#Acceptance {\n  # no properties found for this class\n}"
+            "http://edas/#Acceptance {\n"
+            "  # no outgoing properties found for this class\n"
+            "}"
         )
 
     def test_schema_pattern_classifies_targets(self):
@@ -600,7 +683,7 @@ class TestComputeShape:
         assert emit_pseudo_shex(profile, manager, shape_config) == (
             "http://cmt/#Paper {\n"
             "  http://cmt/#hasDecision http://cmt/#Decision ;\n"
-            "  ^http://cmt/#writePaper http://cmt/#Author ;\n"
+            '  # page 1 of 1, 1 outgoing property, 1 incoming (direction="in")\n'
             "}"
         )
 
@@ -647,7 +730,7 @@ class TestComputeShape:
 
         # an anonymous class expression is reported as BNODE, not as a bare IRI:
         # claiming IRI would tell the model to bind something that cannot match.
-        assert emit_pseudo_shex(profile, manager, shape_config) == (
+        assert emit_pseudo_shex(profile, manager, shape_config, direction="in") == (
             "http://cmt/#Paper {\n  ^http://cmt/#markConflictOfInterest BNODE ;\n}"
         )
 
@@ -705,12 +788,12 @@ class TestComputeShape:
             ],
         )
         manager.execute_sparql.side_effect = [
+            total_result,
             freq_result,
             lit_result,
             range_result,
             empty_in_freq,
             empty_in_source,
-            total_result,
             schema_result,
         ]
 
@@ -724,8 +807,8 @@ class TestComputeShape:
             shape_config=shape_config,
         )
 
-        # 5 instance-side queries (freq, literals, ranges, incoming freq,
-        # incoming sources) + the total + 1 schema query
+        # the total + 5 instance-side queries (freq, literals, ranges,
+        # incoming freq, incoming sources) + 1 schema query
         assert manager.execute_sparql.call_count == 7
         out = emit_pseudo_shex(profile, manager, shape_config)
         assert "http://ex.org/name" in out  # high coverage instance prop kept
@@ -853,7 +936,8 @@ class TestWikidataVariantGrouping:
             shape_config=ShapeConfig(min_property_share=0.0),
             manager=manager,
         )
-        iris = collect_iris(profile, manager, ShapeConfig(min_property_share=0.0))
+        view = select_shape_view(profile, ShapeConfig(min_property_share=0.0), 10)
+        iris = collect_iris(view, manager)
         assert "http://www.wikidata.org/entity/P31" in iris
         assert "http://www.wikidata.org/prop/direct/P31" in iris
         assert "http://www.wikidata.org/prop/P31" in iris
@@ -874,55 +958,10 @@ class TestWikidataVariantGrouping:
             shape_config=ShapeConfig(),
             manager=manager,
         )
-        iris = collect_iris(profile, manager, ShapeConfig())
+        view = select_shape_view(profile, ShapeConfig(), 10, direction="in")
+        iris = collect_iris(view, manager)
         assert "http://ex.org/hasDecision" in iris
         assert "http://ex.org/Paper" in iris
-
-
-def empty_profile(
-    iri: str = "http://ex.org/Q5", short_iri: str = "wd:Q5"
-) -> ClassProfile:
-    return ClassProfile(iri=iri, short_iri=short_iri)
-
-
-class TestShapeSampleQueries:
-    def test_label_and_aliases(self):
-        s = ShapeSample(
-            iri="http://ex.org/Q5",
-            short_iri="wd:Q5",
-            profile=empty_profile(),
-            label="Human",
-            aliases=["person", "human being"],
-        )
-        assert s.queries() == ["Human", "person", "human being", "wd:Q5"]
-
-    def test_deduplicates(self):
-        s = ShapeSample(
-            iri="http://ex.org/Q5",
-            short_iri="wd:Q5",
-            profile=empty_profile(),
-            label="wd:Q5",  # same as short_iri
-        )
-        assert s.queries() == ["wd:Q5"]
-
-    def test_missing_optional_fields(self):
-        s = ShapeSample(
-            iri="http://ex.org/Q5",
-            short_iri="wd:Q5",
-            profile=empty_profile(),
-        )
-        assert s.queries() == ["wd:Q5"]
-
-    def test_roundtrip_via_model_dump(self):
-        s = ShapeSample(
-            iri="http://ex.org/Q5",
-            short_iri="wd:Q5",
-            profile=empty_profile(),
-            label="Human",
-            aliases=["person"],
-        )
-        s2 = ShapeSample.model_validate(s.model_dump())
-        assert s2 == s
 
 
 def test_class_discovery_only_considers_iri_classes() -> None:
@@ -951,23 +990,24 @@ def test_per_class_queries_are_not_iri_filtered() -> None:
     assert "<https://gptkb.org/concept/C0>" in query
 
 
-class TestGetShapeIriGuard:
+class TestGetClassShape:
     def make_shape_manager(self) -> Mock:
         m = make_manager()
         m.kg = "test"
         m.iri_literal_parser = load_iri_and_literal_parser()
         m.shape_config = ShapeConfig()
+        m.indices = {}
         return m
 
-    def call(self, manager: Mock, iri: str) -> str:
-        shapes = Shapes(instance_pattern="?instance a {CLASS} .")
-        return call_shape_function(
-            "get_shape",
-            {"iri": iri},
-            shapes,
-            manager,
-            GraspConfig(),
-        )
+    def call(
+        self,
+        manager: Mock,
+        iri: str,
+        shapes: Shapes | None = None,
+        query: str | None = None,
+    ) -> str:
+        shapes = shapes or Shapes(instance_pattern="?instance a {CLASS} .")
+        return get_class_shape(manager, shapes, iri, "out", query, 1, 10)
 
     def test_non_iri_argument_is_rejected_before_building_sparql(self) -> None:
         # a bare label parses as a literal, and wrapping it in <> would only
@@ -985,5 +1025,69 @@ class TestGetShapeIriGuard:
         result = self.call(manager, "http://ex.org/Human")
 
         # got past the guard and into compute_shape
-        assert "failed to compute on the fly" in result
+        assert "Failed to compute the shape" in result
         assert manager.execute_sparql.called
+
+    def test_computed_shape_is_cached(self) -> None:
+        manager = self.make_shape_manager()
+        manager.execute_sparql.side_effect = [
+            select(["property", "other", "dir"], []),
+            AskResult(boolean=True),
+        ]
+        shapes = Shapes(schema_pattern="?property rdfs:domain {CLASS} .")
+
+        first = self.call(manager, "http://ex.org/Human", shapes)
+        second = self.call(manager, "http://ex.org/Human", shapes)
+
+        assert first == second
+        assert manager.execute_sparql.call_count == 2
+
+    def test_query_without_property_index_matches_iris(self) -> None:
+        manager = self.make_shape_manager()
+        profile = make_profile()
+        shapes = Shapes(
+            instance_pattern="?instance a {CLASS} .",
+            profiles={profile.iri: profile},
+        )
+
+        result = self.call(manager, profile.iri, shapes, query="name")
+
+        # ex:name matches by its IRI and comes first
+        assert result.splitlines()[1] == "  ex:name xsd:string ;"
+        manager.execute_sparql.assert_not_called()
+
+    def test_unknown_direction_is_rejected(self) -> None:
+        manager = self.make_shape_manager()
+        shapes = Shapes(instance_pattern="?instance a {CLASS} .")
+
+        with pytest.raises(FunctionCallException):
+            get_class_shape(manager, shapes, "http://ex.org/Human", "both", None, 1, 10)
+
+
+class TestMembersBlock:
+    PATTERN = "?instance a {CLASS} ."
+    CLASS = "http://ex.org/Human"
+
+    def test_small_class_is_not_sampled(self):
+        sample = InstanceSample(total=50, limit=100, windows=10)
+        block = members_block(self.PATTERN, self.CLASS, sample=sample)
+        assert "LIMIT" not in block
+
+    def test_windows_are_ordered_by_default(self):
+        sample = InstanceSample(total=1_000, limit=100, windows=10)
+        block = members_block(self.PATTERN, self.CLASS, sample=sample)
+        assert block.count("SELECT DISTINCT ?instance") == 10
+        assert block.count("ORDER BY ?instance LIMIT 10 OFFSET") == 10
+        assert "OFFSET 900" in block
+
+    def test_unordered_windows(self):
+        sample = InstanceSample(total=1_000, limit=100, windows=10, ordered=False)
+        block = members_block(self.PATTERN, self.CLASS, sample=sample)
+        assert "ORDER BY" not in block
+        assert block.count("SELECT DISTINCT ?instance") == 10
+        assert block.count("LIMIT 10 OFFSET") == 10
+
+    def test_single_window_takes_the_first_instances(self):
+        sample = InstanceSample(total=1_000, limit=100, windows=1, ordered=False)
+        block = members_block(self.PATTERN, self.CLASS, sample=sample)
+        assert block.count("LIMIT 100 OFFSET 0") == 1

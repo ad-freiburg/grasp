@@ -2,7 +2,7 @@ import math
 import time
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from search_rdf import EmbeddingIndex
@@ -12,17 +12,17 @@ from grasp.configs import GraspConfig, ShapeConfig
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
-from grasp.shapes import ShapeSample
+from grasp.shapes import PropertyProfile, Shapes
 from grasp.sparql.item import parse_into_binding
 from grasp.sparql.types import (
     Alternative,
     AskResult,
     Binding,
-    ObjType,
     Position,
     Selection,
     SelectResult,
     SelectRow,
+    iri_indices,
 )
 from grasp.sparql.utils import (
     READ_TIMEOUT,
@@ -32,7 +32,7 @@ from grasp.sparql.utils import (
     parse_string,
     wrap_iri,
 )
-from grasp.utils import FunctionCallException, format_enumerate, format_list
+from grasp.utils import FunctionCallException, format_list
 
 if TYPE_CHECKING:
     from grasp.tasks.base import GraspTask
@@ -167,87 +167,14 @@ list(kg="wikidata", property="wdt:P19")""",
     if fn_set == "base":
         return fns
 
-    search_shape_kgs = [
-        m.kg for m in managers if m.shapes is not None and m.shapes.index is not None
-    ]
-    get_shape_kgs = [m.kg for m in managers if m.shapes is not None]
-
-    if search_shape_kgs:
-        fns.append(
-            {
-                "name": "search_shape",
-                "description": f"""\
-Search for pseudo-ShEx schema patterns for classes in the specified knowledge \
-graph that match a semantic query. Returns a compact view per class; \
-use get_shape for a more detailed view of a specific class.
-
-Use this to discover which classes exist in the KG and what their structure looks \
-like before writing SPARQL queries. {SHAPE_CAVEAT}
-
-Currently shapes are available for the following knowledge graphs:
-{format_list(f'"{kg}"' for kg in search_shape_kgs)}""",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "kg": {
-                            "type": "string",
-                            "enum": search_shape_kgs,
-                            "description": "The knowledge graph to search",
-                        },
-                        "query": {
-                            "type": "string",
-                            "description": "The search query",
-                        },
-                        "page": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": search_max_pages,
-                            "description": "Page number for pagination",
-                        },
-                    },
-                    "required": ["kg", "query", "page"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
-        )
-
-    if get_shape_kgs:
-        fns.append(
-            {
-                "name": "get_shape",
-                "description": f"""\
-Retrieve the pseudo-ShEx shape for a specific class IRI. {SHAPE_CAVEAT}
-
-If the shape is not in the pre-built index, it will be computed on the fly \
-by running profiling queries against the endpoint. If on-the-fly computation \
-fails, use SPARQL queries to explore the class directly.
-
-Currently shapes are available for the following knowledge graphs:
-{format_list(f'"{kg}"' for kg in get_shape_kgs)}""",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "kg": {
-                            "type": "string",
-                            "enum": get_shape_kgs,
-                            "description": "The knowledge graph to look up the shape in",
-                        },
-                        "iri": {
-                            "type": "string",
-                            "description": "The class IRI",
-                        },
-                    },
-                    "required": ["kg", "iri"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
-        )
+    shape_kgs = [m.kg for m in managers if m.shapes is not None]
+    if shape_kgs:
+        fns.append(class_shape_function_definition(shape_kgs))
 
     has_entity_index = "entities" in known_indices
     has_property_index = "properties" in known_indices
     has_literal_index = "literals" in known_indices
+    has_class_index = "classes" in known_indices
 
     page_prop = {
         "type": "integer",
@@ -363,6 +290,40 @@ search_literal(kg="osm-planet", query="restaurant", page=1)""",
                 },
             )
 
+        if has_class_index:
+            fns.append(
+                {
+                    "name": "search_class",
+                    "description": f"""\
+Search for classes in the knowledge graph with a search query. \
+At most {search_k} results are returned per page (use pagination \
+up to page {search_max_pages} to see more results). Use get_class_shape \
+to see which properties the instances of a class have.
+
+For example, to search for the class of humans in Wikidata, \
+do the following:
+search_class(kg="wikidata", query="human", page=1)""",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "kg": {
+                                "type": "string",
+                                "enum": kgs,
+                                "description": "The knowledge graph to search",
+                            },
+                            "query": {
+                                "type": "string",
+                                "description": "The search query",
+                            },
+                            "page": page_prop,
+                        },
+                        "required": ["kg", "query", "page"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+            )
+
     if fn_set in ["search_extended", "all"]:
         if has_property_index:
             fns.append(
@@ -401,20 +362,12 @@ search_property_of_entity(kg="wikidata", entity="wd:Q937", query="birth", page=1
                 },
             )
 
-        object_indices = []
-        if has_entity_index:
-            object_indices.append("entities")
-        if has_literal_index:
-            object_indices.append("literals")
-
-        if object_indices:
-            obj_indices = " or ".join(f'"{idx}"' for idx in object_indices)
-
+        if index_names:
             fns.append(
                 {
                     "name": "search_object_of_property",
                     "description": f"""\
-Search for {obj_indices} at the object position for a given \
+Search one of the indices for items at the object position of a given \
 property in the knowledge graph. At most {search_k} results are returned \
 per page (use pagination up to page {search_max_pages} to see more \
 results).
@@ -444,7 +397,7 @@ query="restaurant", index="literals", page=1)""",
                             },
                             "index": {
                                 "type": "string",
-                                "enum": object_indices,
+                                "enum": index_names,
                                 "description": "Which index to search for the property's objects",
                             },
                             "page": page_prop,
@@ -686,6 +639,18 @@ def call_function(
             max_pages=config.search_max_pages,
         )
 
+    elif fn_name == "search_class":
+        return search_class(
+            managers,
+            fn_args["kg"],
+            fn_args["query"],
+            config.search_k,
+            known,
+            fn_args.get("query_type", "text"),
+            page=fn_args.get("page") or 1,
+            max_pages=config.search_max_pages,
+        )
+
     elif fn_name == "search_literal":
         return search_literal(
             managers,
@@ -717,33 +682,14 @@ def call_function(
 
     elif fn_name == "search_object_of_property":
         manager, _ = find_manager(managers, fn_args["kg"])
-        has_entities = "entities" in manager.indices
-        has_literals = "literals" in manager.indices
-        requested = fn_args.get("index")
-        if has_entities and has_literals:
-            if requested is None:
-                raise FunctionCallException(
-                    "index must be 'entities' or 'literals' when both indices "
-                    "are available for this knowledge graph"
-                )
-            if requested not in ("entities", "literals"):
-                raise FunctionCallException(
-                    f"index must be 'entities' or 'literals', got {requested!r}"
-                )
-            target_index = requested
-        elif has_entities:
-            target_index = "entities"
-        elif has_literals:
-            target_index = "literals"
-        else:
+        if fn_args["index"] not in manager.indices:
             raise FunctionCallException(
-                f"Knowledge graph {fn_args['kg']} has neither an entity nor a "
-                f"literal index — cannot search objects of a property"
+                f"Knowledge graph {fn_args['kg']} has no {fn_args['index']} index"
             )
         return search_with_constraints(
             managers,
             fn_args["kg"],
-            target_index,
+            fn_args["index"],
             "object",
             fn_args["query"],
             {"property": fn_args["property"]},
@@ -794,12 +740,19 @@ def call_function(
             max_pages=config.search_max_pages,
         )
 
-    elif fn_name in {"search_shape", "get_shape"}:
+    elif fn_name == "get_class_shape":
         manager, _ = find_manager(managers, fn_args["kg"])
         if manager.shapes is None:
-            return f"No shapes available for knowledge graph '{fn_args['kg']}'"
-        return call_shape_function(
-            fn_name, fn_args, manager.shapes, manager, config, known
+            return f"No class shapes available for knowledge graph '{fn_args['kg']}'"
+        return get_class_shape(
+            manager,
+            manager.shapes,
+            fn_args["iri"],
+            fn_args.get("direction") or "out",
+            fn_args.get("query"),
+            fn_args.get("page") or 1,
+            config.shape_k,
+            known,
         )
 
     elif task is not None:
@@ -812,139 +765,161 @@ def call_function(
 SHAPE_CAVEAT = (
     "Shapes are approximate (derived from instance data and/or schema "
     "declarations) and may be incomplete, so treat them as guidance. "
-    "A leading ^ marks an inverse edge, where the class is the property's object."
+    "Cardinalities follow ShEx (none for exactly one, ? for at most one, "
+    "+ for one or more, * for any number), and a leading ^ marks an inverse "
+    "edge, where the class is the property's object."
 )
 
 
-def format_shapes(shapes: list[ShapeSample], manager: KgManager) -> str:
-    from grasp.build.shapes import emit_pseudo_shex
+def class_shape_function_definition(kgs: list[str]) -> dict:
+    return {
+        "name": "get_class_shape",
+        "description": f"""\
+Get the shape of a class in pseudo-ShEx, i.e., either the properties its \
+instances have together with their values (direction "out"), or the properties \
+pointing to its instances together with where they come from (direction "in"). \
+{SHAPE_CAVEAT}
 
-    shape_config = manager.shape_config or ShapeConfig()
-    return format_enumerate(
-        emit_pseudo_shex(shape.profile, manager, shape_config, dense=True)
-        for shape in shapes
+Properties are shown page by page. Without a query, the properties used by \
+only few instances are left out; with a query, all properties are ranked by \
+how well they match it.
+
+For example, to get the shape of the class of humans in Wikidata, do the following:
+get_class_shape(kg="wikidata", iri="wd:Q5", direction="out", query=null, page=1)
+
+Or to find properties related to birth for humans in Wikidata, do the following:
+get_class_shape(kg="wikidata", iri="wd:Q5", direction="out", query="birth", page=1)
+
+Or to see which properties point to humans in Wikidata, do the following:
+get_class_shape(kg="wikidata", iri="wd:Q5", direction="in", query=null, page=1)""",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "kg": {
+                    "type": "string",
+                    "enum": kgs,
+                    "description": "The knowledge graph to look up the class in",
+                },
+                "iri": {
+                    "type": "string",
+                    "description": "The class IRI",
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["out", "in"],
+                    "description": "Whether to show the properties of the class "
+                    "instances (out) or the properties pointing to them (in), "
+                    'default should be "out"',
+                },
+                "query": {
+                    "type": ["string", "null"],
+                    "description": "Search query for ranking the properties of the "
+                    "class (null to show the most common ones)",
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "Page number (1-indexed) for paginating the "
+                    "properties (default should be 1)",
+                },
+            },
+            "required": ["kg", "iri", "direction", "query", "page"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
+
+
+def rank_class_properties(
+    manager: KgManager,
+    props: list[PropertyProfile],
+    query: str,
+) -> list[str]:
+    iris = [p.iri for p in props]
+    ranking = []
+    if "properties" in manager.indices:
+        ranking = manager.rank_identifiers("properties", query, iris)
+
+    # properties outside the index can only match by their IRI
+    ranked = set(ranking)
+    ranking.extend(
+        iri for iri in iris if iri not in ranked and query.lower() in iri.lower()
     )
+    return ranking
 
 
-def update_known_from_shape_iris(
-    known: set[str],
-    iris: list[str],
+def get_class_shape(
     manager: KgManager,
-) -> None:
-    update_known_from_iris(known, iris, manager.get_normalizer("entities"))
-    update_known_from_iris(known, iris, manager.get_normalizer("properties"))
-
-
-def call_shape_function(
-    fn_name: str,
-    fn_args: dict,
-    shapes: "Any",
-    manager: KgManager,
-    config: GraspConfig,
+    shapes: Shapes,
+    iri: str,
+    direction: str,
+    query: str | None,
+    page: int,
+    k: int,
     known: set[str] | None = None,
 ) -> str:
-    if fn_name == "search_shape":
-        if shapes.index is None:
-            return "Shape search is unavailable: the existing index was cleared after the pattern was changed. Rebuild the index to re-enable shape search."
-        query = fn_args["query"]
-        validate_query(query)
-        page = fn_args.get("page") or 1
-        max_pages = config.search_max_pages
-        validate_page(page, max_pages)
-        k = config.num_shapes
-        all_results = shapes.index.search(query, k * max_pages + 1)
-        results, total_pages, more = paginate_results(
-            list(all_results), k, page, max_pages
-        )
-        suffix = format_page_suffix(page, total_pages, more)
-        if not results:
-            return f"No shapes ({suffix})"
+    from grasp.build.shapes import (
+        DIRECTION_NAMES,
+        collect_iris,
+        compute_shape,
+        render_shape,
+        select_shape_view,
+    )
 
-        from grasp.build.shapes import collect_iris
-        from grasp.configs import ShapeConfig
+    validate_page(page)
+    if direction not in DIRECTION_NAMES:
+        raise FunctionCallException('Direction must be "out" or "in"')
 
-        shape_config = manager.shape_config or ShapeConfig()
-        if known is not None:
-            for sample in results:
-                update_known_from_shape_iris(
-                    known,
-                    collect_iris(sample.profile, manager, shape_config, dense=True),
-                    manager,
-                )
-        return f"Shapes ({suffix}):\n" + format_shapes(results, manager)
+    # computing a shape builds SPARQL around the class term, so a non-IRI
+    # argument would only fail later as an opaque parse error
+    binding = parse_iri_or_literal(iri, manager.iri_literal_parser, manager.prefixes)
+    if binding is None or binding.typ != "uri":
+        return format_iri_or_literal_error(iri)
 
-    elif fn_name == "get_shape":
-        iri_arg = fn_args["iri"]
-        binding = parse_iri_or_literal(
-            iri_arg,
-            manager.iri_literal_parser,
-            manager.prefixes,
-        )
-        expanded_iri = (
-            binding.identifier()
-            if binding is not None and binding.typ == "uri"
-            else iri_arg
-        )
-        sample = (
-            shapes.index.get_by_iri(expanded_iri) or shapes.index.get_by_iri(iri_arg)
-            if shapes.index is not None
-            else None
-        )
-        if sample is not None:
-            from grasp.build.shapes import collect_iris, emit_pseudo_shex
-            from grasp.configs import ShapeConfig
-
-            shape_config = manager.shape_config or ShapeConfig()
-            if known is not None:
-                update_known_from_shape_iris(
-                    known,
-                    collect_iris(sample.profile, manager, shape_config),
-                    manager,
-                )
-            return emit_pseudo_shex(sample.profile, manager, shape_config)
-
-        if shapes.instance_pattern is None and shapes.schema_pattern is None:
-            return (
-                f"No shape found for '{iri_arg}'. "
-                "It is not in the index and no pattern is available "
-                "for on-the-fly computation."
-            )
-
-        # computing a shape builds SPARQL around the class term, so a non-IRI
-        # argument would only fail later as an opaque parse error
-        if binding is None or binding.typ != "uri":
-            return format_iri_or_literal_error(iri_arg)
-
-        from grasp.build.shapes import (
-            collect_iris,
-            compute_shape,
-            emit_pseudo_shex,
-        )
-        from grasp.configs import ShapeConfig
-
-        shape_config = manager.shape_config or ShapeConfig()
+    shape_config = manager.shape_config or ShapeConfig()
+    class_iri = binding.identifier()
+    profile = shapes.get(class_iri)
+    if profile is None:
         try:
             profile = compute_shape(
-                expanded_iri,
+                class_iri,
                 manager,
                 instance_pattern=shapes.instance_pattern,
                 schema_pattern=shapes.schema_pattern,
                 shape_config=shape_config,
             )
-            if known is not None:
-                update_known_from_shape_iris(
-                    known,
-                    collect_iris(profile, manager, shape_config),
-                    manager,
-                )
-            return emit_pseudo_shex(profile, manager, shape_config)
         except Exception as e:
-            return (
-                f"Shape for '{iri_arg}' is not in the index and failed "
-                f"to compute on the fly:\n{e}"
-            )
+            return f"Failed to compute the shape of '{iri}':\n{e}"
 
-    raise FunctionCallException(f"Unknown shape function '{fn_name}'")
+        shapes.put(profile)
+
+    ranking = None
+    if query is not None and query.strip():
+        props = profile.properties if direction == "out" else profile.incoming
+        ranking = rank_class_properties(manager, props, query)
+
+    view = select_shape_view(profile, shape_config, k, direction, page, ranking)
+    if page > view.total_pages:
+        raise FunctionCallException(
+            f"Page number must be at most {view.total_pages} for this class"
+        )
+
+    if known is not None:
+        update_known_from_index_iris(known, collect_iris(view, manager), manager)
+
+    return render_shape(profile, view, manager, shape_config)
+
+
+def update_known_from_index_iris(
+    known: set[str],
+    iris: list[str],
+    manager: KgManager,
+) -> None:
+    for obj_type in iri_indices():
+        update_known_from_iris(
+            known,
+            iris,
+            manager.get_normalizer(obj_type.index_name),
+        )
 
 
 def validate_page(page: int, max_pages: int | None = None) -> None:
@@ -959,9 +934,10 @@ def validate_query(query: str) -> None:
         raise FunctionCallException("Query must not be empty")
 
 
-def search_entity(
+def search_single_index(
     managers: list[KgManager],
     kg: str,
+    index_name: str,
     query: str,
     k: int,
     known: set[str],
@@ -974,18 +950,42 @@ def search_entity(
     manager, _ = find_manager(managers, kg)
 
     alts = manager.search_index(
-        "entities",
+        index_name,
         query=query,
         k=k * max_pages + 1,
         query_type=query_type,
     )
     alts, total_pages, more = paginate_results(alts, k, page, max_pages)
 
-    # update known items
-    normalizer = manager.get_normalizer("entities")
+    # update known items, for literals so the LLM can paste these quoted
+    # literals straight into a SPARQL filter
+    normalizer = manager.get_normalizer(index_name)
     update_known_from_alts(known, alts, normalizer)
 
     return format_index_alternatives(alts, k, page, total_pages, more)
+
+
+def search_entity(
+    managers: list[KgManager],
+    kg: str,
+    query: str,
+    k: int,
+    known: set[str],
+    query_type: str = "text",
+    page: int = 1,
+    max_pages: int = 10,
+) -> str:
+    return search_single_index(
+        managers,
+        kg,
+        "entities",
+        query,
+        k,
+        known,
+        query_type,
+        page,
+        max_pages,
+    )
 
 
 def search_property(
@@ -998,23 +998,17 @@ def search_property(
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
-    validate_query(query)
-    validate_page(page, max_pages)
-    manager, _ = find_manager(managers, kg)
-
-    alts = manager.search_index(
+    return search_single_index(
+        managers,
+        kg,
         "properties",
-        query=query,
-        k=k * max_pages + 1,
-        query_type=query_type,
+        query,
+        k,
+        known,
+        query_type,
+        page,
+        max_pages,
     )
-    alts, total_pages, more = paginate_results(alts, k, page, max_pages)
-
-    # update known items
-    normalizer = manager.get_normalizer("properties")
-    update_known_from_alts(known, alts, normalizer)
-
-    return format_index_alternatives(alts, k, page, total_pages, more)
 
 
 def search_literal(
@@ -1027,24 +1021,40 @@ def search_literal(
     page: int = 1,
     max_pages: int = 10,
 ) -> str:
-    validate_query(query)
-    validate_page(page, max_pages)
-    manager, _ = find_manager(managers, kg)
-
-    alts = manager.search_index(
+    return search_single_index(
+        managers,
+        kg,
         "literals",
-        query=query,
-        k=k * max_pages + 1,
-        query_type=query_type,
+        query,
+        k,
+        known,
+        query_type,
+        page,
+        max_pages,
     )
-    alts, total_pages, more = paginate_results(alts, k, page, max_pages)
 
-    # update known items so the LLM can paste these quoted literals
-    # straight into a SPARQL filter
-    normalizer = manager.get_normalizer("literals")
-    update_known_from_alts(known, alts, normalizer)
 
-    return format_index_alternatives(alts, k, page, total_pages, more)
+def search_class(
+    managers: list[KgManager],
+    kg: str,
+    query: str,
+    k: int,
+    known: set[str],
+    query_type: str = "text",
+    page: int = 1,
+    max_pages: int = 10,
+) -> str:
+    return search_single_index(
+        managers,
+        kg,
+        "classes",
+        query,
+        k,
+        known,
+        query_type,
+        page,
+        max_pages,
+    )
 
 
 COMMON_PREFIXES = get_common_sparql_prefixes()
@@ -1126,47 +1136,13 @@ def update_known_from_alts(
             known.add(denorm)
 
 
-def update_known_from_rows(
-    known: set[str],
-    rows: Iterable[SelectRow],
-    normalizer: Normalizer | None = None,
-):
-    update_known_from_iris(
-        known,
-        (
-            binding.identifier()
-            for row in rows
-            for binding in row.values()
-            if binding.typ == "uri"
-        ),
-        normalizer,
-    )
-
-
-def update_known_from_alternatives(
-    known: set[str],
-    alternatives: dict[ObjType, list[Alternative]],
-    manager: KgManager,
-):
-    # entities
-    update_known_from_alts(
-        known,
-        alternatives.get(ObjType.ENTITY, []),
-        manager.get_normalizer(ObjType.ENTITY.index_name),
-    )
-
-    # properties
-    update_known_from_alts(
-        known,
-        alternatives.get(ObjType.PROPERTY, []),
-        manager.get_normalizer(ObjType.PROPERTY.index_name),
-    )
-
-    # other
-    update_known_from_alts(
-        known,
-        alternatives.get(ObjType.UNINDEXED, []),
-    )
+def row_iris(rows: Iterable[SelectRow]) -> list[str]:
+    return [
+        binding.identifier()
+        for row in rows
+        for binding in row.values()
+        if binding.typ == "uri"
+    ]
 
 
 def update_known_from_selections(
@@ -1174,19 +1150,12 @@ def update_known_from_selections(
     selections: list[Selection],
     manager: KgManager,
 ):
-    # entities
-    update_known_from_alts(
-        known,
-        (sel.alternative for sel in selections if sel.obj_type == ObjType.ENTITY),
-        manager.get_normalizer("entities"),
-    )
-
-    # properties
-    update_known_from_alts(
-        known,
-        (sel.alternative for sel in selections if sel.obj_type == ObjType.PROPERTY),
-        manager.get_normalizer("properties"),
-    )
+    for obj_type in iri_indices():
+        update_known_from_alts(
+            known,
+            (sel.alternative for sel in selections if sel.obj_type == obj_type),
+            manager.get_normalizer(obj_type.index_name),
+        )
 
 
 @dataclass
@@ -1246,11 +1215,7 @@ def execute_sparql(
             )
         )
 
-        # entity mapping
-        update_known_from_rows(known, rows, manager.get_normalizer("entities"))
-
-        # property mapping
-        update_known_from_rows(known, rows, manager.get_normalizer("properties"))
+        update_known_from_index_iris(known, row_iris(rows), manager)
 
     formatted = manager.format_sparql_result(
         result,
@@ -1355,91 +1320,7 @@ SELECT ?s ?p ?o WHERE {{
     result.truncate(MAX_RESULTS)
     more = not result.complete
 
-    # functions to get scores for properties and entities
-    prop_index = manager.try_get("properties")
-    ent_index = manager.try_get("entities")
-
-    def prop_rank(prop: Binding) -> int:
-        if not prop_index:
-            return 0
-
-        norm = manager.get_normalizer("properties").normalize(prop.identifier())
-        if norm is None:
-            return len(prop_index.data)
-
-        id = prop_index.data.id_from_identifier(norm[0])
-        if id is None:
-            return len(prop_index.data)
-
-        # lower id means more popular property
-        return id
-
-    def ent_rank(ent: Binding) -> int:
-        if not ent_index or not ent_index.data:
-            return 0
-
-        norm = manager.get_normalizer("entities").normalize(ent.identifier())
-        if norm is None:
-            return len(ent_index.data)
-
-        id = ent_index.data.id_from_identifier(norm[0])
-        if id is None:
-            return len(ent_index.data)
-
-        # lower id means more popular entity
-        return id
-
-    # make sure that rows presented are diverse and that
-    # we show the ones with popular properties or subjects / objects
-    # first
-    def sort_key(row: SelectRow) -> tuple[int, int]:
-        # property score
-        ps = prop_rank(row["p"])
-
-        # entity score
-        es = min(ent_rank(row["s"]), ent_rank(row["o"]))
-
-        # sort first by properties, then by subjects or objects
-        return ps, es
-
-    # rows are now sorted by popularity, lowest rank first
-    sorted_rows = sorted(
-        enumerate(result.rows()),
-        key=lambda item: sort_key(item[1]),
-    )
-
-    prop_norm = manager.get_normalizer("properties")
-    ent_norm = manager.get_normalizer("entities")
-
-    def normalize(bnd: Binding, normalizer: Normalizer) -> str:
-        identifier = bnd.identifier()
-        norm = normalizer.normalize(identifier)
-        return norm[0] if norm is not None else identifier
-
-    # now make sure that we show a diverse set of rows
-    # triples with unseen properties or subjects / objects
-    # should come first
-    probs_seen = set()
-    ents_seen = set()
-    permutation = []
-
-    for i, row in sorted_rows:
-        # normalize
-        s = normalize(row["s"], ent_norm)
-        p = normalize(row["p"], prop_norm)
-        o = normalize(row["o"], ent_norm)
-
-        key = (p in probs_seen, s in ents_seen or o in ents_seen)
-        permutation.append((key, i))
-
-        probs_seen.add(p)
-        ents_seen.add(s)
-        ents_seen.add(o)
-
-    # sort by number of seen columns
-    # since sort is stable, we keep relative popularity order from before
-    permutation = sorted(permutation, key=lambda item: item[0])
-    result.data = [result.data[i] for _, i in permutation]
+    result.data = [result.data[i] for i in order_triples(result.rows(), manager)]
 
     # apply pagination
     total_pages = max(1, math.ceil(len(result.data) / k))
@@ -1448,8 +1329,7 @@ SELECT ?s ?p ?o WHERE {{
     result.data = result.data[start:end]
 
     # update known
-    update_known_from_rows(known, result.rows(), ent_norm)
-    update_known_from_rows(known, result.rows(), prop_norm)
+    update_known_from_index_iris(known, row_iris(result.rows()), manager)
 
     table = manager.format_sparql_result(
         result,
@@ -1467,6 +1347,71 @@ SELECT ?s ?p ?o WHERE {{
         return f"No triples ({suffix})"
 
     return f"Triples ({suffix}):\n{table}"
+
+
+# popular and diverse triples first, by the ids of the indices
+# (lower id means more popular)
+def order_triples(rows: Iterable[SelectRow], manager: KgManager) -> list[int]:
+    def index_rank(bnd: Binding, index_names: list[str]) -> float:
+        for index_name in index_names:
+            norm = manager.normalize(bnd.identifier(), index_name)
+            data = manager.try_get_data(index_name)
+            if norm is None or data is None:
+                continue
+            id = data.id_from_identifier(norm[0])
+            if id is not None:
+                return id
+        return math.inf
+
+    def is_class(bnd: Binding) -> bool:
+        norm = manager.normalize(bnd.identifier(), "classes")
+        return norm is not None and manager.check_identifier(norm[0], "classes")
+
+    # sort by property, then by subject or object, which are ranked as
+    # entities or else as classes
+    def sort_key(row: SelectRow) -> tuple[float, float]:
+        ps = index_rank(row["p"], ["properties"])
+        es = min(
+            index_rank(row["s"], ["entities", "classes"]),
+            index_rank(row["o"], ["entities", "classes"]),
+        )
+        return ps, es
+
+    sorted_rows = sorted(enumerate(rows), key=lambda item: sort_key(item[1]))
+
+    prop_norm = manager.get_normalizer("properties")
+    ent_norm = manager.get_normalizer("entities")
+
+    def normalize(bnd: Binding, normalizer: Normalizer) -> str:
+        identifier = bnd.identifier()
+        norm = normalizer.normalize(identifier)
+        return norm[0] if norm is not None else identifier
+
+    # rows with an unseen property or class come first (e.g., all classes
+    # of an entity), then rows with unseen subjects or objects
+    props_seen = set()
+    ents_seen = set()
+    classes_seen = set()
+    permutation = []
+
+    for i, row in sorted_rows:
+        s = normalize(row["s"], ent_norm)
+        p = normalize(row["p"], prop_norm)
+        o = normalize(row["o"], ent_norm)
+        classes = {ent for ent, var in ((s, "s"), (o, "o")) if is_class(row[var])}
+
+        new = p not in props_seen or not classes <= classes_seen
+        key = (not new, s in ents_seen or o in ents_seen)
+        permutation.append((key, i))
+
+        props_seen.add(p)
+        ents_seen.add(s)
+        ents_seen.add(o)
+        classes_seen.update(classes)
+
+    # stable sort keeps the popularity order within each group
+    permutation.sort(key=lambda item: item[0])
+    return [i for _, i in permutation]
 
 
 def search_with_constraints(

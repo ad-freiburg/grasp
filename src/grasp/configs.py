@@ -52,16 +52,16 @@ class ExamplesConfig(IndexConfig):
         return {"path": data} if isinstance(data, str) else data
 
 
-class ShapeConfig(IndexConfig):
+class ShapeConfig(BaseModel):
     # larger classes are profiled from a sample of this many instances,
     # drawn as this many evenly spread windows
     max_profile_instances: int = 100_000
     profile_windows: int = 10
-    max_properties_per_class: int = 30
-    dense_max_properties_per_class: int = 10
-    # separate caps so inverse edges can never displace outgoing ones
-    max_incoming_per_class: int = 10
-    dense_max_incoming_per_class: int = 3
+    # ORDER BY makes the windows well-defined; engines with a stable order like
+    # QLever can skip it (and must for billions of instances)
+    ordered_samples: bool = True
+    # shapes computed on request and kept in memory
+    cache_size: int = 256
     max_targets_per_property: int = 5
     min_property_share: float = 0.01
     min_target_share: float = 0.01
@@ -79,6 +79,9 @@ class KgConfig(BaseModel):
         default_factory=lambda: TypedIndexConfig(type="embedding")
     )
     literals: TypedIndexConfig | None = Field(
+        default_factory=lambda: TypedIndexConfig(type="auto")
+    )
+    classes: TypedIndexConfig | None = Field(
         default_factory=lambda: TypedIndexConfig(type="auto")
     )
     shapes: ShapeConfig | None = Field(default_factory=ShapeConfig)
@@ -163,6 +166,8 @@ class GraspConfig(ModelConfig):
     result_max_columns: int = 10
     # 10 total results, 10 top
     list_k: int = 10
+    # properties per page of a class shape
+    shape_k: int = 10
     # force that all IRIs used in a SPARQL query
     # were previously seen
     know_before_use: bool = False
@@ -181,9 +186,6 @@ class GraspConfig(ModelConfig):
     num_examples: int = 3
     force_examples: str | None = None
     random_examples: bool = False
-
-    # shape search parameters
-    num_shapes: int = 3
 
     # enable feedback loop
     feedback: bool = False

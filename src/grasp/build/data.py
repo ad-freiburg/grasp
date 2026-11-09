@@ -18,7 +18,7 @@ from grasp.manager.utils import (
     load_kg_info,
     merge_prefixes,
 )
-from grasp.sparql.types import Binding
+from grasp.sparql.types import IRI_INDEX_NAMES, Binding
 from grasp.sparql.utils import (
     get_basic_auth,
     get_qlever_endpoint,
@@ -47,6 +47,7 @@ def download_data(
     add_id_as_label: str = "never",
     result_file: str | None = None,
     overwrite: bool = False,
+    id_type: str | None = None,
 ) -> None:
     data_file = os.path.join(out_dir, "data.jsonl")
     if os.path.exists(data_file) and not overwrite:
@@ -70,7 +71,7 @@ def download_data(
         bindings = stream_json(endpoint, sparql, params, headers, auth)
 
     dump_jsonl(
-        prepare_items(bindings, prefixes, parser, add_id_as_label, logger),
+        prepare_items(bindings, prefixes, parser, add_id_as_label, logger, id_type),
         data_file,
     )
 
@@ -107,7 +108,7 @@ def get_data(
     if add_id_as_label == "auto":
         if index_name == "entities":
             add_id_as_label = "never"
-        elif index_name == "properties":
+        elif index_name in IRI_INDEX_NAMES:
             add_id_as_label = "always"
         elif index_name == "literals":
             add_id_as_label = "empty"
@@ -146,6 +147,14 @@ def get_data(
     if index_sparql is None:
         raise ValueError(f'No index SPARQL found or set for "{index_name}" index')
 
+    # ids of the standard indices are checked, custom ones are not
+    if index_name == "literals":
+        id_type = "literal"
+    elif index_name in IRI_INDEX_NAMES:
+        id_type = "uri"
+    else:
+        id_type = None
+
     os.makedirs(index_dir, exist_ok=True)
     download_data(
         index_dir,
@@ -160,6 +169,7 @@ def get_data(
         add_id_as_label,
         data_file,
         overwrite,
+        id_type,
     )
     dump_text(index_sparql, os.path.join(index_dir, "index.sparql"))
     build_data_and_mapping(index_dir, logger, overwrite)
@@ -304,13 +314,25 @@ def prepare_items(
     parser: LR1Parser,
     add_id_as_label: str = "never",
     logger: Logger | None = None,
+    id_type: str | None = None,
 ) -> Iterator[dict]:
     # collect all labels for an id (which are consecutive in the stream)
     last_id_binding = None
     fields = []
     unknown_tags = set()
+    skipped = 0
     for num, binding in enumerate(bindings, start=1):
         id_binding, value_binding, tags = parse_binding(binding, parser)
+
+        # ids of the wrong type (e.g. blank nodes or literals in an IRI index)
+        if id_type is not None and id_binding.typ != id_type:
+            if logger and skipped == 0:
+                logger.warning(
+                    f"Skipping rows with {id_binding.typ} ids, expected {id_type}, "
+                    f"e.g. {id_binding.identifier()}"
+                )
+            skipped += 1
+            continue
 
         # drop tags unknown to the search index (e.g. "alias"), the value
         # is then indexed as a non-main value
@@ -358,6 +380,9 @@ def prepare_items(
             value = value_binding.value
 
         fields.append({"type": "text", "value": value, "tags": tags})
+
+    if logger and skipped:
+        logger.warning(f"Skipped {skipped:,} rows with ids that are not {id_type}")
 
     if last_id_binding is None:
         return

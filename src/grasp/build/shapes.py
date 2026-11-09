@@ -1,8 +1,8 @@
+import math
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from itertools import chain
 from typing import Any
 
 from tqdm import tqdm
@@ -14,7 +14,6 @@ from grasp.manager.normalizer import Normalizer
 from grasp.shapes import (
     ClassProfile,
     PropertyProfile,
-    ShapeSample,
     Target,
     TargetBnode,
     TargetClass,
@@ -23,6 +22,9 @@ from grasp.shapes import (
 )
 from grasp.sparql.types import AskResult, SelectResult
 from grasp.utils import derive_label_from_iri, get_local_name_from_iri
+
+# where to look up class labels, the class index first
+CLASS_INDICES = ["classes", "entities"]
 
 
 # instantiate a pattern by choosing the class term and the variable the
@@ -74,6 +76,7 @@ class InstanceSample:
     total: int
     limit: int
     windows: int
+    ordered: bool = True
 
     @property
     def per_window(self) -> int:
@@ -89,7 +92,7 @@ class InstanceSample:
 
 # full extension of a class, or a sample of it when profiling all of it would
 # exhaust the endpoint; spread windows because one slice skews the property
-# distribution, ORDER BY because LIMIT/OFFSET is undefined without it
+# distribution, ORDER BY (optional) because LIMIT/OFFSET is undefined without it
 def members_block(
     pattern: str,
     class_iri: str,
@@ -103,10 +106,11 @@ def members_block(
     # stride >= per_window whenever total > limit, so windows never overlap
     stride = sample.total // sample.windows
     inner = "\n".join(f"        {line}" for line in bound.strip().splitlines())
+    order = f"ORDER BY {member_var} " if sample.ordered else ""
     windows = [
         f"    {{\n"
         f"      SELECT DISTINCT {member_var} WHERE {{\n{inner}\n      }}\n"
-        f"      ORDER BY {member_var} LIMIT {sample.per_window} OFFSET {i * stride}\n"
+        f"      {order}LIMIT {sample.per_window} OFFSET {i * stride}\n"
         f"    }}"
         for i in range(sample.windows)
     ]
@@ -400,12 +404,19 @@ def cardinality_tag(coverage: float, avg_values: float) -> str:
 
 def resolve_label(
     iri: str,
-    index_name: str,
+    index_names: list[str],
     short_iri: str,
     manager: KgManager,
     variants: list[str] | None = None,
 ) -> str:
-    label = manager.get_label(iri, index_name)
+    label = next(
+        (
+            label
+            for name in index_names
+            if (label := manager.get_label(iri, name)) is not None
+        ),
+        None,
+    )
     if label:
         local_name = get_local_name_from_iri(iri, manager.prefixes)
         derived = derive_label_from_iri(iri, manager.prefixes)
@@ -424,22 +435,6 @@ def resolve_label(
     return short_iri
 
 
-def get_label_and_aliases(
-    iri: str,
-    index_name: str,
-    manager: KgManager,
-) -> tuple[str | None, list[str]]:
-    data = manager.try_get_data(index_name)
-    if data is None:
-        return None, []
-    norm = manager.normalize(iri, index_name)
-    key = norm[0] if norm is not None else iri
-    id = data.id_from_identifier(key)
-    if id is None:
-        return None, []
-    return data.main_field(id) or data.field(id, 0), data.fields(id) or []
-
-
 def bracketed(items: list[str]) -> str:
     if len(items) == 1:
         return items[0]
@@ -454,7 +449,7 @@ def render_target(target: Target, manager: KgManager) -> str:
     if isinstance(target, TargetClass):
         return resolve_label(
             target.iri,
-            "entities",
+            CLASS_INDICES,
             target.short_iri,
             manager,
             variants=target.variants or None,
@@ -462,63 +457,76 @@ def render_target(target: Target, manager: KgManager) -> str:
     return "IRI"
 
 
-def select_from(
+@dataclass
+class ShapeView:
+    # "out" for the properties of the instances, "in" for those pointing to them
+    direction: str
+    properties: list[PropertyProfile]
+    page: int
+    total_pages: int
+    # over all pages
+    total: int
+    # rare instance properties left out
+    rare: int = 0
+    # properties shown for the other direction without a query
+    other: int = 0
+
+
+def is_rare(prop: PropertyProfile, share_base: int, min_share: float) -> bool:
+    # only rare *instance* properties; a property with no instance usage
+    # (entity_count == 0) is a pure schema declaration, not noise.
+    return (
+        share_base > 0
+        and prop.entity_count > 0
+        and prop.entity_count / share_base < min_share
+    )
+
+
+def rank_properties(
     props: list[PropertyProfile],
-    total_entities: int,
-    cap: int,
-    min_share: float,
-) -> tuple[list[PropertyProfile], int, int]:
-    candidates = props[:cap]
-    omitted = max(0, len(props) - cap)
-
-    kept: list[PropertyProfile] = []
-    filtered = 0
-    for prop in candidates:
-        # only filter rare *instance* properties; a property with no instance
-        # usage (entity_count == 0) is a pure schema declaration, not noise.
-        if total_entities > 0 and prop.entity_count > 0:
-            coverage = prop.entity_count / total_entities
-            if coverage < min_share:
-                filtered += 1
-                continue
-        kept.append(prop)
-
-    return kept, omitted, filtered
+    ranking: list[str],
+) -> list[PropertyProfile]:
+    # ranked ones first, the rest keeps its order
+    pos = {iri: i for i, iri in enumerate(ranking)}
+    return sorted(props, key=lambda prop: pos.get(prop.iri, len(pos)))
 
 
-def select_properties(
+def select_shape_view(
     profile: ClassProfile,
     shape_config: ShapeConfig,
-    dense: bool,
-) -> tuple[list[PropertyProfile], int, int]:
-    cap = (
-        shape_config.dense_max_properties_per_class
-        if dense
-        else shape_config.max_properties_per_class
-    )
-    return select_from(
-        profile.properties,
-        profile.share_base,
-        cap,
-        shape_config.min_property_share,
-    )
+    k: int,
+    direction: str = "out",
+    page: int = 1,
+    ranking: list[str] | None = None,
+) -> ShapeView:
+    def common(props: list[PropertyProfile]) -> list[PropertyProfile]:
+        return [
+            p
+            for p in props
+            if not is_rare(p, profile.share_base, shape_config.min_property_share)
+        ]
 
+    if direction == "out":
+        props, other = profile.properties, profile.incoming
+    else:
+        props, other = profile.incoming, profile.properties
 
-def select_incoming(
-    profile: ClassProfile,
-    shape_config: ShapeConfig,
-    dense: bool,
-) -> tuple[list[PropertyProfile], int, int]:
-    cap = (
-        shape_config.dense_max_incoming_per_class
-        if dense
-        else shape_config.max_incoming_per_class
-    )
-    return select_from(
-        profile.incoming,
-        profile.share_base,
-        cap,
-        shape_config.min_property_share,
+    rare = 0
+    if ranking is None:
+        shown = common(props)
+        rare = len(props) - len(shown)
+    else:
+        # searching shows all, best matches first
+        shown = rank_properties(props, ranking)
+
+    return ShapeView(
+        direction=direction,
+        properties=shown[(page - 1) * k : page * k],
+        page=page,
+        total_pages=max(1, math.ceil(len(shown) / k)),
+        total=len(shown),
+        rare=rare,
+        other=len(common(other)),
     )
 
 
@@ -530,22 +538,22 @@ def cardinality_tag_for_property(prop: PropertyProfile, total_entities: int) -> 
     return cardinality_tag(coverage, avg_vals)
 
 
-def emit_pseudo_shex(
+DIRECTION_NAMES = {"out": "outgoing", "in": "incoming"}
+
+
+def render_shape(
     profile: ClassProfile,
+    view: ShapeView,
     manager: KgManager,
     shape_config: ShapeConfig,
-    dense: bool = False,
 ) -> str:
-    header = resolve_label(profile.iri, "entities", profile.short_iri, manager)
+    header = resolve_label(profile.iri, CLASS_INDICES, profile.short_iri, manager)
     lines = [f"{header} {{"]
-
-    kept, omitted, filtered = select_properties(profile, shape_config, dense)
-    in_kept, in_omitted, in_filtered = select_incoming(profile, shape_config, dense)
 
     def render(prop: PropertyProfile, inverse: bool) -> str:
         prop_str = resolve_label(
             prop.iri,
-            "properties",
+            ["properties"],
             prop.short_iri,
             manager,
             variants=prop.variants or None,
@@ -564,43 +572,57 @@ def emit_pseudo_shex(
         tag_suffix = f" {tag}" if tag else ""
         return f"  {prop_str} {value_str}{tag_suffix} ;"
 
-    lines.extend(render(prop, inverse=False) for prop in kept)
-    lines.extend(render(prop, inverse=True) for prop in in_kept)
+    inverse = view.direction == "in"
+    lines.extend(render(prop, inverse) for prop in view.properties)
 
-    parts = []
-    if omitted:
-        parts.append(f"{omitted:,} omitted (cap)")
-    if filtered:
-        parts.append(f"{filtered:,} filtered (low coverage)")
-    if in_omitted:
-        parts.append(f"{in_omitted:,} incoming omitted (cap)")
-    if in_filtered:
-        parts.append(f"{in_filtered:,} incoming filtered (low coverage)")
-
-    if parts:
-        lines.append(f"  ... {', '.join(parts)}")
-    elif not kept and not in_kept:
+    name = DIRECTION_NAMES[view.direction]
+    info = []
+    if not view.total and not view.rare:
         # make the empty case explicit; an empty body on its own is ambiguous
-        lines.append("  # no properties found for this class")
+        info.append(f"no {name} properties found for this class")
+    elif view.total_pages > 1 or view.rare or view.other:
+        info.append(
+            f"page {view.page} of {view.total_pages}, {view.total:,} {name} "
+            + ("property" if view.total == 1 else "properties")
+        )
+
+    if view.rare:
+        share = f"{shape_config.min_property_share:.0%}"
+        info.append(
+            f"{view.rare:,} more used by less than {share} of the instances "
+            "(pass a query to rank all properties including these)"
+        )
+
+    if view.other:
+        other = "in" if view.direction == "out" else "out"
+        info.append(f'{view.other:,} {DIRECTION_NAMES[other]} (direction="{other}")')
+
+    if info:
+        lines.append(f"  # {', '.join(info)}")
 
     lines.append("}")
 
     return "\n".join(lines)
 
 
-def collect_iris(
+def emit_pseudo_shex(
     profile: ClassProfile,
     manager: KgManager,
     shape_config: ShapeConfig,
-    dense: bool = False,
-) -> list[str]:
+    k: int = 10,
+    direction: str = "out",
+    page: int = 1,
+    ranking: list[str] | None = None,
+) -> str:
+    view = select_shape_view(profile, shape_config, k, direction, page, ranking)
+    return render_shape(profile, view, manager, shape_config)
+
+
+def collect_iris(view: ShapeView, manager: KgManager) -> list[str]:
     iris: list[str] = []
     prop_norm = manager.get_normalizer("properties")
     ent_norm = manager.get_normalizer("entities")
-    kept, _, _ = select_properties(profile, shape_config, dense)
-    in_kept, _, _ = select_incoming(profile, shape_config, dense)
-    # inverse edges are rendered too, so their IRIs must count as known as well
-    for prop in chain(kept, in_kept):
+    for prop in view.properties:
         iris.append(prop.iri)
         for v in prop.variants:
             denorm = prop_norm.denormalize(prop.iri, v)
@@ -774,11 +796,9 @@ def collect_class_maps(
     execute: Callable[[str], SelectResult],
     instance_pattern: str | None = None,
     schema_pattern: str | None = None,
-    include_total: bool = False,
     sample: InstanceSample | None = None,
-) -> tuple[ClassMaps, int]:
+) -> ClassMaps:
     maps = ClassMaps()
-    total = 0
     if instance_pattern is not None:
         freq_rows = select_values(
             execute(
@@ -817,17 +837,12 @@ def collect_class_maps(
             )
         )
         maps.merge(ClassMaps.from_incoming_rows(in_freq_rows, in_source_rows))
-        if include_total:
-            total_rows = select_values(
-                execute(build_per_class_total_query(instance_pattern, class_iri))
-            )
-            total = int(total_rows[0]["totalEntities"]) if total_rows else 0
     if schema_pattern is not None:
         rows = list(
             execute(build_schema_profile_query(schema_pattern, class_iri)).rows()
         )
         maps.merge(ClassMaps.from_schema_rows(rows, manager))
-    return maps, total
+    return maps
 
 
 def compute_shape(
@@ -852,21 +867,43 @@ def compute_shape(
         assert isinstance(result, SelectResult), "Expected SELECT query result"
         return result
 
+    total = 0
+    sample = None
     try:
-        maps, total = collect_class_maps(
+        if instance_pattern is not None:
+            # large classes are sampled, as in the precomputed shapes
+            total_rows = select_values(
+                execute(build_per_class_total_query(instance_pattern, class_iri))
+            )
+            total = int(total_rows[0]["totalEntities"]) if total_rows else 0
+            sample = InstanceSample(
+                total=total,
+                limit=shape_config.max_profile_instances,
+                windows=shape_config.profile_windows,
+                ordered=shape_config.ordered_samples,
+            )
+
+        maps = collect_class_maps(
             class_iri,
             manager,
             execute,
             instance_pattern,
             schema_pattern,
-            include_total=True,
+            sample=sample,
         )
     except Exception as e:
         raise RuntimeError(
             f"One of the queries for computing the shape of '{class_iri}' failed:\n{e}"
         )
 
-    profile = assemble_profile(class_iri, maps, total, shape_config, manager)
+    profile = assemble_profile(
+        class_iri,
+        maps,
+        total,
+        shape_config,
+        manager,
+        sample.size if sample is not None else 0,
+    )
 
     # an empty profile is ambiguous: the class may exist but have no properties
     # matching the pattern, or the IRI may not be in the graph at all. Only in
@@ -893,7 +930,7 @@ def build_shapes(
     log_level: str | int | None = None,
     request_timeout: float | tuple[float, float] | None = None,
     read_timeout: float | None = None,
-) -> tuple[list[ShapeSample], int]:
+) -> tuple[list[ClassProfile], int]:
     logger = get_logger("GRASP SHAPES BUILD", log_level)
     assert instance_pattern is not None or schema_pattern is not None, (
         "build_shapes requires an instance and/or schema pattern"
@@ -952,7 +989,7 @@ def build_shapes(
     all_class_iris = ordered[:max_classes]
     logger.info(f"Building shapes for {len(all_class_iris)} classes")
 
-    samples = []
+    profiles = []
     skipped = 0
     sampled = 0
     for c_iri in tqdm(all_class_iris, desc="Profiling classes"):
@@ -962,9 +999,10 @@ def build_shapes(
             total=total,
             limit=shape_config.max_profile_instances,
             windows=shape_config.profile_windows,
+            ordered=shape_config.ordered_samples,
         )
         try:
-            maps, _ = collect_class_maps(
+            maps = collect_class_maps(
                 c_iri,
                 manager,
                 execute,
@@ -983,27 +1021,14 @@ def build_shapes(
         if sample.size:
             sampled += 1
 
-        profile = assemble_profile(
-            c_iri,
-            maps,
-            total,
-            shape_config,
-            manager,
-            sample.size,
-        )
-        class_label, class_aliases = get_label_and_aliases(c_iri, "entities", manager)
-        if class_label:
-            derived = derive_label_from_iri(c_iri, manager.prefixes)
-            if derived and derived.lower() == class_label.lower():
-                class_label = None
-
-        samples.append(
-            ShapeSample(
-                iri=c_iri,
-                short_iri=profile.short_iri,
-                profile=profile,
-                label=class_label,
-                aliases=class_aliases or [],
+        profiles.append(
+            assemble_profile(
+                c_iri,
+                maps,
+                total,
+                shape_config,
+                manager,
+                sample.size,
             )
         )
 
@@ -1012,5 +1037,5 @@ def build_shapes(
 
     if sampled:
         logger.info(f"Sampled {sampled:,} class(es) too large to profile exhaustively")
-    logger.info(f"Built {len(samples)} shapes")
-    return samples, total_classes
+    logger.info(f"Built {len(profiles)} shapes")
+    return profiles, total_classes

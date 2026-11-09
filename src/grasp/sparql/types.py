@@ -10,6 +10,7 @@ from grasp.utils import clip, format_list
 class ObjType(StrEnum):
     ENTITY = "entity"
     PROPERTY = "property"
+    CLASS = "class"
     COMMON = "common"
     UNINDEXED = "unindexed"
     UNKNOWN = "unknown"
@@ -27,6 +28,8 @@ class ObjType(StrEnum):
             return "entities"
         elif self == ObjType.PROPERTY:
             return "properties"
+        elif self == ObjType.CLASS:
+            return "classes"
         elif self == ObjType.LITERAL:
             return "literals"
         raise ValueError(f"ObjType {self.value} has no associated index")
@@ -42,6 +45,23 @@ class Position(StrEnum):
 
     def __str__(self) -> str:
         return self.value
+
+
+# standard indices in setup order, add new ones here and to IRI_INDICES
+STANDARD_INDICES = [ObjType.PROPERTY, ObjType.CLASS, ObjType.ENTITY, ObjType.LITERAL]
+STANDARD_INDEX_NAMES = [obj_type.index_name for obj_type in STANDARD_INDICES]
+
+# standard indices of IRIs in lookup order, classes before entities since
+# entity indices often contain classes too
+IRI_INDICES = [ObjType.CLASS, ObjType.ENTITY, ObjType.PROPERTY]
+IRI_INDEX_NAMES = [obj_type.index_name for obj_type in IRI_INDICES]
+
+
+# properties first at the predicate position
+def iri_indices(position: Position | None = None) -> list[ObjType]:
+    if position == Position.PROPERTY:
+        return sorted(IRI_INDICES, key=lambda obj_type: obj_type != ObjType.PROPERTY)
+    return list(IRI_INDICES)
 
 
 @dataclass
@@ -212,6 +232,7 @@ class Alternative:
         aliases: list[str] | None = None,
         info: list[str] | None = None,
         matched_label: str | None = None,
+        score: float | None = None,
     ) -> None:
         self.identifier = identifier
         self.short_identifier = short_identifier
@@ -220,6 +241,8 @@ class Alternative:
         self.variants = variants
         self.info = info
         self.matched_label = matched_label
+        # search score, only comparable within one index type
+        self.score = score
 
     def __hash__(self) -> int:
         # hash identifier
@@ -333,27 +356,6 @@ class Selection:
             and self.obj_type == other.obj_type
             and self.variant == other.variant
         )
-
-    @property
-    def is_entity_or_property(self) -> bool:
-        return self.obj_type == ObjType.ENTITY or self.obj_type == ObjType.PROPERTY
-
-    def get_natural_sparql_label(self, full_identifier: bool = False) -> str:
-        identifier = self.alternative.get_identifier()
-        if not self.alternative.has_label():
-            return identifier
-
-        label: str = self.alternative.get_label()  # type: ignore
-
-        if full_identifier:
-            label += f" ({identifier})"
-        elif self.variant:
-            label += f" ({self.variant})"
-
-        if self.is_entity_or_property:
-            return f"<{label}>"
-        else:
-            return label
 
 
 def group_selections(

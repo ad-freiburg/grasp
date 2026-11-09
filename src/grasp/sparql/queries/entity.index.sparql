@@ -1,3 +1,4 @@
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
@@ -11,6 +12,10 @@ SELECT DISTINCT ?id ?value ?tags WHERE {
       { SELECT ?id ("OBJ" AS ?pos) (COUNT(?id) AS ?freq) WHERE { ?s ?p ?id . FILTER(ISIRI(?id)) } GROUP BY ?id }
     } GROUP BY ?id
   }
+
+  # Classes and properties have their own indices
+  MINUS { [] rdf:type ?id }
+  MINUS { [] ?id [] }
 
   {
     # Get label, mark as main field

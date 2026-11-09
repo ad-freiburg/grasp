@@ -1,0 +1,38 @@
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+
+SELECT DISTINCT ?id ?value ?type WHERE {
+  # Get additional information, such as label, alias, comment, superclass, and number of instances
+  {
+    VALUES ?id { {IDS} }
+    ?id rdfs:label ?value
+    FILTER(LANG(?value) = "en")
+    BIND("label" AS ?type)
+  } UNION {
+    VALUES ?id { {IDS} }
+    ?id skos:altLabel ?value
+    FILTER(LANG(?value) = "en")
+    BIND("alias" AS ?type)
+  } UNION {
+    VALUES ?id { {IDS} }
+    ?id rdfs:comment ?value
+    FILTER(LANG(?value) = "en")
+    BIND("other" AS ?type)
+  } UNION {
+    VALUES ?id { {IDS} }
+    ?id rdfs:subClassOf/rdfs:label ?superclass
+    FILTER(LANG(?superclass) = "en")
+    BIND(CONCAT("is subclass of ", ?superclass) AS ?value)
+    BIND("other" AS ?type)
+  } UNION {
+    {
+      SELECT ?id (COUNT(?instance) AS ?instances) WHERE {
+        VALUES ?id { {IDS} }
+        ?instance rdf:type ?id
+      } GROUP BY ?id
+    }
+    BIND(CONCAT("has ", STR(?instances), " instances") AS ?value)
+    BIND("other" AS ?type)
+  }
+} ORDER BY ?id ?type ?value

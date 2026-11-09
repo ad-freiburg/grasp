@@ -51,3 +51,8 @@ evaluation = ["streamlit>=1.50.0", "pandas>=2.0.0", "natsort>=8.0.0"]
 
 [project.urls]
 Github = "https://github.com/ad-freiburg/grasp"
+
+[tool.pytest.ini_options]
+testpaths = ["src"]
+# the default also skips "build", which holds src/grasp/build tests
+norecursedirs = [".*", "__pycache__", "*.egg-info"]

@@ -35,12 +35,7 @@ from grasp.manager.utils import (
     try_load_search_index,
 )
 from grasp.search_params import resolve_index_search_params
-from grasp.shapes import (
-    Shapes,
-    load_setup_description,
-    load_setup_patterns,
-    load_shapes,
-)
+from grasp.shapes import Shapes, load_shapes
 from grasp.sparql.types import (
     Alternative,
     AskResult,
@@ -49,7 +44,9 @@ from grasp.sparql.types import (
     Selection,
     SelectResult,
     SelectRow,
+    STANDARD_INDEX_NAMES,
     group_selections,
+    iri_indices,
 )
 from grasp.sparql.utils import (
     READ_TIMEOUT,
@@ -131,29 +128,12 @@ class KgManager:
     def load_models(
         self,
         models: dict[str, EmbeddingModel] | None = None,
-        embedding_model: str | None = None,
     ) -> dict[str, EmbeddingModel]:
         if models is None:
             models = {}
 
         for idx in self.indices.values():
             models = load_embedding_model(idx.index, models)
-
-        shapes_dir = os.path.join(get_index_dir(self.kg), "shapes")
-        if (
-            os.path.exists(shapes_dir)
-            and embedding_model is not None
-            and self.shape_config is not None
-        ):
-            key = f"sentence-transformer/{embedding_model}"
-            if key not in models:
-                models[key] = SentenceTransformerModel(embedding_model)
-
-            self.shapes = load_shapes(
-                shapes_dir,
-                models[key],  # type: ignore
-                self.shape_config.params,
-            )
 
         self.embedding_models = models
         return models
@@ -270,11 +250,7 @@ class KgManager:
                     identifier = val.identifier()
                     formatted = self.format_iri(identifier)
 
-                    label = self.get_label(
-                        identifier,
-                        "entities",
-                    ) or self.get_label(identifier, "properties")
-
+                    label = self.get_iri_label(identifier)
                     if label is not None:
                         formatted = f"{clip(label)} ({formatted})"
 
@@ -480,6 +456,13 @@ class KgManager:
 
         return data.main_field(id) or data.field(id, 0)
 
+    def get_iri_label(self, identifier: str) -> str | None:
+        for obj_type in iri_indices():
+            label = self.get_label(identifier, obj_type.index_name)
+            if label is not None:
+                return label
+        return None
+
     def build_alternative_with_info(
         self,
         identifier: str,
@@ -593,6 +576,7 @@ class KgManager:
         normalizer = self.get_normalizer(index_name)
 
         field_map = {}
+        score_map = {}
 
         if query is None:
             if identifier_map is None:
@@ -603,15 +587,7 @@ class KgManager:
                     key=lambda ident: data.id_from_identifier(ident) or len(data),
                 )[:k]
         else:
-            kwargs = {}
-            if index.index_type == "embedding":
-                assert isinstance(index, EmbeddingIndex)
-                kwargs["embedding"] = self.embed_query(index, query, query_type)
-            else:
-                kwargs["query"] = query
-
-            if kg_index.search_params is not None:
-                kwargs.update(kg_index.search_params.search_kwargs())
+            kwargs = self.search_kwargs(kg_index, query, query_type)
 
             if identifier_map is None:
                 allow_ids = None
@@ -623,11 +599,12 @@ class KgManager:
                         allow_ids.add(id)
 
             identifiers = []
-            for id, field, _ in index.search(k=k, allow_ids=allow_ids, **kwargs):
+            for id, field, score in index.search(k=k, allow_ids=allow_ids, **kwargs):
                 identifier = data.identifier(id)
                 assert identifier is not None, "should not happen"
                 identifiers.append(identifier)
                 field_map[identifier] = data.field(id, field)
+                score_map[identifier] = score
 
         info_sparql = self.get_info_sparql(index_name)
         infos = self.get_info_for_identifiers(identifiers, info_sparql, data)
@@ -647,6 +624,7 @@ class KgManager:
                 variants,
                 matched_via,
             )
+            alternative.score = score_map.get(identifier)
             alternatives.append(alternative)
 
         end = time.monotonic()
@@ -658,6 +636,50 @@ class KgManager:
                 self.search_cache[cache_key] = alternatives
 
         return alternatives
+
+    def search_kwargs(
+        self,
+        kg_index: KgIndex,
+        query: str,
+        query_type: str = "text",
+    ) -> dict[str, Any]:
+        kwargs = {}
+        if kg_index.index.index_type == "embedding":
+            assert isinstance(kg_index.index, EmbeddingIndex)
+            kwargs["embedding"] = self.embed_query(kg_index.index, query, query_type)
+        else:
+            kwargs["query"] = query
+
+        if kg_index.search_params is not None:
+            kwargs.update(kg_index.search_params.search_kwargs())
+
+        return kwargs
+
+    def rank_identifiers(
+        self,
+        index_name: str,
+        query: str,
+        identifiers: Iterable[str],
+    ) -> list[str]:
+        # the given identifiers found in the index, best match first,
+        # without retrieving their infos
+        kg_index = self.get(index_name)
+        allow_ids = {
+            id
+            for identifier in identifiers
+            if (id := kg_index.data.id_from_identifier(identifier)) is not None
+        }
+        if not allow_ids:
+            return []
+
+        return [
+            kg_index.data.identifier(id) or ""
+            for id, _, _ in kg_index.index.search(
+                k=len(allow_ids),
+                allow_ids=allow_ids,
+                **self.search_kwargs(kg_index, query),
+            )
+        ]
 
     def get_candidate_ids(
         self,
@@ -844,10 +866,8 @@ class KgManager:
 
     def format_selections(self, selections: list[Selection]) -> str:
         rename_obj_type = [
-            (ObjType.ENTITY, "entities"),
-            (ObjType.PROPERTY, "properties"),
-            (ObjType.UNINDEXED, "other (non-indexed) items"),
-        ]
+            (obj_type, obj_type.index_name) for obj_type in iri_indices()
+        ] + [(ObjType.UNINDEXED, "other (non-indexed) items")]
 
         grouped = group_selections(selections)
 
@@ -867,6 +887,7 @@ DEFAULT_DESCRIPTIONS = {
     "properties": "Properties indexed by their labels, synonyms, and IRIs",
     "literals": "Free-floating literal values (e.g., enumerable string values "
     "used as objects which are not entity-associated labels)",
+    "classes": "Classes indexed by their labels, synonyms, and IRIs",
 }
 
 
@@ -927,11 +948,8 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
         logger.info("Skipping loading of indices")
         return KgManager(cfg.kg, indices, **info.model_dump())
 
-    for name, index_cfg in [
-        ("entities", cfg.entities),
-        ("properties", cfg.properties),
-        ("literals", cfg.literals),
-    ]:
+    for name in STANDARD_INDEX_NAMES:
+        index_cfg = getattr(cfg, name)
         if index_cfg is None:
             continue
 
@@ -953,30 +971,16 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
     manager = KgManager(cfg.kg, indices, **info.model_dump())
     manager.shape_config = cfg.shapes
     if cfg.shapes is not None:
-        shapes_dir = os.path.join(get_index_dir(cfg.kg), "shapes")
-        instance_pattern, schema_pattern = load_setup_patterns(shapes_dir)
-        if instance_pattern is not None or schema_pattern is not None:
-            manager.shapes = Shapes(
-                instance_pattern=instance_pattern,
-                schema_pattern=schema_pattern,
-                description=load_setup_description(shapes_dir),
-            )
+        manager.shapes = load_shapes(
+            os.path.join(get_index_dir(cfg.kg), "shapes"),
+            cfg.shapes.cache_size,
+        )
     return manager
 
 
-def format_shapes_index(shapes: Shapes) -> str:
-    desc = shapes.description or "Class shape index."
-    coverage = ""
-    if shapes.index is not None:
-        indexed = shapes.index.indexed_classes
-        total = shapes.total_classes
-        if total is None:
-            coverage = f" ({indexed:,} class shapes indexed)"
-        elif indexed >= total:
-            coverage = f" (all {total:,} class shapes indexed)"
-        else:
-            coverage = f" (top {indexed:,} out of {total:,} class shapes indexed)"
-    return f'"shapes" index (type="embedding", modalities="text"): {desc}{coverage}'
+def format_shapes(shapes: Shapes) -> str:
+    desc = shapes.description or "Class shapes derived from the knowledge graph."
+    return f"**Class shapes**\n{desc}"
 
 
 def format_kgs(
@@ -1018,11 +1022,11 @@ def format_kg(
         indices.append(
             f'"examples" index ({format_index_meta(example_index.index)}): {example_index.description}'
         )
-    if manager.shapes is not None:
-        indices.append(format_shapes_index(manager.shapes))
-
     if indices:
         parts.append("**Search indices**\n" + "\n".join(indices))
+
+    if manager.shapes is not None:
+        parts.append(format_shapes(manager.shapes))
 
     if manager.kg_prefixes:
         parts.append(

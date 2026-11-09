@@ -6,7 +6,8 @@ from grasp.functions import (
     format_iri_or_literal_error,
     format_page_suffix,
     parse_iri_or_literal,
-    update_known_from_rows,
+    row_iris,
+    update_known_from_index_iris,
 )
 from grasp.manager import KgManager
 from grasp.sparql.types import Position, SelectResult
@@ -137,16 +138,7 @@ LIMIT {MAX_RESULTS + 1}"""
         return f"No {plural} ({suffix})"
 
     # update known
-    update_known_from_rows(
-        known,
-        result.rows(),
-        manager.get_normalizer("entities"),
-    )
-    update_known_from_rows(
-        known,
-        result.rows(),
-        manager.get_normalizer("properties"),
-    )
+    update_known_from_index_iris(known, row_iris(result.rows()), manager)
 
     target_var = position[0]
     items = []
@@ -157,11 +149,7 @@ LIMIT {MAX_RESULTS + 1}"""
         formatted = manager.format_identifier(identifier)
 
         if val.typ == "uri":
-            label = manager.get_label(
-                identifier,
-                "entities",
-            ) or manager.get_label(identifier, "properties")
-
+            label = manager.get_iri_label(identifier)
             if label is not None:
                 formatted = f"{label} ({formatted})"
 

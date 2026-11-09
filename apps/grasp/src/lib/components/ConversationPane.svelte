@@ -99,6 +99,21 @@
         status = query
           ? `Searching for property "${query}"...`
           : 'Searching for property...';
+      } else if (toolName === 'search_class') {
+        const query = args.query || '';
+        status = query
+          ? `Searching for class "${query}"...`
+          : 'Searching for class...';
+      } else if (toolName === 'search_literal') {
+        const query = args.query || '';
+        status = query
+          ? `Searching for literal "${query}"...`
+          : 'Searching for literal...';
+      } else if (toolName === 'get_class_shape') {
+        const iri = args.iri || 'class';
+        status = args.query
+          ? `Searching properties "${args.query}" of ${iri}...`
+          : `Getting shape of ${iri}...`;
       } else if (toolName === 'search_property_of_entity') {
         const entity = args.entity || 'entity';
         const query = args.query || '';

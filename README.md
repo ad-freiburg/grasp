@@ -404,7 +404,8 @@ knowledge_graphs:
     entities: fuzzy        # auto, fuzzy, embedding, keyword, or null to disable
     properties: embedding
     literals: auto         # fuzzy for more than 1M literals, embedding otherwise
-    shapes: {}             # shape index with default settings, null to disable
+    classes: auto          # same as for literals
+    shapes: {}             # class shapes with default settings, null to disable
     examples: data/benchmark/wikidata/qald10/train-example-index
     notes_file: null
 ```
@@ -429,8 +430,9 @@ knowledge_graphs:
 Fields set under `info` in the config overwrite the ones from `info.json`.
 
 GRASP sends its query timeout to QLever endpoints, so QLever stops queries
-GRASP has given up on. For other SPARQL servers, set `backend: other` under
-`info`.
+GRASP has given up on. It takes precedence over a `timeout` in `params`, which
+then only applies to requests without a timeout, such as `grasp data`
+downloads. For other SPARQL servers, set `backend: other` under `info`.
 
 **Basic Auth**
 
@@ -455,7 +457,7 @@ knowledge_graphs:
 
 **Additional indices**
 
-Besides entities, properties, and literals, you can load further indices built
+Besides properties, classes, entities, and literals, you can load further indices built
 with [search-rdf](https://github.com/ad-freiburg/search-rdf). Put the search-rdf
 build config at `$GRASP_INDEX_DIR/<kg_name>/indices.yaml` and build the
 indices into `$GRASP_INDEX_DIR/<kg_name>/<name>`. GRASP reads `name`, `type`,
@@ -498,12 +500,13 @@ generates the necessary SPARQL queries and configuration by exploring the endpoi
 
 ```bash
 # Auto-configure a KG by exploring its SPARQL endpoint.
-# 'standard' runs info + all three index phases (entities, properties, literals).
+# 'standard' runs info + all four index phases (properties, classes, entities, literals);
+# each index phase can inspect the setups of the indices before it.
 grasp setup wikidata standard configs/run.yaml
 
 # Run only specific phases:
 grasp setup wikidata info configs/run.yaml
-grasp setup wikidata indices configs/run.yaml  # entities + properties + literals
+grasp setup wikidata indices configs/run.yaml  # properties + classes + entities + literals
 
 # Show all available options:
 grasp setup -h
@@ -512,9 +515,10 @@ grasp setup -h
 #### Get index data
 
 We get the index data by issuing SPARQL queries to a SPARQL endpoint.
-GRASP supports three index types: **entities**, **properties**, and **literals**
-(literal values such as names, labels, or other string-valued data that appear
-as objects in the graph). Each query must return rows with the following columns:
+GRASP supports four index types: **properties**, **classes**, **entities**,
+and **literals** (literal values such as names, labels, or other string-valued
+data that appear as objects in the graph). Each query must return rows with the
+following columns:
 
 1. `?id` — the IRI of the entity/property, or the literal value itself (required)
 2. `?value` — a single label or alias (one row per label/alias)
@@ -542,7 +546,7 @@ SELECT DISTINCT ?id ?value ?tags WHERE {
 ORDER BY ?id DESC(?tags)
 ```
 
-The query body will determine which entities, properties, or literals are included
+The query body will determine which properties, classes, entities, or literals are included
 in the index, and how their labels and aliases are retrieved.
 
 > Notes:
@@ -552,24 +556,26 @@ in the index, and how their labels and aliases are retrieved.
 > - Our custom index data queries for various knowledge graphs
 > are [here](queries)
 > - By default (`--add-id-as-label auto`), entities without label or alias get
-> no fallback, properties always get their (prefixed) IRI as additional label to
-> make them searchable by IRI, and literals without label use their value as label.
+> no fallback, properties and classes always get their (prefixed) IRI as additional
+> label to make them searchable by IRI, and literals without label use their value
+> as label.
 > Change this with `--add-id-as-label <never|always|empty>`
 > (`empty` means only for items without any label or alias)
 
 With the CLI, you can use the `grasp data` command as follows:
 
 ```bash
-# The index type (entities, properties, or literals) is a required argument.
+# The index type (properties, classes, entities, or literals) is a required argument.
 # The SPARQL endpoint is taken from --endpoint, the endpoint in
 # $GRASP_INDEX_DIR/<kg_name>/info.json, or https://qlever.dev/api/<kg_name>
 # (in that order). Headers, query parameters, and Basic Auth are applied as
 # described in section "Configure GRASP".
-# The data will be saved to $GRASP_INDEX_DIR/<kg_name>/entities/data.jsonl
-# and $GRASP_INDEX_DIR/<kg_name>/properties/data.jsonl etc.
+# The data will be saved to $GRASP_INDEX_DIR/<kg_name>/properties/data.jsonl,
+# $GRASP_INDEX_DIR/<kg_name>/classes/data.jsonl etc.
 # For example, to get the index data for IMDB:
-grasp data imdb entities
 grasp data imdb properties
+grasp data imdb classes
+grasp data imdb entities
 grasp data imdb literals
 
 # You can also set a custom SPARQL endpoint:
@@ -578,8 +584,8 @@ grasp data my-imdb entities --endpoint https://my-imdb-sparql-endpoint.com/sparq
 # To download the index data, we use generic queries by default. You can also
 # provide your own queries, which is recommended especially for larger knowledge
 # graphs or those with an unusual schema.
-grasp data imdb entities --index-sparql <path/to/entity.sparql>
 grasp data imdb properties --index-sparql <path/to/property.sparql>
+grasp data imdb entities --index-sparql <path/to/entity.sparql>
 
 # Replace {key} placeholders in the query, and send extra query parameters
 # or HTTP headers with the request:
@@ -602,20 +608,20 @@ You probably do not need to change any parameters here.
 With the CLI, you can use the `grasp index` command as follows:
 
 ```bash
-# The index type (entities, properties, literals, or shapes) is a required argument.
+# The index type (properties, classes, entities, literals, or shapes) is a required argument.
 # The built index will be saved to $GRASP_INDEX_DIR/<kg_name>/<index>/<index_type>.
 # For example, to build the indices for IMDB:
-grasp index imdb entities
 grasp index imdb properties
+grasp index imdb classes
+grasp index imdb entities
 grasp index imdb literals
 
 # You can also change the type of index that is built via --index-type
 # (not applicable for shapes).
-# By default (auto), we build a fuzzy index for entities, an embedding
-# index for properties, and for literals a fuzzy index if there are more than
-# 1M of them, an embedding index otherwise.
-grasp index imdb entities --index-type <keyword|fuzzy|embedding>
+# By default (auto): embedding for properties, fuzzy for entities, and for
+# classes and literals fuzzy above 1M items, embedding otherwise.
 grasp index imdb properties --index-type <keyword|fuzzy|embedding>
+grasp index imdb entities --index-type <keyword|fuzzy|embedding>
 
 # Embedding indices use Qwen/Qwen3-Embedding-0.6B by default (--emb-model,
 # --emb-device, --emb-batch-size). With --min-score-percentile, a minimum
@@ -625,7 +631,7 @@ grasp index imdb properties --index-type <keyword|fuzzy|embedding>
 # "Search parameters" above).
 grasp index imdb properties --index-type embedding --min-score-percentile
 
-# For the shape index, a config file is required (see "Build a shape index" below):
+# For class shapes, a config file is required (see "Profile class shapes" below):
 grasp index imdb shapes configs/run.yaml
 
 # Show all available options:
@@ -635,22 +641,26 @@ grasp index -h
 After this step is done, you can use the knowledge graph with GRASP by
 including it in your config file (see above).
 
-#### Build a shape index
+#### Profile class shapes
 
-A **shape index** gives GRASP schema context about the knowledge graph's class
+**Class shapes** give GRASP schema context about the knowledge graph's class
 structure — which properties a given class of entities tends to have, their
-datatypes, and cardinalities. GRASP uses this as LLM context for more accurate
-SPARQL generation via the `search_shape` and `get_shape` functions.
+datatypes, and cardinalities, and which properties point to its instances.
+GRASP shows them page by page (`shape_k` properties per page) via the
+`get_class_shape` function, one direction at a time (outgoing or incoming) and
+optionally ranked by a search query, and finds classes via `search_class` over
+the classes index.
 
 ```bash
 # Step 1: run the shapes-setup agent to configure the class-typing pattern
 # (e.g. wdt:P31 for Wikidata, rdf:type for RDF-style graphs):
 grasp setup my-kg shapes configs/run.yaml
 
-# Step 2: build the shape index (config required):
+# Step 2: profile the largest classes ahead of time (config required), all
+# other classes are profiled when they are first requested:
 grasp index my-kg shapes configs/run.yaml
 
-# Limit the number of classes to profile (default 500):
+# Number of classes to profile ahead of time (default 500):
 grasp index my-kg shapes configs/run.yaml --max-classes 200
 ```
 

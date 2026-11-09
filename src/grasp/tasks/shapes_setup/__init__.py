@@ -3,6 +3,7 @@ from typing import Any
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel
 
+from grasp.functions import class_shape_function_definition
 from grasp.model import Message
 from grasp.shapes import Shapes
 from grasp.sparql.utils import find_all, parse_string
@@ -98,20 +99,20 @@ class ShapesSetupTask(GraspTask):
 You are a knowledge graph setup assistant. Your task is to \
 explore the "{manager.kg}" knowledge graph and come up with or improve \
 the setup - an instance pattern, a schema pattern, and a description - \
-of the shapes index.
+of the class shapes.
 
 The two patterns are complementary and used to automatically derive class shapes \
 from the knowledge graph. A knowledge graph may need either one or both; \
 set the one(s) that apply and leave the other null. \
-The shapes index will be built from the derived class shapes, and allows \
-to retrieve them via semantic search or exact class IRI lookups for various \
-purposes in downstream tasks.
+The shapes of the largest classes are derived ahead of time, all others when \
+they are requested by class IRI in downstream tasks.
 
 The instance pattern links instances to their classes by relating a ?instance \
 variable to a {{CLASS}} placeholder, e.g. "?instance a {{CLASS}}". \
 Use it when the graph contains instances: the shape of a \
 class is then profiled empirically by walking the triples of its instances. Classes \
-are discovered by replacing {{CLASS}} with ?class.
+are discovered by replacing {{CLASS}} with ?class. Large classes are profiled from a \
+sample of their instances, so no class needs to be left out because of its size.
 
 The schema pattern links properties to their classes directly from the \
 schema/ontology - no instances needed. Use it for ontology-only knowledge graphs \
@@ -137,8 +138,8 @@ knowledge graph does not need.
 
 When both patterns are set, their per-class properties/targets are merged.
 
-The description should be a concise summary of what the shapes index is \
-about and what classes it contains.
+The description should be a concise summary of what the class shapes are \
+about and what classes they cover.
 
 You should follow a step-by-step approach:
 1. Explore the knowledge graph to understand how instances and/or classes and their \
@@ -176,13 +177,13 @@ Reference description:
             find_frequent_function_definition(kgs, self.config.list_k),
             {
                 "name": "show_setup",
-                "description": "Show the current patterns and description for the shape index.",
+                "description": "Show the current patterns and description for the class shapes.",
                 # an empty object schema makes some vllm models generate endlessly
                 "parameters": {},
             },
             {
                 "name": "set_instance_pattern",
-                "description": "Set or clear the shape index' instance pattern.",
+                "description": "Set or clear the instance pattern.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -198,7 +199,7 @@ Reference description:
             },
             {
                 "name": "set_schema_pattern",
-                "description": "Set or clear the shape index' schema pattern.",
+                "description": "Set or clear the schema pattern.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -214,7 +215,7 @@ Reference description:
             },
             {
                 "name": "set_description",
-                "description": "Set a concise description of what the shape index contains. "
+                "description": "Set a concise description of what the class shapes cover. "
                 "Typically a single sentence about covered classes and any caveats is sufficient.",
                 "parameters": {
                     "type": "object",
@@ -236,37 +237,9 @@ Reference description:
             },
         ]
 
-        # Add get_shape only when kg_functions won't already include it.
-        # kg_functions includes get_shape when manager.shapes is not None.
+        # kg_functions already includes get_class_shape once patterns are set
         if manager.shapes is None:
-            fns.insert(
-                0,
-                {
-                    "name": "get_shape",
-                    "description": (
-                        "Retrieve the pseudo-ShEx shape for a specific class by "
-                        "running profiling queries using the current pattern(s). "
-                        "Use this to test the patterns after setting them."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "kg": {
-                                "type": "string",
-                                "enum": [manager.kg],
-                                "description": "The knowledge graph",
-                            },
-                            "iri": {
-                                "type": "string",
-                                "description": "The class IRI",
-                            },
-                        },
-                        "required": ["kg", "iri"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
-            )
+            fns.insert(0, class_shape_function_definition([manager.kg]))
 
         return fns
 
@@ -305,7 +278,7 @@ Reference description:
             self.state.instance_pattern = pattern
             self.apply_patterns(manager)
             return (
-                "Instance pattern updated. Use get_shape to test it live."
+                "Instance pattern updated. Use get_class_shape to test it live."
                 if pattern
                 else "Instance pattern cleared."
             )
@@ -317,7 +290,7 @@ Reference description:
             self.state.schema_pattern = pattern
             self.apply_patterns(manager)
             return (
-                "Schema pattern updated. Use get_shape to test it live."
+                "Schema pattern updated. Use get_class_shape to test it live."
                 if pattern
                 else "Schema pattern cleared."
             )
@@ -344,10 +317,10 @@ Reference description:
             and existing.instance_pattern == inst
             and existing.schema_pattern == sch
         ):
-            # patterns unchanged, keep current index
+            # patterns unchanged, keep current shapes
             return
 
-        # new patterns, discard existing index
+        # new patterns, discard existing shapes
         manager.shapes = Shapes(instance_pattern=inst, schema_pattern=sch)
 
     def done(self, fn_name: str) -> bool:
@@ -360,7 +333,7 @@ Reference description:
         manager = self.managers[0]
         if input.get("notes"):
             return input["notes"]
-        return f'Set up the shape index for the "{manager.kg}" knowledge graph.'
+        return f'Set up the class shapes for the "{manager.kg}" knowledge graph.'
 
     def output(self, messages: list[Message]) -> dict:
         assert isinstance(self.state, ShapesSetupState)

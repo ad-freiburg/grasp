@@ -15,9 +15,11 @@ from grasp.manager.utils import (
 )
 from grasp.model import Message
 from grasp.sparql.item import extract_sparql_items
-from grasp.sparql.types import ObjType
+from grasp.sparql.types import IRI_INDEX_NAMES, iri_indices
 from grasp.sparql.utils import (
     get_qlever_endpoint,
+    load_class_index_sparql,
+    load_class_info_sparql,
     load_entity_index_sparql,
     load_entity_info_sparql,
     load_literal_index_sparql,
@@ -35,15 +37,20 @@ from grasp.tasks.base import GraspTask
 from grasp.tasks.functions import find_frequent, find_frequent_function_definition
 from grasp.utils import FunctionCallException, format_prefixes, get_index_dir
 
-# maps index name to index sparql and info sparql reference defaults
+# maps index name to index sparql and info sparql reference defaults,
+# in setup order: schema indices first, so later ones can check for overlaps
 REFERENCE_SETUP = {
-    "entities": {
-        "index": load_entity_index_sparql(),
-        "info": load_entity_info_sparql(),
-    },
     "properties": {
         "index": load_property_index_sparql(),
         "info": load_property_info_sparql(),
+    },
+    "classes": {
+        "index": load_class_index_sparql(),
+        "info": load_class_info_sparql(),
+    },
+    "entities": {
+        "index": load_entity_index_sparql(),
+        "info": load_entity_info_sparql(),
     },
     "literals": {
         "index": load_literal_index_sparql(),
@@ -69,7 +76,7 @@ def update_known_from_sparql(sparql: str, known: set[str], manager: KgManager) -
         # temporarily disable info retrieval
         manager.set_info_retrieval(enable=False)
         _, items = extract_sparql_items(sparql, manager)
-        for obj_type in [ObjType.ENTITY, ObjType.PROPERTY]:
+        for obj_type in iri_indices():
             normalizer = manager.get_normalizer(obj_type.index_name)
             update_known_from_alts(
                 known,
@@ -99,6 +106,16 @@ def load_index_state(manager: KgManager, name: str, known: set[str]) -> IndexSta
         info_sparql=info_sparql,
         description=description,
     )
+
+
+def other_index_setups(manager: KgManager, name: str) -> list[str]:
+    index_dir = get_index_dir(manager.kg)
+    return [
+        other
+        for other in REFERENCE_SETUP
+        if other != name
+        and os.path.exists(os.path.join(index_dir, other, "index.sparql"))
+    ]
 
 
 def load_info_state(manager: KgManager) -> InfoState:
@@ -263,9 +280,21 @@ and repeat, otherwise stop."""
             "returns the expected results across the board.",
             f"Do not use different scores for the same id in the {name} index SPARQL, as the ids are "
             "required to be returned in contiguous blocks for the indexing process.",
+            f"The ids of the {name} index must be "
+            + ("literals" if name == "literals" else "IRIs")
+            + ", rows with other ids (e.g., blank nodes) are skipped when building the index.",
         ]
 
-        if name in ("entities", "properties"):
+        others = other_index_setups(self.managers[0], name)
+        if others:
+            rules.append(
+                f"The {', '.join(others)} indices of this knowledge graph are already set up. "
+                "Inspect their setups so that any overlap with them is a deliberate choice "
+                "rather than an accident, e.g., an entity index SPARQL matching all labeled IRIs "
+                "also picks up properties and classes."
+            )
+
+        if name in IRI_INDEX_NAMES:
             rules.append(
                 f"To include {name} in the index and make them searchable even if they do not have "
                 "have any associated literals, use their IRIs as values by binding ?id to ?value directly "
@@ -282,6 +311,15 @@ and repeat, otherwise stop."""
                 "without any descriptive associated literals."
             )
 
+        if name == "classes":
+            rules.append(
+                "Classes are the IRIs that instances are typed with or that form the class "
+                "hierarchy of the knowledge graph. Include all of them, also small or rarely "
+                "used ones, as a single specific class can be what a query needs. The number "
+                "of instances of a class is usually a good relevance score, and also worth "
+                "showing in the info SPARQL."
+            )
+
         if name == "literals":
             rules.append(
                 "For a literals index, ?id and ?value are typically the same: bind ?id to the literal itself "
@@ -291,7 +329,7 @@ and repeat, otherwise stop."""
             rules.append(
                 "Only index standalone literals - string values that appear as objects in the knowledge graph "
                 "(e.g., enumerations like amenity types, status codes, license names). Do not index IRIs (use "
-                "the entity / property indices for those) and do not index literals that the entity index "
+                "the entity / property / class indices for those) and do not index literals that the entity index "
                 "already covers as entity-associated literals (literals indexed under their owning entity, "
                 "searchable via that entity). Inspect the entity-index setup to see which entity-associated literals "
                 "the entity index already covers in this knowledge graph and avoid duplicating them in the "
@@ -316,7 +354,8 @@ and repeat, otherwise stop."""
         kgs = [m.kg for m in self.managers]
         functions = [find_frequent_function_definition(kgs, self.config.list_k)]
         if self.input["phase"] == "index":
-            functions.extend(index_functions(self.input["name"]))
+            others = other_index_setups(self.managers[0], self.input["name"])
+            functions.extend(index_functions(others))
         else:
             functions.extend(info_functions())
         return functions
@@ -349,11 +388,14 @@ and repeat, otherwise stop."""
         elif fn_name == "show_setup":
             return self.show_setup()
 
-        elif fn_name == "show_entity_setup":
+        elif fn_name == "show_index_setup":
+            index = fn_args["index"]
+            if index not in other_index_setups(manager, self.input["name"]):
+                raise FunctionCallException(f"No setup found for the {index} index")
             # use a fresh empty `known` so the running self.known set
-            # is not polluted by IRIs from the entity index sparql
-            entity_state = load_index_state(manager, "entities", set())
-            return format_index_state(entity_state, manager)
+            # is not polluted by IRIs from the other index sparql
+            state = load_index_state(manager, index, set())
+            return format_index_state(state, manager)
 
         elif fn_name == "set_query":
             return self.set_query(manager, **fn_args, known=known)

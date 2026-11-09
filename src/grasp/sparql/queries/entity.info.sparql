@@ -4,7 +4,7 @@ PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
 
 SELECT DISTINCT ?id ?value ?type WHERE {
-  # Get additional information, such as label, alias, comment, domain, range, type, and superclass
+  # Get additional information, such as label, alias, comment, and type
   {
     VALUES ?id { {IDS} }
     ?id rdfs:label ?value
@@ -22,27 +22,9 @@ SELECT DISTINCT ?id ?value ?type WHERE {
     BIND("other" AS ?type)
   } UNION {
     VALUES ?id { {IDS} }
-    ?id rdfs:domain/rdfs:label ?domain
-    FILTER(LANG(?domain) = "en")
-    BIND(CONCAT("has domain ", ?domain) AS ?value)
-    BIND("other" AS ?type)
-  } UNION {
-    VALUES ?id { {IDS} }
-    ?id rdfs:range/rdfs:label ?range
-    FILTER(LANG(?range) = "en")
-    BIND(CONCAT("has range ", ?range) AS ?value)
-    BIND("other" AS ?type)
-  } UNION {
-    VALUES ?id { {IDS} }
     ?id rdf:type/rdfs:label ?typ
     FILTER(LANG(?typ) = "en")
     BIND(CONCAT("is a ", ?typ) AS ?value)
-    BIND("other" AS ?type)
-  } UNION {
-    VALUES ?id { {IDS} }
-    ?id rdfs:subClassOf/rdfs:label ?superclass
-    FILTER(LANG(?superclass) = "en")
-    BIND(CONCAT("is subclass of ", ?superclass) AS ?value)
     BIND("other" AS ?type)
   }
 } ORDER BY ?id ?type ?value

@@ -1,11 +1,10 @@
 import sys
 from dataclasses import dataclass
 from itertools import chain
-from typing import Optional
 
 from grasp.manager import KgManager
 from grasp.manager.utils import find_obj_type_from_prefixes, get_common_sparql_prefixes
-from grasp.sparql.types import Alternative, ObjType, Position, Selection
+from grasp.sparql.types import Alternative, ObjType, Selection, iri_indices
 from grasp.sparql.utils import (
     find_all,
     infer_position_from_prefix,
@@ -16,7 +15,6 @@ from grasp.sparql.utils import (
 __all__ = [
     "Item",
     "extract_sparql_items",
-    "natural_sparql_from_items",
     "selections_from_items",
 ]
 
@@ -34,10 +32,6 @@ class Item:
 
     def same_as(self, other: "Item") -> bool:
         return self.alternative.identifier == other.alternative.identifier
-
-    @property
-    def full_prefix(self) -> str:
-        return self.prefix + self.item
 
     @property
     def is_literal(self) -> bool:
@@ -66,17 +60,6 @@ class Item:
     @property
     def selection(self) -> Selection:
         return Selection(self.alternative, self.obj_type, self.variant)
-
-    def continuation(self, other: Optional["Item"]) -> str:
-        end, _ = self.item_span
-        if other is None:
-            return self.full_prefix[:end]
-
-        assert other.item_span < self.item_span, "other item must come before this one"
-        assert self.prefix.startswith(other.prefix), "prefix mismatch"
-
-        _, start = other.item_span
-        return self.full_prefix[start:end]
 
 
 def byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int, int]:
@@ -143,14 +126,12 @@ def get_item(
 
     try:
         position = infer_position_from_prefix(prefix, manager.sparql_parser)
-        if position in [Position.SUBJECT, Position.OBJECT]:
-            obj_types = [ObjType.ENTITY]
-        else:
-            obj_types = [ObjType.PROPERTY]
     except Exception:
-        obj_types = [ObjType.PROPERTY, ObjType.ENTITY]
+        position = None
 
-    # check whether the iri is a valid entity or property
+    obj_types = iri_indices(position)
+
+    # check whether the iri is a valid entity, class, or property
     for obj_type in obj_types:
         norm = manager.normalize(iri, obj_type.index_name)
         if norm is None:
@@ -227,21 +208,6 @@ def selections_from_sparql(
 ) -> list[Selection]:
     _, items = extract_sparql_items(sparql, manager)
     return selections_from_items(items)
-
-
-def natural_sparql_from_items(
-    items: list[Item],
-    is_prefix: bool = False,
-    full_identifier: bool = False,
-) -> str:
-    prefix = ""
-    for i, item in enumerate(items):
-        prev = items[i - 1] if i > 0 else None
-        prefix += item.continuation(prev)
-        prefix += item.selection.get_natural_sparql_label(full_identifier)
-        if i == len(items) - 1 and not is_prefix:
-            prefix += item.suffix
-    return prefix
 
 
 def extract_sparql_items(

@@ -1,28 +1,16 @@
 import os
-import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock
 from typing import Literal
 
+from cachetools import LRUCache
 from pydantic import BaseModel, Field
-from safetensors.numpy import save_file
-from search_rdf import Data, EmbeddingIndex
-from search_rdf.model import SentenceTransformerModel
 from universal_ml_utils.io import (
     dump_json,
     dump_jsonl,
     load_json,
     load_jsonl,
     load_text,
-)
-from universal_ml_utils.logging import get_logger
-from universal_ml_utils.ops import flatten
-
-from grasp.search_params import (
-    EmbeddingBuildParams,
-    SearchParams,
-    build_embedding_search_params,
-    resolve_index_search_params,
-    write_search_params,
 )
 
 
@@ -80,166 +68,54 @@ class ClassProfile(BaseModel):
         return self.profiled_entities or self.total_entities
 
 
-class ShapeSample(BaseModel):
-    iri: str
-    short_iri: str
-    profile: ClassProfile
-    label: str | None = None
-    aliases: list[str] = Field(default_factory=list)
-
-    def queries(self) -> list[str]:
-        from grasp.utils import ordered_unique
-
-        candidates = []
-        if self.label:
-            candidates.append(self.label)
-        candidates.extend(self.aliases)
-        candidates.append(self.short_iri)
-        return ordered_unique(candidates)
-
-
-class ShapeIndex:
-    def __init__(
-        self,
-        data: Data,
-        index: EmbeddingIndex,
-        model: SentenceTransformerModel,
-        samples: list[ShapeSample],
-        total_classes: int | None = None,
-        search_params: SearchParams | None = None,
-    ) -> None:
-        self.data = data
-        self.index = index
-        self.model = model
-        self.samples = samples
-        self.total_classes = total_classes
-        self.indexed_classes = len(samples)
-        self.search_params = search_params
-        self.iri_map: dict[str, ShapeSample] = {s.iri: s for s in samples}
-
-    def search(self, query: str, k: int = 10) -> list[ShapeSample]:
-        embedding = self.model.embed([query])[0]
-        kwargs = (
-            {} if self.search_params is None else self.search_params.search_kwargs()
-        )
-        matches = self.index.search(embedding, k, **kwargs)
-        return [self.samples[id] for id, _, _ in matches]
-
-    def get_by_iri(self, iri: str) -> ShapeSample | None:
-        return self.iri_map.get(iri)
-
-    @classmethod
-    def load(
-        cls,
-        dir: str,
-        model: SentenceTransformerModel,
-        search_params: dict | None = None,
-    ) -> "ShapeIndex":
-        data = Data.load(os.path.join(dir, "data"))
-        embedding_path = os.path.join(dir, "data", "embedding.safetensors")
-        index_dir = os.path.join(dir, "index")
-
-        index = EmbeddingIndex.load(data, embedding_path, index_dir)
-        assert index.model == model.model, (
-            f"Embedding model mismatch: index model {index.model}, "
-            f"provided model {model.model}"
-        )
-
-        samples = [
-            ShapeSample.model_validate(s)
-            for s in load_jsonl(os.path.join(dir, "samples.jsonl"))
-        ]
-
-        total_classes: int | None = None
-        info_path = os.path.join(dir, "info.json")
-        if os.path.exists(info_path):
-            total_classes = load_json(info_path).get("total_classes")
-
-        return cls(
-            data,
-            index,
-            model,
-            samples,
-            total_classes=total_classes,
-            search_params=resolve_index_search_params(
-                index.index_type,
-                index_dir,
-                search_params,
-                name="shapes",
-            ),
-        )
-
-    @classmethod
-    def build(
-        cls,
-        samples: list[ShapeSample],
-        output_dir: str,
-        model: SentenceTransformerModel,
-        batch_size: int = 256,
-        overwrite: bool = False,
-        log_level: str | int | None = None,
-        total_classes: int | None = None,
-        build_params: EmbeddingBuildParams | None = None,
-        search_params: SearchParams | None = None,
-    ) -> None:
-        logger = get_logger("SHAPE INDEX BUILD", log_level)
-
-        if os.path.exists(output_dir) and not overwrite:
-            logger.info(f"Index directory {output_dir} already exists, skipping build")
-            return
-
-        start = time.monotonic()
-        logger.info(
-            f"Building shape index at {output_dir} from {len(samples):,} samples"
-        )
-
-        data_dir = os.path.join(output_dir, "data")
-        index_dir = os.path.join(output_dir, "index")
-
-        samples_file = os.path.join(output_dir, "samples.jsonl")
-        dump_jsonl((s.model_dump() for s in samples), samples_file)
-
-        items = []
-        for i, sample in enumerate(samples):
-            identifier = f"shape-{i}"
-            fields = [{"type": "text", "value": q} for q in sample.queries()]
-            items.append({"identifier": identifier, "fields": fields})
-
-        Data.build_from_items(items, data_dir)
-        data = Data.load(data_dir)
-
-        texts = list(flatten(fields for _, fields in data))
-        embedding = model.embed(texts, batch_size=batch_size, show_progress=True)
-
-        embedding_path = os.path.join(data_dir, "embedding.safetensors")
-        save_file(
-            {"embedding": embedding},
-            filename=embedding_path,
-            metadata={"model": model.model},
-        )
-
-        EmbeddingIndex.build(data, embedding_path, index_dir)
-
-        info: dict = {"indexed_classes": len(samples)}
-        if total_classes is not None:
-            info["total_classes"] = total_classes
-        dump_json(info, os.path.join(output_dir, "info.json"))
-
-        params = build_embedding_search_params(embedding, build_params, search_params)
-        write_search_params(params, index_dir)
-        logger.info(f"Search params: {params.model_dump_json()}")
-
-        end = time.monotonic()
-        logger.info(f"Shape index built in {end - start:.2f} seconds")
-
-
+# precomputed profiles of the largest classes, computed on request for others
 @dataclass
 class Shapes:
     instance_pattern: str | None = None
     schema_pattern: str | None = None
-    index: ShapeIndex | None = None
     description: str | None = None
+    profiles: dict[str, ClassProfile] = field(default_factory=dict)
     total_classes: int | None = None
+    cache: LRUCache = field(default_factory=lambda: LRUCache(maxsize=256))
+    lock: Lock = field(default_factory=Lock)
+
+    def get(self, iri: str) -> ClassProfile | None:
+        if iri in self.profiles:
+            return self.profiles[iri]
+        with self.lock:
+            return self.cache.get(iri)
+
+    def put(self, profile: ClassProfile) -> None:
+        with self.lock:
+            self.cache[profile.iri] = profile
+
+
+def save_profiles(
+    profiles: list[ClassProfile],
+    shapes_dir: str,
+    total_classes: int | None = None,
+) -> None:
+    dump_jsonl(
+        (p.model_dump() for p in profiles),
+        os.path.join(shapes_dir, "profiles.jsonl"),
+    )
+    info: dict = {"profiled_classes": len(profiles)}
+    if total_classes is not None:
+        info["total_classes"] = total_classes
+    dump_json(info, os.path.join(shapes_dir, "info.json"))
+
+
+def load_profiles(shapes_dir: str) -> tuple[list[ClassProfile], int | None]:
+    path = os.path.join(shapes_dir, "profiles.jsonl")
+    if not os.path.exists(path):
+        return [], None
+
+    profiles = [ClassProfile.model_validate(p) for p in load_jsonl(path)]
+    info_path = os.path.join(shapes_dir, "info.json")
+    total = (
+        load_json(info_path).get("total_classes") if os.path.exists(info_path) else None
+    )
+    return profiles, total
 
 
 def load_setup_description(shapes_dir: str) -> str | None:
@@ -257,25 +133,17 @@ def load_setup_patterns(shapes_dir: str) -> tuple[str | None, str | None]:
     return read("instance_pattern.sparql"), read("schema_pattern.sparql")
 
 
-def load_shapes(
-    shapes_dir: str,
-    model: SentenceTransformerModel,
-    search_params: dict | None = None,
-) -> Shapes | None:
+def load_shapes(shapes_dir: str, cache_size: int = 256) -> Shapes | None:
     instance_pattern, schema_pattern = load_setup_patterns(shapes_dir)
-
-    index = None
-    index_dir = os.path.join(shapes_dir, "index")
-    if os.path.exists(index_dir):
-        index = ShapeIndex.load(index_dir, model, search_params)
-
-    if instance_pattern is None and schema_pattern is None and index is None:
+    if instance_pattern is None and schema_pattern is None:
         return None
 
+    profiles, total_classes = load_profiles(shapes_dir)
     return Shapes(
         instance_pattern=instance_pattern,
         schema_pattern=schema_pattern,
-        index=index,
         description=load_setup_description(shapes_dir),
-        total_classes=index.total_classes if index is not None else None,
+        profiles={p.iri: p for p in profiles},
+        total_classes=total_classes,
+        cache=LRUCache(maxsize=cache_size),
     )
