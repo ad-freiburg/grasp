@@ -786,20 +786,15 @@ def ordered_alternatives_with_interleave(
             for alternative in alternative_groups.get(obj_type, [])
         ]
 
-    # entities and classes as one list, by score if there are scores (without
-    # a query there are none), ties and the rest by rank, entities first; an
-    # identifier in both is a class, as in item extraction
+    # entities and classes as one list by score, ties by rank, entities first;
+    # an identifier in both is a class, as in item extraction
     candidates = [
         (rank, alternative)
         for obj_type in [ObjType.ENTITY, ObjType.CLASS]
         for rank, alternative in enumerate(bucket(obj_type))
     ]
-    scored = all(alternative.score is not None for _, (alternative, _, _) in candidates)
     candidates.sort(
-        key=lambda candidate: (
-            -(candidate[1][0].score or 0.0) if scored else 0.0,
-            candidate[0],
-        )
+        key=lambda candidate: (-(candidate[1][0].score or 0.0), candidate[0])
     )
 
     entities: OrderedAlternatives = []
