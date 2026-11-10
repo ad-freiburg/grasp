@@ -1095,26 +1095,62 @@ def search_class(
 COMMON_PREFIXES = get_common_sparql_prefixes()
 
 
-def check_known(manager: KgManager, sparql: str, known: set[str]):
+def query_iris(
+    manager: KgManager,
+    sparql: str,
+    skip_service: bool = False,
+) -> set[str]:
+    # the IRIs of a query outside its prologue and common vocabulary, prefixed
+    # names resolved with the prefixes of the query, the common prefixes and
+    # the prefixes of the knowledge graph; optionally without SERVICE clauses,
+    # whose IRIs belong to other endpoints
     parse, _ = parse_string(sparql, manager.sparql_parser)
-    in_query = set()
+    prefixes = {**manager.prefixes, **parse_prefixes(parse)}
+    skip = {"Prologue"}
+    if skip_service:
+        skip.add("ServiceGraphPattern")
 
-    for iri in find_all(parse, {"IRIREF", "PNAME_NS", "PNAME_LN"}, skip={"Prologue"}):
-        binding = parse_into_binding(
-            iri["value"],
-            manager.iri_literal_parser,
-            manager.prefixes,
-        )
-        assert binding is not None, f"Failed to parse binding from {iri['value']}"
-        assert binding.typ == "uri", f"Expected IRI, got {binding.typ}"
+    iris = set()
+    undefined: dict[str, str] = {}
+    invalid = []
+    for node in find_all(parse, {"IRIREF", "PNAME_NS", "PNAME_LN"}, skip=skip):
+        value = node["value"]
+        binding = parse_into_binding(value, manager.iri_literal_parser, prefixes)
+        if binding is None or binding.typ != "uri":
+            if node["name"] == "IRIREF":
+                invalid.append(value)
+            else:
+                prefix = value[: value.index(":") + 1]
+                undefined.setdefault(prefix, value)
+            continue
 
-        identifier = binding.identifier()
-
-        longest = manager.find_longest_prefix(identifier)
+        iri = binding.identifier()
+        longest = manager.find_longest_prefix(iri)
         if longest is None or longest[0] not in COMMON_PREFIXES:
-            # unknown or uncommon prefix, should be known before use
-            in_query.add(identifier)
+            iris.add(iri)
 
+    if undefined:
+        examples = [
+            prefix if name == prefix else f"{prefix} (e.g. {name})"
+            for prefix, name in undefined.items()
+        ]
+        raise FunctionCallException(f"""\
+The SPARQL query uses prefixed names whose prefixes are neither declared \
+in the query nor common or {manager.kg} prefixes:
+{format_list(examples)}
+Declare them with PREFIX lines or write the full IRIs instead.""")
+    elif invalid:
+        raise FunctionCallException(f"""\
+The SPARQL query contains invalid IRIs:
+{format_list(invalid)}""")
+
+    return iris
+
+
+def check_known(manager: KgManager, sparql: str, known: set[str]):
+    # SERVICE clauses are skipped, their IRIs belong to other endpoints and
+    # cannot be known from this knowledge graph
+    in_query = query_iris(manager, sparql, skip_service=True)
     unknown_in_query = in_query - known
     if not unknown_in_query:
         return

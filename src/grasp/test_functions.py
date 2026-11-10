@@ -1,11 +1,20 @@
+from types import SimpleNamespace
+
+import pytest
+
 from grasp.functions import (
+    check_known,
     order_triples,
+    query_iris,
     row_iris,
     update_known_from_index_iris,
     update_known_from_selections,
 )
 from grasp.manager.normalizer import Normalizer
+from grasp.manager.utils import find_longest_prefix, get_common_sparql_prefixes
 from grasp.sparql.types import KgItem, Binding, TermKind, Selection
+from grasp.sparql.utils import load_iri_and_literal_parser, load_sparql_parser
+from grasp.utils import FunctionCallException
 
 
 class VariantNormalizer(Normalizer):
@@ -98,3 +107,62 @@ def test_all_classes_of_an_entity_come_first():
     order = order_triples(rows, TripleManager())  # type: ignore
     # types by class popularity, then the other properties, then repeats
     assert order == [4, 3, 2, 0, 1]
+
+
+WALD = "https://wald.cs.uni-freiburg.de/ontology#"
+QLPROXY = "https://qlever.cs.uni-freiburg.de/qlproxy/"
+
+
+@pytest.fixture(scope="module")
+def wald_manager():
+    prefixes = {**get_common_sparql_prefixes(), "wald": WALD}
+    return SimpleNamespace(
+        kg="wald",
+        prefixes=prefixes,
+        sparql_parser=load_sparql_parser(),
+        iri_literal_parser=load_iri_and_literal_parser(),
+        find_longest_prefix=lambda iri: find_longest_prefix(iri, prefixes),
+        format_iri=lambda iri: iri,
+    )
+
+
+SERVICE_QUERY = f"""PREFIX qlproxy: <{QLPROXY}>
+SELECT ?value WHERE {{
+  wald:Betrieb_1 geo:hasGeometry/geo:asWKT ?wkt .
+  SERVICE qlproxy: {{
+    _:config qlproxy:endpoint <https://qlever.dev/api/wald-tiff> ;
+      qlproxy:input-filter_wkt ?wkt ; qlproxy:output-value ?value .
+  }}
+}}"""
+
+
+def test_query_iris_resolves_query_prefixes(wald_manager):
+    iris = query_iris(wald_manager, SERVICE_QUERY)
+    assert iris == {
+        WALD + "Betrieb_1",
+        QLPROXY,
+        QLPROXY + "endpoint",
+        "https://qlever.dev/api/wald-tiff",
+        QLPROXY + "input-filter_wkt",
+        QLPROXY + "output-value",
+    }
+
+
+def test_query_iris_skips_service(wald_manager):
+    iris = query_iris(wald_manager, SERVICE_QUERY, skip_service=True)
+    assert iris == {WALD + "Betrieb_1"}
+
+
+def test_check_known_ignores_service(wald_manager):
+    check_known(wald_manager, SERVICE_QUERY, {WALD + "Betrieb_1"})
+    with pytest.raises(FunctionCallException, match="without being known"):
+        check_known(wald_manager, SERVICE_QUERY, set())
+
+
+def test_check_known_undefined_prefix(wald_manager):
+    sparql = "SELECT ?x WHERE { ?x foo:bar wald:Betrieb_1 . ?x foo:baz ?y }"
+    with pytest.raises(FunctionCallException) as exc:
+        check_known(wald_manager, sparql, {WALD + "Betrieb_1"})
+    message = str(exc.value)
+    assert "foo: (e.g. foo:bar)" in message
+    assert "neither declared in the query nor common or wald prefixes" in message

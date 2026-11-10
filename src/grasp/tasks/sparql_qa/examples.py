@@ -9,8 +9,10 @@ from grasp.functions import (
     SelectionGroup,
     find_manager,
     format_page_suffix,
-    selection_groups,
     paginate_results,
+    query_iris,
+    selection_groups,
+    update_known_from_iris,
     validate_page,
     validate_query,
 )
@@ -219,6 +221,12 @@ def format_examples(
             max_cols,
             known,
         )
+        # the query shows all of its IRIs, also those of SERVICE clauses or
+        # vocabulary that no selection covers
+        try:
+            update_known_from_iris(known, query_iris(manager, example.sparql))
+        except Exception:
+            pass
 
         groups = selection_groups(selections, manager, result.sparql)
         exs.append(

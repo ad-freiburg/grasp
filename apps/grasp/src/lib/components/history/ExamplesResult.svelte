@@ -26,7 +26,7 @@
       <li class="list-row">
         <span class="list-row__rank">{(result.start ?? 0) + index + 1}</span>
         <div class="list-row__body example" bind:this={exampleEls[index]}>
-          <p class="question">{example.question}</p>
+          <p class="question" data-path={`examples.${index}`}>{example.question}</p>
           <!-- result above the query, like for the final answer -->
           <ExecutionResult result={example.result} path={`examples.${index}.result`} />
           <SparqlBlock code={example.sparql} label="SPARQL" />
