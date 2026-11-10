@@ -5,6 +5,7 @@ import re
 import string
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import zip_longest
 from logging import Logger
 from typing import Literal
 
@@ -22,7 +23,12 @@ from grasp.baselines.grisp.utils import load_sparql_parser
 from grasp.configs import KgConfig, KgInfo
 from grasp.manager import KgManager, load_kg_manager
 from grasp.sparql.item import Item, extract_sparql_items
-from grasp.sparql.types import Alternative, ObjType, Position, Selection
+from grasp.sparql.types import (
+    Alternative,
+    ObjType,
+    Position,
+    Selection,
+)
 from grasp.sparql.utils import (
     find_all,
     infer_position_from_prefix,
@@ -75,6 +81,100 @@ OrderedAlternatives = list[tuple[Alternative, ObjType, str | None]]
 # wordings of the placeholder being resolved, per object type, with variants
 Queries = dict[ObjType, list[tuple[str, str | None]]]
 
+# index types a placeholder can be resolved to, classes only with a class index;
+# entities and classes are one group of alternatives, each keeping its own type
+SELECTABLE_OBJ_TYPES = [ObjType.ENTITY, ObjType.CLASS, ObjType.PROPERTY]
+
+
+def selectable_obj_types(manager: KgManager) -> list[ObjType]:
+    return [
+        obj_type
+        for obj_type in SELECTABLE_OBJ_TYPES
+        if obj_type != ObjType.CLASS or obj_type.index_name in manager.index_names
+    ]
+
+
+def supports_variants(manager: KgManager) -> dict[ObjType, bool]:
+    return {
+        obj_type: manager.get_normalizer(obj_type.index_name).supports_variants
+        for obj_type in selectable_obj_types(manager)
+    }
+
+
+def display_obj_type(obj_type: ObjType) -> ObjType:
+    return ObjType.ENTITY if obj_type == ObjType.CLASS else obj_type
+
+
+# properties at the predicate position, entities and classes elsewhere,
+# and everything if the position is unknown
+def searched_obj_types(
+    obj_types: list[ObjType],
+    position: Position | None,
+) -> list[ObjType]:
+    if position is None:
+        return obj_types
+    elif position == Position.PROPERTY:
+        return [t for t in obj_types if t == ObjType.PROPERTY]
+    return [t for t in obj_types if t != ObjType.PROPERTY]
+
+
+def searched_at_position(item: Item) -> bool:
+    return item.obj_type in searched_obj_types(SELECTABLE_OBJ_TYPES, item.position)
+
+
+# unindexed items need a label, unknown items must be allowed, and index
+# items must be searched at their position
+def is_valid_item(item: Item, allow_unknown: bool = False) -> bool:
+    if item.is_unindexed:
+        return item.has_label
+    elif item.is_unknown:
+        return allow_unknown
+    elif item.obj_type in SELECTABLE_OBJ_TYPES:
+        return searched_at_position(item)
+    return True
+
+
+# literals, common, and unknown items are predicted directly, all others
+# (including unindexed ones) become placeholders
+def is_placeholder(item: Item) -> bool:
+    return not (item.is_literal or item.is_common or item.is_unknown)
+
+
+# index items are denormalized, others (e.g., unindexed) are full IRIs already
+def selection_iri(selection: Selection, manager: KgManager) -> str:
+    identifier = selection.alternative.identifier
+    if selection.obj_type in SELECTABLE_OBJ_TYPES:
+        denormalized = manager.denormalize(
+            identifier,
+            selection.obj_type.index_name,
+            selection.variant,
+        )
+        assert denormalized is not None, f"Failed to denormalize {identifier}"
+        identifier = denormalized
+    return manager.format_iri(identifier)
+
+
+# entity and class alternatives are merged by score, so both indices need the
+# same type for their scores to be comparable
+def load_grisp_manager(config: KgConfig) -> KgManager:
+    manager = load_kg_manager(config)
+    types = {
+        name: kg_index.index.index_type
+        for name in ("entities", "classes")
+        if (kg_index := manager.indices.get(name)) is not None
+        and kg_index.index is not None
+    }
+    if len(set(types.values())) > 1:
+        raise ValueError(
+            f"GRISP needs the class index of {manager.kg} to have the same type "
+            f"as its entity index ({types['entities']}), got {types['classes']}; "
+            f"build a {types['entities']} class index and set it in the knowledge "
+            "graph config, or leave out the class index and optionally set up the "
+            "entity index to also contain classes (as before the separate class index)"
+        )
+    return manager
+
+
 # order in which a skeleton's natural-language placeholders are resolved. All
 # orders reduce to a fixed permutation of placeholder indices computed once per
 # skeleton (see Skeleton._compute_order); the resolution loop then fills them in
@@ -94,6 +194,8 @@ class IRI(BaseModel):
     identifier: str
     label: str
     aliases: list[str]
+    # unindexed IRIs cannot be selection targets
+    selectable: bool = True
 
     @staticmethod
     def from_item(item: Item, manager: KgManager) -> "IRI":
@@ -106,17 +208,12 @@ class IRI(BaseModel):
             label = f"{label} ({item.variant})"
             aliases = [f"{alias} ({item.variant})" for alias in aliases]
 
-        identifier = manager.denormalize(
-            item.alternative.identifier,
-            item.obj_type.index_name,
-            item.variant,
+        return IRI(
+            identifier=selection_iri(item.selection, manager),
+            label=label,
+            aliases=aliases,
+            selectable=item.obj_type in SELECTABLE_OBJ_TYPES,
         )
-        assert identifier is not None, (
-            f"Failed to denormalize identifier {item.alternative.identifier}"
-        )
-        identifier = manager.format_iri(identifier)
-
-        return IRI(identifier=identifier, label=label, aliases=aliases)
 
 
 class GRISPSample(BaseModel):
@@ -125,8 +222,8 @@ class GRISPSample(BaseModel):
     sparql: list[str | IRI]
 
     @property
-    def has_placeholders(self) -> bool:
-        return any(isinstance(part, IRI) for part in self.sparql)
+    def has_selection_targets(self) -> bool:
+        return any(isinstance(part, IRI) and part.selectable for part in self.sparql)
 
 
 class SelectionSample(BaseModel):
@@ -568,13 +665,7 @@ class Skeleton:
 
     def add_selection(self, selection: Selection, manager: KgManager) -> None:
         assert not self.done, "All NL IRIs have already been replaced"
-        identifier = manager.denormalize(
-            selection.alternative.identifier,
-            selection.obj_type.index_name,
-            selection.variant,
-        )
-        assert identifier is not None, "Failed to denormalize identifier"
-        identifier = manager.format_iri(identifier)
+        identifier = selection_iri(selection, manager)
         label = selection.alternative.get_label()
         if label is not None:
             label += f" ({identifier})"
@@ -689,26 +780,48 @@ def ordered_alternatives_with_interleave(
         for obj_type, pairs in queries.items()
     }
 
-    entities = [
-        (alternative, ObjType.ENTITY, variants.get(ObjType.ENTITY))
-        for alternative in alternative_groups.get(ObjType.ENTITY, [])
-    ]
-    properties = [
-        (alternative, ObjType.PROPERTY, variants.get(ObjType.PROPERTY))
-        for alternative in alternative_groups.get(ObjType.PROPERTY, [])
-    ]
+    def bucket(obj_type: ObjType) -> OrderedAlternatives:
+        return [
+            (alternative, obj_type, variants.get(obj_type))
+            for alternative in alternative_groups.get(obj_type, [])
+        ]
 
-    if not interleave or not entities or not properties:
+    # entities and classes as one list, by score if there are scores (without
+    # a query there are none), ties and the rest by rank, entities first; an
+    # identifier in both is a class, as in item extraction
+    candidates = [
+        (rank, alternative)
+        for obj_type in [ObjType.ENTITY, ObjType.CLASS]
+        for rank, alternative in enumerate(bucket(obj_type))
+    ]
+    scored = all(alternative.score is not None for _, (alternative, _, _) in candidates)
+    candidates.sort(
+        key=lambda candidate: (
+            -(candidate[1][0].score or 0.0) if scored else 0.0,
+            candidate[0],
+        )
+    )
+
+    entities: OrderedAlternatives = []
+    positions: dict[str, int] = {}
+    for _, alternative in candidates:
+        identifier = alternative[0].identifier
+        if identifier not in positions:
+            positions[identifier] = len(entities)
+            entities.append(alternative)
+        elif alternative[1] == ObjType.CLASS:
+            entities[positions[identifier]] = alternative
+
+    properties = bucket(ObjType.PROPERTY)
+    if not interleave:
         return entities + properties
 
-    ordered = []
-    max_len = max(len(entities), len(properties))
-    for i in range(max_len):
-        if i < len(entities):
-            ordered.append(entities[i])
-        if i < len(properties):
-            ordered.append(properties[i])
-    return ordered
+    return [
+        alternative
+        for pair in zip_longest(entities, properties)
+        for alternative in pair
+        if alternative is not None
+    ]
 
 
 def count_alternatives(alternatives: OrderedAlternatives) -> int:
@@ -730,9 +843,7 @@ def format_alternatives(alternatives: OrderedAlternatives) -> str:
             show_matched_label=False,
             include_variants=[],
         )
-        if obj_type not in grouped:
-            grouped[obj_type] = []
-        grouped[obj_type].append(f"{label}. {alt}")
+        grouped.setdefault(display_obj_type(obj_type), []).append(f"{label}. {alt}")
 
     multiple_types = len(grouped) > 1
     alt_groups = []
@@ -794,38 +905,39 @@ def find_candidate_ids(
         # full search across both indices as fallback
         position = None
 
-    if position is None:
-        obj_types = [ObjType.ENTITY, ObjType.PROPERTY]
-    elif position == Position.PROPERTY:
-        obj_types = [ObjType.PROPERTY]
-    else:
-        obj_types = [ObjType.ENTITY]
+    obj_types = searched_obj_types(selectable_obj_types(manager), position)
 
     identifier_maps: dict[ObjType, dict[str, list[str]] | None] = {
         obj_type: None for obj_type in obj_types
     }
     if not skip_constraint and position is not None and constraint_sparql is not None:
-        # can only be one
-        obj_type = obj_types[0]
         constraint.sparql = constraint_sparql
         try:
             logger.debug(
                 f"Searching for candidate IRIs at position {position.value} "
                 f"with constraint SPARQL:\n{constraint_sparql}"
             )
-            identifier_map = manager.get_candidate_ids(
-                obj_type.index_name,
+            # one query for all searched indices
+            identifiers = manager.get_candidate_identifiers(
                 constraint_sparql,
                 max_candidates,
                 # constraint_timeout to execute query, 3 seconds to read result
                 request_timeout=(3.5, constraint_timeout),
                 read_timeout=3.0,
             )
+            maps = {
+                obj_type: manager.map_candidate_identifiers(
+                    obj_type.index_name,
+                    identifiers,
+                )
+                for obj_type in obj_types
+            }
             logger.debug(
-                f"Got {len(identifier_map)} candidate IRIs for position {position.value}"
+                f"Got {sum(len(m) for m in maps.values())} candidate IRIs "
+                f"for position {position.value}"
             )
-            identifier_maps[obj_type] = identifier_map
-            constraint.candidates = len(identifier_map)
+            identifier_maps.update(maps)
+            constraint.candidates = sum(len(m) for m in maps.values())
         except Exception as e:
             logger.warning(f"Error getting candidate IRIs: {e}")
             constraint.reason = str(e)
@@ -1037,18 +1149,13 @@ def gold_sparql_to_nl_skeleton(
     sparql = manager.prettify(sparql)
     sparql, items = extract_sparql_items(sparql, manager)
 
-    # same validity rules as training data prep (main below):
-    # unindexed items must have a label, and unknown items are not allowed
-    invalid = [
-        item
-        for item in items
-        if (item.is_unindexed and not item.has_label) or item.is_unknown
-    ]
+    invalid = [item for item in items if not is_valid_item(item)]
     if invalid:
         raise OracleSkeletonUnavailable(
             "invalid items: "
             + ", ".join(
-                f"{it.alternative.get_identifier()} ({it.obj_type.name})"
+                f"{it.alternative.get_identifier()} "
+                f"({it.obj_type.name} at {it.position or 'unknown'} position)"
                 for it in invalid
             )
         )
@@ -1057,7 +1164,7 @@ def gold_sparql_to_nl_skeleton(
     cursor = 0
     for item in items:
         # literals/common/unknown are emitted as-is; everything else becomes a placeholder
-        if item.is_literal or item.is_common or item.is_unknown:
+        if not is_placeholder(item):
             continue
 
         start, end = item.item_span
@@ -1559,14 +1666,12 @@ def prepare_selection(
     question, skeleton = materialize_sample(sample, is_val, skeleton_p)
     sparql = materialize_sparql(sample.sparql)
 
-    supports_variants = {
-        obj_type: manager.get_normalizer(obj_type.index_name).supports_variants
-        for obj_type in [ObjType.ENTITY, ObjType.PROPERTY]
-    }
+    variants_support = supports_variants(manager)
+    obj_types = selectable_obj_types(manager)
 
+    # items line up with the placeholders, but only index items can be targets
     _, items = extract_sparql_items(sparql, manager)
-    items = [item for item in items if item.is_entity_or_property]
-    assert len(items) > 0, "No valid item to replace found in sample"
+    items = [item for item in items if is_placeholder(item)]
 
     parser = load_sparql_parser()
     # train the model to be fill-order agnostic: resolve a uniformly random
@@ -1578,7 +1683,9 @@ def prepare_selection(
     random.shuffle(order)
     skeleton = Skeleton.parse(skeleton, parser, order=order)
 
-    upper = random.randint(0, len(items) - 1)
+    targets = [j for j, i in enumerate(order) if items[i].obj_type in obj_types]
+    assert len(targets) > 0, "No item to select found in sample"
+    upper = random.choice(targets)
     for j in range(upper):
         skeleton.add_selection(items[order[j]].selection, manager)
 
@@ -1586,7 +1693,7 @@ def prepare_selection(
     target_alt = item.selection.alternative
 
     info = skeleton.prepare_for_selection()
-    queries = info.build_queries(supports_variants)
+    queries = info.build_queries(variants_support)
 
     # TODO: fix hardcoded k values
     k = 10 if is_val else random.randint(2, 10)
@@ -1597,18 +1704,15 @@ def prepare_selection(
     # constrains because alternatives are constrained at inference (see run.py).
     constrain = is_val or random.random() < constrain_p
 
-    if item.is_entity_or_property:
-        selection_logger = get_logger("GRISP SELECTION PREP")
-        alternative_groups = find_alternative_groups(
-            manager,
-            info.sparql,
-            queries,
-            k,
-            logger=selection_logger,
-            skip_constraint=not constrain,
-        )
-    else:
-        alternative_groups = {}
+    selection_logger = get_logger("GRISP SELECTION PREP")
+    alternative_groups = find_alternative_groups(
+        manager,
+        info.sparql,
+        queries,
+        k,
+        logger=selection_logger,
+        skip_constraint=not constrain,
+    )
 
     drop_infos = not is_val and random.random() < drop_infos_p
     drop_target = not is_val and random.random() < drop_target_p
@@ -1628,7 +1732,9 @@ def prepare_selection(
 
     target_option: int | None = None
     for i, (alt, obj_type, _) in enumerate(alternatives):
-        if alt != target_alt or obj_type != item.obj_type:
+        # by group, an IRI in both indices may only be found as an entity
+        same_group = display_obj_type(obj_type) == display_obj_type(item.obj_type)
+        if alt != target_alt or not same_group:
             continue
 
         # drop target alternative 20% of the time during training
@@ -1683,10 +1789,10 @@ class GRISPSelectionDataset(Dataset):
 
         self.logger = get_logger(f"GRISP SELECTION DATASET ({is_val=})", log_level)
 
-        self.samples = [sample for sample in samples if sample.has_placeholders]
+        self.samples = [sample for sample in samples if sample.has_selection_targets]
         self.logger.info(
             f"Filtered {len(samples):,} samples to "
-            f"{len(self.samples):,} samples with placeholders"
+            f"{len(self.samples):,} samples with selection targets"
         )
 
     def __len__(self) -> int:
@@ -1886,7 +1992,7 @@ def main(args: argparse.Namespace) -> None:
         kg=args.knowledge_graph,
         info=KgInfo(endpoint=args.endpoint) if args.endpoint else None,
     )
-    manager = load_kg_manager(cfg)
+    manager = load_grisp_manager(cfg)
     manager.set_info_retrieval(enable=args.info_retrieval)
 
     if os.path.exists(args.output_file) and not args.overwrite:
@@ -1911,10 +2017,7 @@ def main(args: argparse.Namespace) -> None:
             sparql, items = extract_sparql_items(sparql, manager)
 
             invalid_items = [
-                item
-                for item in items
-                if (item.is_unindexed and not item.has_label)
-                or (item.is_unknown and not args.allow_unknown)
+                item for item in items if not is_valid_item(item, args.allow_unknown)
             ]
             if invalid_items:
                 invalid += 1
@@ -1922,6 +2025,7 @@ def main(args: argparse.Namespace) -> None:
                     item.alternative.get_selection_string(
                         include_variants=[item.variant] if item.variant else None
                     )
+                    + f" ({item.obj_type} at {item.position or 'unknown'} position)"
                     for item in invalid_items
                 )
 
@@ -1934,8 +2038,7 @@ def main(args: argparse.Namespace) -> None:
             parts = []
             start = 0
             for item in items:
-                # literals, common, and unknown (if allowed) should be predicted directly
-                if item.is_literal or item.is_common or item.is_unknown:
+                if not is_placeholder(item):
                     continue
 
                 item_start, item_end = item.item_span

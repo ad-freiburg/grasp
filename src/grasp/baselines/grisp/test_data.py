@@ -1,5 +1,8 @@
 from unittest.mock import Mock
 
+import pytest
+
+import grasp.baselines.grisp.data as data_module
 from grasp.baselines.grisp.data import (
     BOI,
     BOR,
@@ -7,21 +10,32 @@ from grasp.baselines.grisp.data import (
     EOR,
     MAX_PLACEHOLDER_QUERIES,
     SEP,
+    IRI,
+    GRISPSample,
     Info,
     Skeleton,
     display_nl_iri,
     extract_queries_and_variants_from_nl_iri,
     IGNORE_INDEX,
     extract_values_from_nl_iri,
+    format_alternatives,
+    load_grisp_manager,
     get_option_token_ids,
+    is_placeholder,
+    is_valid_item,
     merge_skeletons,
+    ordered_alternatives_with_interleave,
     search_alternatives,
+    searched_at_position,
+    selectable_obj_types,
     split_values,
     tokenize_messages,
     tokenize_option_answer,
 )
 from grasp.baselines.grisp.utils import load_sparql_parser
-from grasp.sparql.types import Alternative, ObjType, Selection
+from grasp.sparql.item import extract_sparql_items
+from grasp.sparql.types import Alternative, ObjType, Position, Selection
+from grasp.sparql.utils import load_iri_and_literal_parser
 
 SPARQL_PARSER = load_sparql_parser()
 
@@ -341,6 +355,136 @@ class TestSearchAlternatives:
         )
 
 
+# entity index holds e1 and the shared c1, class index holds c1 and c2;
+# identifiers are not normalized
+def class_manager() -> Mock:
+    indices = {"entities": {"e1", "c1"}, "classes": {"c1", "c2"}}
+    manager = Mock()
+    manager.index_names = ["classes", "entities", "properties"]
+    manager.normalize.side_effect = lambda identifier, index_name: (identifier, None)
+    manager.denormalize.side_effect = lambda identifier, index_name, *args: identifier
+    manager.check_identifier.side_effect = (
+        lambda identifier, index_name: identifier in indices.get(index_name, set())
+    )
+    return manager
+
+
+class TestClasses:
+    def test_classes_only_with_class_index(self):
+        manager = Mock()
+        manager.index_names = ["entities", "properties"]
+        assert selectable_obj_types(manager) == [ObjType.ENTITY, ObjType.PROPERTY]
+        manager.index_names = ["classes", "entities", "properties"]
+        assert selectable_obj_types(manager) == [
+            ObjType.ENTITY,
+            ObjType.CLASS,
+            ObjType.PROPERTY,
+        ]
+
+    def test_entities_and_classes_searched_separately(self):
+        manager = class_manager()
+        results = {
+            "entities": ["e1", "c1"],
+            "classes": ["c1", "c2"],
+        }
+        manager.search_index.side_effect = lambda index_name, *args: [
+            Alternative(identifier=identifier) for identifier in results[index_name]
+        ]
+        queries = {
+            ObjType.ENTITY: [("city", None)],
+            ObjType.CLASS: [("city", None)],
+        }
+        groups = search_alternatives(
+            manager,
+            [ObjType.ENTITY, ObjType.CLASS],
+            {ObjType.ENTITY: None, ObjType.CLASS: None},
+            queries,
+            0,
+            10,
+            Mock(),
+        )
+        assert [a.identifier for a in groups[ObjType.ENTITY]] == ["e1", "c1"]
+        assert [a.identifier for a in groups[ObjType.CLASS]] == ["c1", "c2"]
+
+    def test_entities_and_classes_one_group(self):
+        groups = {
+            ObjType.PROPERTY: [Alternative(identifier="p1")],
+            ObjType.ENTITY: [Alternative(identifier=i) for i in ["e1", "e2"]],
+            ObjType.CLASS: [Alternative(identifier="c1")],
+        }
+        queries = {obj_type: [("x", None)] for obj_type in groups}
+
+        def order(interleave: bool) -> list[str]:
+            return [
+                alternative.identifier
+                for alternative, _, _ in ordered_alternatives_with_interleave(
+                    groups,
+                    queries,
+                    interleave=interleave,
+                )
+            ]
+
+        assert order(False) == ["e1", "c1", "e2", "p1"]
+        assert order(True) == ["e1", "p1", "c1", "e2"]
+
+    def test_entities_and_classes_merged_by_score(self):
+        def alternatives(scores: dict[str, float]) -> list[Alternative]:
+            return [Alternative(identifier=i, score=s) for i, s in scores.items()]
+
+        groups = {
+            ObjType.ENTITY: alternatives({"e1": 0.5, "e2": 0.5}),
+            ObjType.CLASS: alternatives({"c1": 1.0, "c2": 0.5}),
+        }
+        queries = {obj_type: [("x", None)] for obj_type in groups}
+        ordered = ordered_alternatives_with_interleave(groups, queries)
+        # ties keep the interleaved rank order
+        assert [a.identifier for a, _, _ in ordered] == ["c1", "e1", "e2", "c2"]
+
+    def test_index_types_must_match(self, monkeypatch):
+        def manager(entity_type: str, class_type: str) -> Mock:
+            manager = Mock()
+            manager.kg = "kg"
+            manager.indices = {
+                "entities": Mock(index=Mock(index_type=entity_type)),
+                "classes": Mock(index=Mock(index_type=class_type)),
+            }
+            return manager
+
+        monkeypatch.setattr(
+            data_module, "load_kg_manager", lambda config: manager("fuzzy", "fuzzy")
+        )
+        load_grisp_manager(Mock())
+        monkeypatch.setattr(
+            data_module, "load_kg_manager", lambda config: manager("fuzzy", "embedding")
+        )
+        with pytest.raises(ValueError, match="same type"):
+            load_grisp_manager(Mock())
+
+    def test_identifier_in_both_groups_is_a_class(self):
+        groups = {
+            ObjType.ENTITY: [Alternative(identifier=i) for i in ["x", "e1"]],
+            ObjType.CLASS: [Alternative(identifier=i) for i in ["c1", "x"]],
+        }
+        queries = {obj_type: [("x", None)] for obj_type in groups}
+        ordered = ordered_alternatives_with_interleave(groups, queries)
+        assert [(a.identifier, obj_type) for a, obj_type, _ in ordered] == [
+            ("x", ObjType.CLASS),
+            ("c1", ObjType.CLASS),
+            ("e1", ObjType.ENTITY),
+        ]
+
+    def test_classes_shown_with_entities(self):
+        alternatives = [
+            (Alternative(identifier="e1"), ObjType.ENTITY, None),
+            (Alternative(identifier="c1"), ObjType.CLASS, None),
+            (Alternative(identifier="p1"), ObjType.PROPERTY, None),
+        ]
+        formatted = format_alternatives(alternatives)
+        assert "Entity alternatives" in formatted
+        assert "Property alternatives" in formatted
+        assert "Class alternatives" not in formatted
+
+
 # stand-in for a chat tokenizer: one token per role and per content word, with
 # ids assigned per token string. word_boundary mimics sentencepiece, which marks
 # a word start ("▁A"), so a letter's id differs from its standalone id; prefix
@@ -501,3 +645,72 @@ class TestMessageMasking:
         tokenizer = FakeTokenizer()
         n_labelled, n_tokens = self.labelled(tokenizer, mask_inputs=False)
         assert n_labelled == n_tokens
+
+
+class PropertyOnlyManager:
+    sparql_parser = SPARQL_PARSER
+    iri_literal_parser = load_iri_and_literal_parser()
+    prefixes = {}
+
+    def normalize(self, iri: str, index_name: str):
+        return iri, None
+
+    def check_identifier(self, identifier: str, index_name: str) -> bool:
+        return index_name == "properties" and identifier == "http://ex.org/p"
+
+    def get_info_for_identifiers_from_index(self, identifiers, index_name):
+        return {}
+
+    def build_alternative_with_info(self, identifier, info=None, variants=None):
+        return Alternative(identifier, variants=variants)
+
+
+def test_properties_only_searched_at_predicate_position():
+    sparql = (
+        "SELECT ?s WHERE { ?s <http://ex.org/p> ?o . ?x ?y <http://ex.org/p> . "
+        "?x ?y <http://other.org/x> }"
+    )
+    _, items = extract_sparql_items(sparql, PropertyOnlyManager())  # type: ignore
+    assert [(item.obj_type, item.position) for item in items] == [
+        (ObjType.PROPERTY, Position.PROPERTY),
+        (ObjType.PROPERTY, Position.OBJECT),
+        (ObjType.UNKNOWN, Position.OBJECT),
+    ]
+    # unknown items are never searched, they are only valid if allowed
+    assert [searched_at_position(item) for item in items] == [True, False, False]
+    assert [is_valid_item(item) for item in items] == [True, False, False]
+    assert [is_valid_item(item, allow_unknown=True) for item in items] == [
+        True,
+        False,
+        True,
+    ]
+
+
+class UnindexedManager(PropertyOnlyManager):
+    prefixes = {"ex": "http://ex.org/"}
+
+    def denormalize(self, identifier: str, index_name: str, variant=None):
+        return f"denormalized:{identifier}"
+
+    def format_iri(self, iri: str) -> str:
+        return iri
+
+
+def test_unindexed_iris_are_placeholders_but_not_selectable():
+    manager = UnindexedManager()
+    sparql = "SELECT ?s WHERE { ?s <http://ex.org/p> <http://ex.org/q> }"
+    _, items = extract_sparql_items(sparql, manager)  # type: ignore
+    assert [item.obj_type for item in items] == [ObjType.PROPERTY, ObjType.UNINDEXED]
+    assert all(is_placeholder(item) for item in items)
+
+    iris = [IRI.from_item(item, manager) for item in items]  # type: ignore
+    assert [(iri.identifier, iri.selectable) for iri in iris] == [
+        ("denormalized:http://ex.org/p", True),
+        ("http://ex.org/q", False),
+    ]
+
+    def sample(*parts) -> GRISPSample:
+        return GRISPSample(kg="kg", questions=["q"], sparql=list(parts))
+
+    assert sample("?s ", iris[0], " ", iris[1]).has_selection_targets
+    assert not sample("?s ?p ", iris[1]).has_selection_targets

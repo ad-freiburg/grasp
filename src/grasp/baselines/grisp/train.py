@@ -26,6 +26,7 @@ from universal_ml_utils.io import load_json
 from universal_ml_utils.logging import get_logger
 
 from grasp.baselines.grisp.data import (
+    load_grisp_manager,
     IGNORE_INDEX,
     GRISPCollator,
     GRISPMaterializedImprovementDataset,
@@ -43,7 +44,6 @@ from grasp.baselines.grisp.utils import (
     set_chat_template,
 )
 from grasp.configs import KgConfig
-from grasp.manager import load_kg_manager
 
 
 class Lora(BaseModel):
@@ -239,7 +239,7 @@ def load_datasets(
             assert cfg.knowledge_graph is not None, (
                 "KG config must be provided for selection dataset"
             )
-            manager = load_kg_manager(cfg.knowledge_graph)
+            manager = load_grisp_manager(cfg.knowledge_graph)
             dataset_kwargs["manager"] = manager
             dataset_kwargs["skeleton_p"] = cfg.skeleton_p
             dataset_kwargs["drop_infos_p"] = cfg.drop_infos_p

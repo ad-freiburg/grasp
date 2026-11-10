@@ -690,13 +690,30 @@ class KgManager:
         read_timeout: float | None = READ_TIMEOUT,
         max_retries: int = 0,
     ) -> dict[str, list[str]]:
+        identifiers = self.get_candidate_identifiers(
+            sparql,
+            max_candidates,
+            request_timeout,
+            read_timeout,
+            max_retries,
+        )
+        return self.map_candidate_identifiers(index_name, identifiers)
+
+    # identifiers from a single column SELECT query, to be mapped to one or
+    # more indices with map_candidate_identifiers
+    def get_candidate_identifiers(
+        self,
+        sparql: str,
+        max_candidates: int | None = None,
+        request_timeout: float | tuple[float, float] | None = REQUEST_TIMEOUT,
+        read_timeout: float | None = READ_TIMEOUT,
+        max_retries: int = 0,
+    ) -> list[str]:
         typ = query_type(sparql, self.sparql_parser)
         if typ != "select":
             raise SPARQLException("SPARQL query is not a SELECT query", sparql)
 
-        self.logger.debug(
-            f'Getting candidate IDs for index "{index_name}" with {sparql}'
-        )
+        self.logger.debug(f"Getting candidate identifiers with {sparql}")
         result = self.execute_sparql(sparql, request_timeout, read_timeout, max_retries)
 
         if not isinstance(result, SelectResult):
@@ -711,21 +728,27 @@ class KgManager:
             )
 
         self.logger.debug(
-            f'Got {len(result):,} candidate items for index "{index_name}":\n'
+            f"Got {len(result):,} candidate identifiers:\n"
             f"{self.format_sparql_result(result)}"
         )
 
+        return [
+            binding.identifier()
+            for bindings in result.bindings()
+            if (binding := next(iter(bindings), None)) is not None
+        ]
+
+    # identifiers found in the index, normalized, with their variants
+    def map_candidate_identifiers(
+        self,
+        index_name: str,
+        identifiers: Iterable[str],
+    ) -> dict[str, list[str]]:
         normalizer = self.get_normalizer(index_name)
         data = self.get_data(index_name)
 
         identifier_map: dict[str, list[str]] = {}
-        for bindings in result.bindings():
-            binding = next(iter(bindings), None)
-            if binding is None:
-                continue
-
-            identifier = binding.identifier()
-
+        for identifier in identifiers:
             norm = normalizer.normalize(identifier)
             if norm is not None:
                 normalized_iri, variant = norm

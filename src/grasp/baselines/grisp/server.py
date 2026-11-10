@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from universal_ml_utils.configuration import load_config
 from universal_ml_utils.logging import get_logger
 
+from grasp.baselines.grisp.data import load_grisp_manager
 from grasp.baselines.grisp.run import (
     GRISPModel,
     GRISPRunConfig,
@@ -23,7 +24,6 @@ from grasp.baselines.grisp.run import (
 )
 from grasp.baselines.grisp.train import GRISPTrainConfig
 from grasp.baselines.grisp.utils import load_sparql_parser
-from grasp.manager import load_kg_manager
 
 active_connections = 0
 
@@ -111,7 +111,7 @@ def serve(config: GRISPServerConfig, log_level: int | str | None = None) -> None
         selection_tokenizer = skeleton_tokenizer
 
     # load KG manager
-    manager = load_kg_manager(config.knowledge_graph)
+    manager = load_grisp_manager(config.knowledge_graph)
 
     manager.load_models()
 

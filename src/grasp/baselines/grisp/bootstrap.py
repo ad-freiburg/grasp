@@ -12,6 +12,7 @@ from universal_ml_utils.logging import get_logger, setup_logging
 from universal_ml_utils.ops import consume_generator
 
 from grasp.baselines.grisp.data import (
+    load_grisp_manager,
     RESULT_UNAVAILABLE,
     RESULT_UNRESOLVED,
     GRISPMaterializedSample,
@@ -35,7 +36,7 @@ from grasp.baselines.grisp.run import (
 from grasp.baselines.grisp.train import GRISPTrainConfig
 from grasp.baselines.grisp.utils import load_sparql_parser
 from grasp.evaluate import get_result_or_error
-from grasp.manager import KgManager, load_kg_manager
+from grasp.manager import KgManager
 from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, SelectResult
 from grasp.tasks.utils import prepare_sparql_result
@@ -290,7 +291,7 @@ def main(args: argparse.Namespace) -> None:
         selection_model = GRISPModel(model, run_cfg.selection_disable_adapter)
         selection_tokenizer = tokenizer
 
-    manager = load_kg_manager(run_cfg.knowledge_graph)
+    manager = load_grisp_manager(run_cfg.knowledge_graph)
     manager.load_models()
     parser = load_sparql_parser()
 
