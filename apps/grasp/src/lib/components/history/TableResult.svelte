@@ -1,60 +1,63 @@
 <script>
-  export let result;
+  import { displayValue } from '../../utils/tables.js';
 
-  $: header = Array.isArray(result?.header) ? result.header : [];
+  export let result;
+  // path of the table in a structured result, for data-path on its values
+  export let path = '';
+
+  $: columns = Array.isArray(result?.columns) ? result.columns : [];
   $: rows = Array.isArray(result?.rows) ? result.rows : [];
 
-  // null columns, rows and values are omitted or unbound
-  function display(value) {
-    if (!value) return { text: '' };
-    if (value.type === 'uri') {
-      const short = value.short_identifier ?? value.value;
-      return {
-        text: value.label ? `${value.label} (${short})` : short,
-        href: /^https?:\/\//.test(value.value) ? value.value : null
-      };
-    }
-    return { text: value.value, tag: value.lang ?? null };
+  function valuePath(index, column) {
+    return `${path ? `${path}.` : ''}rows.${index}.${column.variable}`;
   }
 </script>
 
-<div class="table-result">
-  {#if result?.summary}
-    <p>{result.summary}:</p>
-  {/if}
-  <table>
-    <thead>
-      <tr>
-        {#each header as column}
-          <th>{column ?? '…'}</th>
-        {/each}
-      </tr>
-    </thead>
-    <tbody>
-      {#each rows as row}
-        <tr>
-          {#if row}
-            {#each header as column, index}
-              {@const value = column == null ? null : display(row[index])}
-              <td>
-                {#if !value}
-                  …
-                {:else if value.href}
-                  <a href={value.href} target="_blank" rel="noopener noreferrer">{value.text}</a>
-                {:else}
-                  {value.text}
-                {/if}
-                {#if value?.tag}<span class="tag">{value.tag}</span>{/if}
-              </td>
+{#if result}
+  <div class="table-result">
+    {#if result.summary}
+      <p class="result-summary">{result.summary}</p>
+    {/if}
+    <div class="table">
+      <table>
+        <thead>
+          <tr>
+            {#each columns as column}
+              <th scope="col" class:gap={!column}>{column ? column.name : '…'}</th>
             {/each}
-          {:else}
-            <td colspan={header.length}>…</td>
-          {/if}
-        </tr>
-      {/each}
-    </tbody>
-  </table>
-</div>
+          </tr>
+        </thead>
+        <tbody>
+          {#each rows as row, index}
+            {#if row}
+              <tr>
+                {#each columns as column}
+                  {#if column}
+                    {@const value = displayValue(row[column.variable])}
+                    <td data-path={valuePath(index, column)}>
+                      {#if value.href}
+                        <a href={value.href} target="_blank" rel="noopener noreferrer">{value.text}</a>
+                      {:else}
+                        {value.text}
+                      {/if}
+                      {#if value.tag}<span class="tag">{value.tag}</span>{/if}
+                    </td>
+                  {:else}
+                    <td class="gap">…</td>
+                  {/if}
+                {/each}
+              </tr>
+            {:else}
+              <tr class="gap-row">
+                <td colspan={columns.length}>…</td>
+              </tr>
+            {/if}
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{/if}
 
 <style>
   .table-result {
@@ -67,30 +70,58 @@
     margin: 0 0 var(--spacing-xs);
   }
 
-  table {
-    border-collapse: collapse;
-    display: block;
-    max-width: 100%;
+  .table {
     overflow-x: auto;
+    border: 1px solid rgba(52, 74, 154, 0.2);
+    border-radius: var(--radius-sm);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
   }
 
   th,
   td {
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    padding: 6px 8px;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid rgba(52, 74, 154, 0.12);
     text-align: left;
-    white-space: nowrap;
+    vertical-align: top;
+  }
+
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  thead {
+    background: rgba(52, 74, 154, 0.08);
+  }
+
+  .gap,
+  .gap-row td {
+    color: var(--text-subtle);
+  }
+
+  .gap-row td {
+    text-align: center;
+    font-size: 0.8rem;
+    padding: 0.25rem 0.6rem;
+    background: rgba(52, 74, 154, 0.03);
   }
 
   .tag {
-    margin-left: 4px;
-    font-size: 0.8em;
+    margin-left: 0.3rem;
+    font-size: 0.72rem;
     color: var(--text-subtle);
   }
 
   a {
     color: var(--color-uni-blue);
+    text-decoration: none;
+  }
+
+  a:hover {
     text-decoration: underline;
-    text-decoration-color: rgba(52, 74, 154, 0.4);
   }
 </style>

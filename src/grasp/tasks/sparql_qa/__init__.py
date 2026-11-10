@@ -5,7 +5,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ValidationError
 
 from grasp.configs import GraspConfig
-from grasp.functions import check_known, find_manager
+from grasp.functions import check_known, find_manager, format_selection_groups
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message, ToolCall, ToolCallResult
 from grasp.model.base import ResponseMessage
@@ -338,16 +338,21 @@ def prepare_formatted_output(
     )
     manager, _ = find_manager(managers, kg)
 
+    formatted_selections, selection_groups = format_selection_groups(
+        selections,
+        manager,
+        result.sparql,
+    )
     formatted = f"SPARQL query over {kg}:\n```sparql\n{result.sparql}\n```"
     if selections:
-        formatted += f"\n\n{manager.format_selections(selections)}"
+        formatted += f"\n\n{formatted_selections}"
 
     formatted += f"\n\nExecution result:\n{result.formatted}"
 
     return {
         "sparql": result.sparql,
-        "selections": manager.format_selections(selections),
-        "result": result.formatted,
+        "selections": [group.model_dump() for group in selection_groups],
+        "result": result.tool_result().model_dump(),
         "endpoint": manager.endpoint,
         "formatted": formatted,
     }

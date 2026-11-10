@@ -40,15 +40,15 @@ from grasp.sparql.types import (
     Alternative,
     AskResult,
     Binding,
-    ObjType,
     Position,
     Selection,
     SelectResult,
     SelectRow,
     STANDARD_INDEX_NAMES,
-    TableValue,
-    group_selections,
     iri_indices,
+    TableColumn,
+    TableRow,
+    TableValue,
 )
 from grasp.sparql.utils import (
     READ_TIMEOUT,
@@ -73,7 +73,6 @@ from grasp.sparql.utils import (
 from grasp.utils import (
     clip,
     format_enumerate,
-    format_list,
     format_prefixes,
     get_index_dir,
     ordered_unique,
@@ -195,9 +194,9 @@ class KgManager:
         show_left_columns: int = 5,
         show_right_columns: int = 5,
         column_names: list[str] | None = None,
-    ) -> tuple[list[str | None], list[list[TableValue | None] | None]]:
-        # header and rows of the shown part of a result, None for omitted
-        # columns and rows and for unbound values
+    ) -> tuple[list[TableColumn | None], list[TableRow | None]]:
+        # shown columns and rows of a result, with None for omitted ones;
+        # rows keep the values of all columns
         assert column_names is None or len(column_names) == result.num_columns, (
             f"Expected {result.num_columns:,} column names"
         )
@@ -206,28 +205,22 @@ class KgManager:
             "At least one column must be shown"
         )
 
+        column_names = column_names or result.variables
+        columns: list[TableColumn | None] = [
+            TableColumn(var, name) for var, name in zip(result.variables, column_names)
+        ]
         left_end = min(show_left_columns, result.num_columns)
         right_start = result.num_columns - show_right_columns
         if right_start > left_end:
-            column_indices = list(range(left_end))
-            column_indices.append(-1)
-            column_indices.extend(range(right_start, result.num_columns))
-        else:
-            column_indices = list(range(result.num_columns))
+            columns = columns[:left_end] + [None] + columns[right_start:]
 
-        def table_row(row: SelectRow) -> list[TableValue | None]:
-            values = []
-            for c in column_indices:
-                val = row.get(result.variables[c]) if c >= 0 else None
-                values.append(self.table_value(val) if val is not None else None)
-            return values
+        def table_row(row: SelectRow) -> TableRow:
+            return {var: self.table_value(val) for var, val in row.items()}
 
-        column_names = column_names or result.variables
-        header = [column_names[c] if c >= 0 else None for c in column_indices]
         top_end = min(show_top_rows, result.num_rows)
         bottom_start = max(result.num_rows - show_bottom_rows, top_end)
 
-        rows: list[list[TableValue | None] | None] = [
+        rows: list[TableRow | None] = [
             table_row(row) for row in result.rows(end=top_end)
         ]
 
@@ -237,7 +230,7 @@ class KgManager:
         rows.extend(
             table_row(row) for row in result.rows(bottom_start, result.num_rows)
         )
-        return header, rows
+        return columns, rows
 
     def format_table_value(
         self,
@@ -263,25 +256,27 @@ class KgManager:
 
     def format_sparql_table(
         self,
-        header: list[str | None],
-        rows: list[list[TableValue | None] | None],
+        columns: list[TableColumn | None],
+        rows: list[TableRow | None],
         clip_literals: bool = True,
     ) -> str:
         # generate a nicely formatted table, with ... for omitted rows and
         # columns
-        def format_row(row: list[TableValue | None] | None) -> list[str]:
+        def format_row(row: TableRow | None) -> list[str]:
             if row is None:
-                return ["..."] * len(header)
+                return ["..."] * len(columns)
 
             return [
-                "..." if name is None else self.format_table_value(value, clip_literals)
-                for name, value in zip(header, row)
+                "..."
+                if col is None
+                else self.format_table_value(row.get(col.variable), clip_literals)
+                for col in columns
             ]
 
         return generate_table(
             [format_row(row) for row in rows],
-            [[name if name is not None else "..." for name in header]],
-            alignments=["left"] * len(header),
+            [[col.name if col is not None else "..." for col in columns]],
+            alignments=["left"] * len(columns),
             max_column_width=sys.maxsize,
         )
 
@@ -901,21 +896,11 @@ class KgManager:
         )
 
     def format_selections(self, selections: list[Selection]) -> str:
-        rename_obj_type = [
-            (obj_type, obj_type.index_name) for obj_type in iri_indices()
-        ] + [(ObjType.UNINDEXED, "other (non-indexed) items")]
+        # import here to avoid a circular import
+        from grasp.functions import format_selection_groups
 
-        grouped = group_selections(selections)
-
-        return "\n\n".join(
-            f"Using {name}:\n"
-            + format_list(
-                alt.get_selection_string(include_variants=variants)
-                for alt, variants in grouped[obj_type]
-            )
-            for obj_type, name in rename_obj_type
-            if obj_type in grouped
-        )
+        formatted, _ = format_selection_groups(selections)
+        return formatted
 
 
 DEFAULT_DESCRIPTIONS = {

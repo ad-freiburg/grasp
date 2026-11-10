@@ -2,13 +2,14 @@ import math
 import random
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SerializeAsAny
 
 from grasp.configs import GraspConfig
 from grasp.functions import (
-    TableResult,
+    SelectionGroup,
     find_manager,
     format_page_suffix,
+    format_selection_groups,
     paginate_results,
     validate_page,
     validate_query,
@@ -36,10 +37,10 @@ class SparqlQaSample(Sample):
 class SparqlQaExample(BaseModel):
     question: str
     sparql: str
-    selections: str
-    result: str
-    # the shown part of the execution result if it is a table
-    table: TableResult | None = None
+    # the items of the query per type, e.g. its entities
+    selections: list[SelectionGroup]
+    # the execution result as shown to the model
+    result: SerializeAsAny[ToolCallResult]
 
 
 class SparqlQaExamplesResult(ToolCallResult):
@@ -219,17 +220,21 @@ def format_examples(
             known,
         )
 
+        formatted_selections, selection_groups = format_selection_groups(
+            selections,
+            manager,
+            result.sparql,
+        )
         exs.append(
             f"Example {i + 1}:\n{example.question}\n\n"
-            + format_sparql_result(manager, result, selections)
+            + format_sparql_result(manager, result, selections, formatted_selections)
         )
         items.append(
             SparqlQaExample(
                 question=example.question,
                 sparql=result.sparql,
-                selections=manager.format_selections(selections),
-                result=result.formatted,
-                table=result.table,
+                selections=selection_groups,
+                result=result.tool_result(),
             )
         )
 

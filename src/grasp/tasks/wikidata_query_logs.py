@@ -208,7 +208,7 @@ def output(
         last = messages[-1]
         assert isinstance(last.content, Response)
         tool_call = last.content.tool_calls[0]
-        output: dict[str, str] = {"formatted": "No output", **tool_call.args}
+        output: dict[str, Any] = {"formatted": "No output", **tool_call.args}
         if tool_call.name == "answer":
             output["type"] = "answer"
             questions = tool_call.args["questions"]
@@ -222,7 +222,7 @@ def output(
             )
 
             output["sparql_fixed"] = result.sparql
-            output["sparql_result"] = result.formatted
+            output["sparql_result"] = result.tool_result().model_dump()
 
             output["formatted"] += formatted
 
