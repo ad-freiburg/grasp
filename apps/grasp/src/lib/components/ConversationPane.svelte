@@ -10,6 +10,8 @@
   import ToolMessage from './history/ToolMessage.svelte';
   import OutputMessage from './history/OutputMessage.svelte';
   import UnknownMessage from './history/UnknownMessage.svelte';
+  import { provenanceJump } from '../stores.js';
+  import { spanRanges } from '../utils/ranges.js';
 
   export let histories = [];
   export let running = false;
@@ -70,6 +72,65 @@
     // Timeouts will clean themselves up
     recentToolMessages = [];
   });
+
+  const unsubscribeJump = provenanceJump.subscribe((jump) => {
+    if (jump) jumpToToolCall(jump);
+  });
+  onDestroy(unsubscribeJump);
+
+  function findToolCall(id) {
+    for (let h = 0; h < histories.length; h++) {
+      const index = histories[h].findIndex((message) => message?.type === 'tool' && message.id === id);
+      if (index >= 0) return [h, index];
+    }
+    return null;
+  }
+
+  // ref: a tool call of trace provenance, with where the item is in its
+  // arguments and how it appears in its result; prefer: the part to scroll to
+  async function jumpToToolCall({ ref, prefer = 'result' }) {
+    const found = findToolCall(ref.id);
+    if (!found) return;
+    const [h, index] = found;
+    if (!expandedHistories.has(h)) {
+      expandedHistories.add(h);
+      expandedHistories = expandedHistories;
+    }
+    await tick();
+    const element = listEl?.querySelector(`[data-history="${h}"][data-message="${index}"]`);
+    if (!element) return;
+
+    const args = ref.used_args.flatMap((key) => {
+      if (key === 'sparql') {
+        return spanRanges(element.querySelector('[data-arg="sparql"] code'), ref.sparql_spans);
+      }
+      const chip = element.querySelector(`[data-arg="${CSS.escape(key)}"] .arg-chip__value`);
+      if (!chip) return [];
+      const range = document.createRange();
+      range.selectNodeContents(chip);
+      return [range];
+    });
+    // results mark the parts showing an item with their path
+    const resultEl = element.querySelector('[data-part="result"]');
+    const result = (ref.result_paths ?? []).flatMap((path) => {
+      const part = resultEl?.querySelector(`[data-path="${CSS.escape(path)}"]`);
+      if (!part) return [];
+      const range = document.createRange();
+      range.selectNodeContents(part);
+      return [range];
+    });
+
+    const highlights = typeof CSS !== 'undefined' ? CSS.highlights : null;
+    if (highlights) {
+      highlights.delete('provenance');
+      const all = [...args, ...result];
+      if (all.length > 0) highlights.set('provenance', new Highlight(...all));
+    }
+
+    const first = prefer === 'result' ? result[0] ?? args[0] : args[0] ?? result[0];
+    const anchor = first?.startContainer?.parentElement ?? element;
+    anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
 
   function toggleExpanded(historyIndex) {
     if (expandedHistories.has(historyIndex)) {
@@ -340,7 +401,7 @@
         {#if isExpanded}
           {#each history.slice(1) as message, idx (idx)}
             {#if message?.type !== 'output'}
-              <li class="history-item">
+              <li class="history-item" data-history={historyIndex} data-message={idx + 1}>
                 {#if message?.type === 'system'}
                   <SystemMessage {message} />
                 {:else if message?.type === 'feedback'}

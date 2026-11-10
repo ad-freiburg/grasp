@@ -86,6 +86,9 @@ class ToolCall(BaseModel):
     error: str | None = None
     # wall-clock time in seconds spent executing this function call
     elapsed: float | None = None
+    # knowledge graph items this function call added to the known items,
+    # e.g. for tracing where the items of a final query come from
+    new_known: list[str] | None = None
     # step and time limits after this call, if shown to the model
     limits: LimitUsage | None = None
 

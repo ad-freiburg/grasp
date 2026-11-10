@@ -88,7 +88,7 @@
         </span>
       {/if}
       {#each argChips as chip (chip.key)}
-        <span class="arg-chip" title={`${chip.key}: ${chip.value}`}>
+        <span class="arg-chip" title={`${chip.key}: ${chip.value}`} data-arg={chip.key}>
           <span class="arg-chip__key">{chip.key}</span>
           <span
             class="arg-chip__value"
@@ -103,10 +103,14 @@
 
   </svelte:fragment>
 
+  <!-- data attributes mark where provenance highlights items -->
   {#if sparql}
-    <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
+    <div data-arg="sparql">
+      <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
+    </div>
   {/if}
 
+  <div data-part="result">
   {#if result?.type === 'search'}
     <SearchResults {result} />
   {:else if result?.type === 'boolean'}
@@ -122,6 +126,7 @@
   {:else if result?.formatted}
     <MarkdownContent content={nestBulletsUnderEnumeration(result.formatted)} />
   {/if}
+  </div>
 
   {#if limitParts.length}
     <footer class="limits" class:limits--reached={limitReached}>

@@ -5,6 +5,7 @@
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
   import ExecutionResult from './ExecutionResult.svelte';
+  import ProvenancePanel from './ProvenancePanel.svelte';
   import { highlightQuerySpans } from '../../utils/ranges.js';
   import SelectionGroups from './SelectionGroups.svelte';
   import { prettyJson } from '../../utils/formatters.js';
@@ -50,6 +51,8 @@ const selectionGroups = Array.isArray(output?.selections) && output.selections.l
   : null;
 const selections = typeof output?.selections === 'string' ? output.selections : null;
 const result = output?.result ?? null;
+// where the items of the query come from in the trace
+const trace = output?.provenance?.trace ?? null;
 const endpoint = output?.endpoint ?? null;
 const ceaFormatted = task === 'cea' ? output?.formatted ?? '' : '';
 const ceaInputTable =
@@ -343,12 +346,16 @@ function deriveQleverLink() {
 
     <!-- contents only, the element finds the query for highlighting items -->
     <div class="query" bind:this={queryEl}>
-    {#if result}
-      <ExecutionResult {result} />
-    {/if}
+    {#if trace && sparql}
+      <ProvenancePanel {sparql} {qleverLink} {result} {trace} />
+    {:else}
+      {#if result}
+        <ExecutionResult {result} />
+      {/if}
 
-    {#if sparql}
-      <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
+      {#if sparql}
+        <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
+      {/if}
     {/if}
     </div>
 

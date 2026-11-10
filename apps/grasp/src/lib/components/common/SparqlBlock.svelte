@@ -1,7 +1,37 @@
 <script>
+  import { createEventDispatcher } from 'svelte';
+
   export let code = '';
   export let qleverLink = null;
   export let label = '';
+  // optional marks in the code, each { start, end, item } with character
+  // offsets and an item whose status is used as css class suffix
+  export let marks = null;
+
+  const dispatch = createEventDispatcher();
+
+  function splitCode(code, marks) {
+    const sorted = [...(marks ?? [])].sort((a, b) => a.start - b.start);
+    const segments = [];
+    let last = 0;
+    for (const { start, end, item } of sorted) {
+      if (start < last) continue;
+      if (start > last) segments.push({ text: code.slice(last, start) });
+      segments.push({ text: code.slice(start, end), item });
+      last = end;
+    }
+    if (last < code.length) segments.push({ text: code.slice(last) });
+    return segments;
+  }
+
+  $: segments = splitCode(code, marks);
+
+  function handleKeydown(event, item) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      dispatch('itemclick', { item, target: event.currentTarget });
+    }
+  }
 </script>
 
 {#if code}
@@ -22,7 +52,16 @@
       </div>
     {/if}
     <div class="sparql-block__code">
-      <pre><code>{code}</code></pre>
+      <!-- no whitespace between the segments, it would show up in the code -->
+      <pre><code>{#each segments as segment}{#if segment.item}<span
+              class={`item item--${segment.item.status}`}
+              role="button"
+              tabindex="0"
+              on:pointerenter={(event) => event.pointerType === 'mouse' && dispatch('itemhover', { item: segment.item, target: event.currentTarget })}
+              on:pointerleave={(event) => event.pointerType === 'mouse' && dispatch('itemleave')}
+              on:click={(event) => dispatch('itemclick', { item: segment.item, target: event.currentTarget })}
+              on:keydown={(event) => handleKeydown(event, segment.item)}
+            >{segment.text}</span>{:else}{segment.text}{/if}{/each}</code></pre>
     </div>
   </div>
 {/if}
@@ -71,6 +110,37 @@
       monospace;
     font-size: 0.85rem;
     white-space: pre;
+  }
+
+  .item {
+    cursor: pointer;
+    border-radius: 3px;
+    border-bottom: 2px solid transparent;
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    outline: 1px solid rgba(255, 255, 255, 0.6);
+  }
+
+  .item--retrieved {
+    background: rgba(0, 166, 135, 0.22);
+    border-bottom-color: rgb(0, 190, 155);
+  }
+
+  .item--verified {
+    background: rgba(230, 200, 40, 0.2);
+    border-bottom-color: rgb(230, 200, 40);
+  }
+
+  .item--instructed {
+    background: rgba(110, 140, 235, 0.25);
+    border-bottom-color: rgb(110, 140, 235);
+  }
+
+  .item--unverified {
+    background: rgba(235, 70, 70, 0.25);
+    border-bottom-color: rgb(245, 90, 90);
   }
 
   .sparql-block__actions {

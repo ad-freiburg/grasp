@@ -69,6 +69,12 @@ a:focus {
   min-height: 100vh;
 }
 
+/* text of a tool call result that trace provenance jumped to */
+::highlight(provenance) {
+  background-color: rgba(255, 213, 0, 0.6);
+  color: inherit;
+}
+
 /* lists of structured results (search results, query items, examples):
    rows divided by hairlines instead of bullets, a muted rank column for
    ranked lists, and a small label instead of a heading sentence */
