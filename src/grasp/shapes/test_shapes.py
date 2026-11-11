@@ -4,7 +4,9 @@ from unittest.mock import Mock
 from grasp.utils import FunctionCallException
 from grasp.build.shapes import (
     ClassMaps,
+    build_per_class_incoming_source_query,
     build_per_class_property_frequency_query,
+    build_per_class_range_profile_query,
     build_schema_class_query,
     build_total_entities_query,
     ClassProfile,
@@ -1072,6 +1074,24 @@ class TestMembersBlock:
         sample = InstanceSample(total=50, limit=100, windows=10)
         block = members_block(self.PATTERN, self.CLASS, sample=sample)
         assert "LIMIT" not in block
+
+    def test_unsampled_members_are_distinct(self):
+        # a pattern over subclasses matches an instance once per path
+        pattern = "?instance a ?type . ?type rdfs:subClassOf* {CLASS} ."
+        for sample in [None, InstanceSample(total=50, limit=100, windows=10)]:
+            block = members_block(pattern, self.CLASS, sample=sample)
+            assert block.count("SELECT DISTINCT ?instance") == 1
+
+        block = members_block(pattern, self.CLASS, "?o")
+        assert block.count("SELECT DISTINCT ?o") == 1
+        assert "?o a ?type" in block
+
+    def test_class_buckets_count_distinct_rows(self):
+        pattern = "?instance a ?type . ?type rdfs:subClassOf* {CLASS} ."
+        query = build_per_class_range_profile_query(pattern, self.CLASS)
+        assert "SELECT DISTINCT ?instance ?p ?o ?targetClass" in query
+        query = build_per_class_incoming_source_query(pattern, self.CLASS)
+        assert "SELECT DISTINCT ?s ?p ?o ?sourceClass" in query
 
     def test_windows_are_ordered_by_default(self):
         sample = InstanceSample(total=1_000, limit=100, windows=10)

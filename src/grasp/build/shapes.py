@@ -71,6 +71,15 @@ def wrap_pattern(pattern: str) -> str:
     return f"  {{\n{inner}\n  }}"
 
 
+# a class pattern with a join or path can match an object more than once per
+# class, so the joined triples are deduplicated before counting; distinct over
+# the whole join instead of the class pattern alone, which would materialize
+# the class relation of the whole graph
+def distinct_rows(where: str, project: str) -> str:
+    inner = "\n".join(f"    {line}" for line in where.splitlines())
+    return f"  {{\n    SELECT DISTINCT {project} WHERE {{\n{inner}\n    }}\n  }}"
+
+
 @dataclass(frozen=True)
 class InstanceSample:
     total: int
@@ -100,12 +109,15 @@ def members_block(
     sample: InstanceSample | None = None,
 ) -> str:
     bound = bind_pattern(pattern, iri_term(class_iri), member_var)
+    inner = "\n".join(f"        {line}" for line in bound.strip().splitlines())
     if sample is None or not sample.size:
-        return wrap_pattern(bound)
+        # distinct because a pattern with a join or path (e.g. via subclasses)
+        # can match an instance more than once, which would multiply the
+        # COUNT(*) of the profile queries
+        return f"  {{\n    SELECT DISTINCT {member_var} WHERE {{\n{inner}\n    }}\n  }}"
 
     # stride >= per_window whenever total > limit, so windows never overlap
     stride = sample.total // sample.windows
-    inner = "\n".join(f"        {line}" for line in bound.strip().splitlines())
     order = f"ORDER BY {member_var} " if sample.ordered else ""
     windows = [
         f"    {{\n"
@@ -159,13 +171,11 @@ def build_per_class_range_profile_query(
     op = wrap_pattern(bind_pattern(pattern, "?targetClass", "?o"))
     # blank-node objects are excluded here so that they are counted exactly once,
     # by ?bnodeCount above, instead of also landing in a class bucket.
+    where = f"{ip}\n  ?instance ?p ?o .\n  FILTER(!isBlank(?o))\n{op}"
     return (
         f"SELECT ?p ?targetClass (COUNT(*) AS ?count)\n"
         f"WHERE {{\n"
-        f"{ip}\n"
-        f"  ?instance ?p ?o .\n"
-        f"  FILTER(!isBlank(?o))\n"
-        f"{op}\n"
+        f"{distinct_rows(where, '?instance ?p ?o ?targetClass')}\n"
         f"}}\n"
         f"GROUP BY ?p ?targetClass\n"
         f"ORDER BY ?p DESC(?count)"
@@ -193,13 +203,11 @@ def build_per_class_incoming_source_query(
 ) -> str:
     op = members_block(pattern, class_iri, "?o", sample)
     sp = wrap_pattern(bind_pattern(pattern, "?sourceClass", "?s"))
+    where = f"{op}\n  ?s ?p ?o .\n  FILTER(!isBlank(?s))\n{sp}"
     return (
         f"SELECT ?p ?sourceClass (COUNT(*) AS ?count)\n"
         f"WHERE {{\n"
-        f"{op}\n"
-        f"  ?s ?p ?o .\n"
-        f"  FILTER(!isBlank(?s))\n"
-        f"{sp}\n"
+        f"{distinct_rows(where, '?s ?p ?o ?sourceClass')}\n"
         f"}}\n"
         f"GROUP BY ?p ?sourceClass\n"
         f"ORDER BY ?p DESC(?count)"
