@@ -9,6 +9,8 @@ class KgInfo(BaseModel):
     endpoint: str | None = None
     headers: dict[str, str] | None = None
     params: dict[str, str] | None = None
+    # SPARQL server behind the endpoint
+    backend: Literal["qlever", "other"] = "qlever"
 
 
 class IndexConfig(BaseModel):
