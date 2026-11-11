@@ -71,10 +71,8 @@ def wrap_pattern(pattern: str) -> str:
     return f"  {{\n{inner}\n  }}"
 
 
-# a class pattern with a join or path can match an object more than once per
-# class, so the joined triples are deduplicated before counting; distinct over
-# the whole join instead of the class pattern alone, which would materialize
-# the class relation of the whole graph
+# class patterns with joins can repeat rows; distinct over the whole join, not
+# the class pattern alone, which would materialize it for the whole graph
 def distinct_rows(where: str, project: str) -> str:
     inner = "\n".join(f"    {line}" for line in where.splitlines())
     return f"  {{\n    SELECT DISTINCT {project} WHERE {{\n{inner}\n    }}\n  }}"
@@ -111,9 +109,7 @@ def members_block(
     bound = bind_pattern(pattern, iri_term(class_iri), member_var)
     inner = "\n".join(f"        {line}" for line in bound.strip().splitlines())
     if sample is None or not sample.size:
-        # distinct because a pattern with a join or path (e.g. via subclasses)
-        # can match an instance more than once, which would multiply the
-        # COUNT(*) of the profile queries
+        # patterns with joins can match an instance more than once
         return f"  {{\n    SELECT DISTINCT {member_var} WHERE {{\n{inner}\n    }}\n  }}"
 
     # stride >= per_window whenever total > limit, so windows never overlap
