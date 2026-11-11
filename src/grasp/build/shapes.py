@@ -71,8 +71,7 @@ def wrap_pattern(pattern: str) -> str:
     return f"  {{\n{inner}\n  }}"
 
 
-# class patterns with joins can repeat rows; distinct over the whole join, not
-# the class pattern alone, which would materialize it for the whole graph
+# count each triple once per class, even if the class pattern matches its object twice
 def distinct_rows(where: str, project: str) -> str:
     inner = "\n".join(f"    {line}" for line in where.splitlines())
     return f"  {{\n    SELECT DISTINCT {project} WHERE {{\n{inner}\n    }}\n  }}"
