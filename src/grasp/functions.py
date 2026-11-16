@@ -25,7 +25,7 @@ from grasp.sparql.types import (
     SelectResult,
     SelectRow,
     iri_indices,
-    TableCell,
+    TableValue,
 )
 from grasp.sparql.utils import (
     READ_TIMEOUT,
@@ -1201,9 +1201,10 @@ def update_known_from_selections(
 class TableResult(ToolCallResult):
     type: str = "table"
     summary: str
-    # the shown part of the table, with ... for omitted rows and columns
-    header: list[str]
-    rows: list[list[TableCell]]
+    # the shown part of the table, None for omitted columns and rows and for
+    # unbound values
+    header: list[str | None]
+    rows: list[list[TableValue | None] | None]
 
 
 @dataclass
@@ -1213,6 +1214,55 @@ class ExecutionResult:
     result: SelectResult | AskResult | None = None
     # the shown part of a select result with at least one row
     table: TableResult | None = None
+
+
+def sparql_result_view(
+    manager: KgManager,
+    result: SelectResult | AskResult,
+    show_top_rows: int = 5,
+    show_bottom_rows: int = 5,
+    show_left_columns: int = 5,
+    show_right_columns: int = 5,
+    column_names: list[str] | None = None,
+    clip_literals: bool = True,
+    time: float | None = None,
+    summary: str | None = None,
+) -> ToolCallResult:
+    # the part of a result shown to the model: a table for a select result
+    # with rows, only the formatted string otherwise; summary replaces the
+    # default one about the result size
+    if isinstance(result, AskResult):
+        tmf = f" in {time:.2f}s" if time is not None else ""
+        return ToolCallResult(formatted=f"Got result{tmf}:\n{result.boolean}")
+
+    if summary is None:
+        summary = manager.format_sparql_result_summary(
+            result,
+            show_top_rows,
+            show_bottom_rows,
+            show_left_columns,
+            show_right_columns,
+            time,
+        )
+
+    if result.num_rows == 0:
+        return ToolCallResult(formatted=summary)
+
+    header, rows = manager.sparql_result_table(
+        result,
+        show_top_rows,
+        show_bottom_rows,
+        show_left_columns,
+        show_right_columns,
+        column_names,
+    )
+    table = manager.format_sparql_table(header, rows, clip_literals)
+    return TableResult(
+        formatted=f"{summary}:\n{table}",
+        summary=summary,
+        header=header,
+        rows=rows,
+    )
 
 
 def execute_sparql(
@@ -1267,7 +1317,8 @@ def execute_sparql(
 
         update_known_from_index_iris(known, row_iris(rows), manager)
 
-    formatted = manager.format_sparql_result(
+    view = sparql_result_view(
+        manager,
         result,
         half_rows,
         half_rows,
@@ -1275,31 +1326,8 @@ def execute_sparql(
         half_columns,
         time=diff,
     )
-    if not isinstance(result, SelectResult) or result.num_rows == 0:
-        return ExecutionResult(sparql, formatted, result)
-
-    header, rows = manager.sparql_result_table(
-        result,
-        half_rows,
-        half_rows,
-        half_columns,
-        half_columns,
-    )
-    summary = manager.format_sparql_result_summary(
-        result,
-        half_rows,
-        half_rows,
-        half_columns,
-        half_columns,
-        time=diff,
-    )
-    table = TableResult(
-        formatted=formatted,
-        summary=summary,
-        header=header,
-        rows=rows,
-    )
-    return ExecutionResult(sparql, formatted, result, table)
+    table = view if isinstance(view, TableResult) else None
+    return ExecutionResult(sparql, view.formatted, result, table)
 
 
 def parse_iri_or_literal(
@@ -1352,7 +1380,7 @@ def list_triples(
     known: set[str],
     request_timeout: float | tuple[float, float] | None = None,
     read_timeout: float | None = None,
-) -> str | TableResult:
+) -> str | ToolCallResult:
     validate_page(page)
 
     manager, _ = find_manager(managers, kg)
@@ -1409,7 +1437,8 @@ SELECT ?s ?p ?o WHERE {{
     if not result.data:
         return f"No triples ({suffix})"
 
-    header, rows = manager.sparql_result_table(
+    return sparql_result_view(
+        manager,
         result,
         show_top_rows=k,
         show_bottom_rows=0,
@@ -1418,13 +1447,7 @@ SELECT ?s ?p ?o WHERE {{
         # override column names
         column_names=["subject", "property", "object"],
         clip_literals=not unclipped,
-    )
-    summary = f"Triples ({suffix})"
-    return TableResult(
-        formatted=f"{summary}:\n{manager.format_sparql_table(header, rows)}",
-        summary=summary,
-        header=header,
-        rows=rows,
+        summary=f"Triples ({suffix})",
     )
 
 

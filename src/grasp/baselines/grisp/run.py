@@ -57,6 +57,7 @@ from grasp.baselines.grisp.utils import (
     skeleton_wording_key,
 )
 from grasp.configs import KgConfig
+from grasp.functions import sparql_result_view
 from grasp.manager import KgManager
 from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, Selection, SelectResult
@@ -695,7 +696,8 @@ def select_iris(
             # formatting is log-only, a failure must not make a result look empty
             if result is not None:
                 try:
-                    logger.debug(f"Result:\n{manager.format_sparql_result(result)}")
+                    view = sparql_result_view(manager, result)
+                    logger.debug(f"Result:\n{view.formatted}")
                 except Exception as e:
                     logger.warning(f"Error formatting final SPARQL result:\n{e}")
 

@@ -39,13 +39,14 @@ from grasp.shapes import Shapes, load_shapes
 from grasp.sparql.types import (
     Alternative,
     AskResult,
+    Binding,
     ObjType,
     Position,
     Selection,
     SelectResult,
     SelectRow,
     STANDARD_INDEX_NAMES,
-    TableCell,
+    TableValue,
     group_selections,
     iri_indices,
 )
@@ -179,6 +180,13 @@ class KgManager:
             self.backend,
         )
 
+    def table_value(self, binding: Binding) -> TableValue:
+        value = TableValue(binding.typ, binding.value, binding.datatype, binding.lang)
+        if binding.typ == "uri":
+            value.short_identifier = self.format_iri(binding.value)
+            value.label = self.get_iri_label(binding.value)
+        return value
+
     def sparql_result_table(
         self,
         result: SelectResult,
@@ -187,10 +195,9 @@ class KgManager:
         show_left_columns: int = 5,
         show_right_columns: int = 5,
         column_names: list[str] | None = None,
-        clip_literals: bool = True,
-    ) -> tuple[list[str], list[list[TableCell]]]:
-        # header and rows of the shown part of a result, with ... for
-        # omitted rows and columns
+    ) -> tuple[list[str | None], list[list[TableValue | None] | None]]:
+        # header and rows of the shown part of a result, None for omitted
+        # columns and rows and for unbound values
         assert column_names is None or len(column_names) == result.num_columns, (
             f"Expected {result.num_columns:,} column names"
         )
@@ -208,69 +215,72 @@ class KgManager:
         else:
             column_indices = list(range(result.num_columns))
 
-        def format_row(row: SelectRow) -> list[TableCell]:
-            formatted_row = []
+        def table_row(row: SelectRow) -> list[TableValue | None]:
+            values = []
             for c in column_indices:
-                if c < 0:
-                    formatted_row.append(TableCell("..."))
-                    continue
-
-                var = result.variables[c]
-                val = row.get(var, None)
-                if val is None:
-                    formatted_row.append(TableCell(""))
-                    continue
-
-                if val.typ == "bnode":
-                    formatted_row.append(TableCell(val.identifier()))
-
-                elif val.typ == "literal":
-                    if clip_literals:
-                        # replace to modify value
-                        # without messing up original result
-                        val = replace(val, value=clip(val.value))
-
-                    formatted_row.append(
-                        TableCell(self.format_literal(val.identifier()))
-                    )
-
-                else:
-                    assert val.typ == "uri"
-                    identifier = val.identifier()
-                    formatted = self.format_iri(identifier)
-
-                    label = self.get_iri_label(identifier)
-                    if label is not None:
-                        formatted = f"{clip(label)} ({formatted})"
-
-                    formatted_row.append(TableCell(formatted, identifier))
-
-            return formatted_row
+                val = row.get(result.variables[c]) if c >= 0 else None
+                values.append(self.table_value(val) if val is not None else None)
+            return values
 
         column_names = column_names or result.variables
-        header = [column_names[c] if c >= 0 else "..." for c in column_indices]
+        header = [column_names[c] if c >= 0 else None for c in column_indices]
         top_end = min(show_top_rows, result.num_rows)
         bottom_start = max(result.num_rows - show_bottom_rows, top_end)
 
-        data = [format_row(row) for row in result.rows(end=top_end)]
+        rows: list[list[TableValue | None] | None] = [
+            table_row(row) for row in result.rows(end=top_end)
+        ]
 
         if bottom_start > top_end:
-            data.append([TableCell("...")] * len(header))
+            rows.append(None)
 
-        data.extend(
-            format_row(row) for row in result.rows(bottom_start, result.num_rows)
+        rows.extend(
+            table_row(row) for row in result.rows(bottom_start, result.num_rows)
         )
-        return header, data
+        return header, rows
+
+    def format_table_value(
+        self,
+        value: TableValue | None,
+        clip_literals: bool = True,
+    ) -> str:
+        if value is None:
+            return ""
+
+        binding = value.binding()
+        if value.type == "uri":
+            short = value.short_identifier or self.format_iri(value.value)
+            if value.label is None:
+                return short
+            return f"{clip(value.label)} ({short})"
+
+        elif value.type == "literal":
+            if clip_literals:
+                binding = replace(binding, value=clip(binding.value))
+            return self.format_literal(binding.identifier())
+
+        return binding.identifier()
 
     def format_sparql_table(
         self,
-        header: list[str],
-        data: list[list[TableCell]],
+        header: list[str | None],
+        rows: list[list[TableValue | None] | None],
+        clip_literals: bool = True,
     ) -> str:
-        # generate a nicely formatted table
+        # generate a nicely formatted table, with ... for omitted rows and
+        # columns
+        def format_row(row: list[TableValue | None] | None) -> list[str]:
+            if row is None:
+                return ["..."] * len(header)
+
+            return [
+                "..." if name is None else self.format_table_value(value, clip_literals)
+                for name, value in zip(header, row)
+            ]
+
         return generate_table(
-            [[cell.value for cell in row] for row in data],
-            [header],
+            [format_row(row) for row in rows],
+            [[name if name is not None else "..." for name in header]],
             alignments=["left"] * len(header),
             max_column_width=sys.maxsize,
         )
@@ -316,60 +326,10 @@ class KgManager:
 
             showing.append(f"the {' and '.join(show_rows)} rows")
 
-        if showing:
+        if showing and result.num_rows:
             formatted += ", showing " + " and ".join(showing) + " below"
 
         return formatted
-
-    def format_sparql_result(
-        self,
-        result: SelectResult | AskResult,
-        show_top_rows: int = 5,
-        show_bottom_rows: int = 5,
-        show_left_columns: int = 5,
-        show_right_columns: int = 5,
-        column_names: list[str] | None = None,
-        clip_literals: bool = True,
-        table_only: bool = False,
-        time: float | None = None,
-    ) -> str:
-        tmf = ""
-        if time is not None:
-            tmf = f" in {time:.2f}s"
-
-        # run sparql against endpoint, format result as string
-        if isinstance(result, AskResult):
-            return f"Got result{tmf}:\n{result.boolean}"
-
-        if result.num_rows == 0:
-            if table_only:
-                return ""
-
-            return f"Got 0 rows and {result.num_columns:,} columns" + tmf
-
-        header, data = self.sparql_result_table(
-            result,
-            show_top_rows,
-            show_bottom_rows,
-            show_left_columns,
-            show_right_columns,
-            column_names,
-            clip_literals,
-        )
-        table = self.format_sparql_table(header, data)
-
-        if table_only:
-            return table
-
-        summary = self.format_sparql_result_summary(
-            result,
-            show_top_rows,
-            show_bottom_rows,
-            show_left_columns,
-            show_right_columns,
-            time,
-        )
-        return f"{summary}:\n{table}"
 
     def find_longest_prefix(self, iri: str) -> tuple[str, str] | None:
         return find_longest_prefix(iri, self.prefixes)
@@ -781,10 +741,9 @@ class KgManager:
                 sparql,
             )
 
-        self.logger.debug(
-            f"Got {len(result):,} candidate identifiers:\n"
-            f"{self.format_sparql_result(result)}"
-        )
+        if self.logger.isEnabledFor(logging.DEBUG):
+            table = self.format_sparql_table(*self.sparql_result_table(result))
+            self.logger.debug(f"Got {len(result):,} candidate identifiers:\n{table}")
 
         return [
             binding.identifier()

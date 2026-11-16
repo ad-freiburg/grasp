@@ -17,6 +17,7 @@ from grasp.apps.shared import (
     render_sparql_result,
 )
 from grasp.configs import KgConfig
+from grasp.functions import sparql_result_view
 from grasp.manager import load_kg_manager
 from grasp.utils import is_invalid_output
 
@@ -464,7 +465,10 @@ def main() -> None:
                                 result = manager.execute_sparql(gt_sparql)
                                 st.session_state[gt_key] = {
                                     "ok": True,
-                                    "formatted": manager.format_sparql_result(result),
+                                    "formatted": sparql_result_view(
+                                        manager,
+                                        result,
+                                    ).formatted,
                                 }
                             except Exception as e:
                                 st.session_state[gt_key] = {

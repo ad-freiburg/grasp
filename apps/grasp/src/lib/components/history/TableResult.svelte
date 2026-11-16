@@ -4,8 +4,17 @@
   $: header = Array.isArray(result?.header) ? result.header : [];
   $: rows = Array.isArray(result?.rows) ? result.rows : [];
 
-  function cellHref(cell) {
-    return /^https?:\/\//.test(cell?.iri ?? '') ? cell.iri : null;
+  // null columns, rows and values are omitted or unbound
+  function display(value) {
+    if (!value) return { text: '' };
+    if (value.type === 'uri') {
+      const short = value.short_identifier ?? value.value;
+      return {
+        text: value.label ? `${value.label} (${short})` : short,
+        href: /^https?:\/\//.test(value.value) ? value.value : null
+      };
+    }
+    return { text: value.value, tag: value.lang ?? null };
   }
 </script>
 
@@ -17,24 +26,30 @@
     <thead>
       <tr>
         {#each header as column}
-          <th>{column}</th>
+          <th>{column ?? '…'}</th>
         {/each}
       </tr>
     </thead>
     <tbody>
       {#each rows as row}
         <tr>
-          {#each row as cell}
-            <td>
-              {#if cellHref(cell)}
-                <a href={cellHref(cell)} target="_blank" rel="noopener noreferrer"
-                  >{cell.value}</a
-                >
-              {:else}
-                {cell.value}
-              {/if}
-            </td>
-          {/each}
+          {#if row}
+            {#each header as column, index}
+              {@const value = column == null ? null : display(row[index])}
+              <td>
+                {#if !value}
+                  …
+                {:else if value.href}
+                  <a href={value.href} target="_blank" rel="noopener noreferrer">{value.text}</a>
+                {:else}
+                  {value.text}
+                {/if}
+                {#if value?.tag}<span class="tag">{value.tag}</span>{/if}
+              </td>
+            {/each}
+          {:else}
+            <td colspan={header.length}>…</td>
+          {/if}
         </tr>
       {/each}
     </tbody>
@@ -65,6 +80,12 @@
     padding: 6px 8px;
     text-align: left;
     white-space: nowrap;
+  }
+
+  .tag {
+    margin-left: 4px;
+    font-size: 0.8em;
+    color: var(--text-subtle);
   }
 
   a {

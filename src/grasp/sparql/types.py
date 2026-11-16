@@ -150,10 +150,18 @@ SelectRow = dict[str, Binding]
 
 
 @dataclass
-class TableCell:
-    # the value as shown to the model, iri only set for iris
+class TableValue:
+    # a value of a result row; short_identifier and label are only set for
+    # IRIs, label if the IRI has one in an index
+    type: str
     value: str
-    iri: str | None = None
+    datatype: str | None = None
+    lang: str | None = None
+    short_identifier: str | None = None
+    label: str | None = None
+
+    def binding(self) -> Binding:
+        return Binding(self.type, self.value, self.datatype, self.lang)
 
 
 @dataclass
