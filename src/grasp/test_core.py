@@ -152,7 +152,8 @@ def test_show_limits(show: bool):
     _, events = run(max_steps=2, show_limits=show)
     output = events[-1]
     results = [
-        tool_call["result"]
+        # structured results keep the string the model sees in formatted
+        tool_call["result"]["formatted"]
         for message in output["messages"]
         if message["role"] == "assistant"
         for tool_call in message["content"]["tool_calls"]

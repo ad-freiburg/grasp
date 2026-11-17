@@ -92,7 +92,7 @@ def format_output(
 
         for tool_call in assistant.tool_calls:
             call = format_call(tool_call.name, tool_call.args)
-            blocks.append(f"{call}:\n{tool_call.result}")
+            blocks.append(f"{call}:\n{tool_call.result.formatted}")
 
         fmt.append(format_section(f"Step {step}", "\n\n".join(blocks), level))
         step += 1

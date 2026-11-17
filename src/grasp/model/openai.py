@@ -114,7 +114,7 @@ class OpenAICompletionsModel(Model):
                     {
                         "tool_call_id": tool_call.id,
                         "role": "tool",
-                        "content": tool_call.result,
+                        "content": tool_call.result.formatted,
                     }
                 )
 
@@ -312,7 +312,7 @@ class OpenAIResponsesModel(Model):
                     {
                         "type": "function_call_output",
                         "call_id": tool_call.id,
-                        "output": tool_call.result,
+                        "output": tool_call.result.formatted,
                     }
                 )
 

@@ -3,7 +3,7 @@ from typing import Any
 
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
-from grasp.model import Message
+from grasp.model import Message, ToolCallResult
 from grasp.examples import Sample
 
 
@@ -54,7 +54,7 @@ class GraspTask(ABC):
         fn_args: dict,
         known: set[str],
         example_indices: dict | None,
-    ) -> str: ...
+    ) -> str | ToolCallResult: ...
 
     @abstractmethod
     def done(self, fn_name: str) -> bool: ...

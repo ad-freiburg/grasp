@@ -11,7 +11,9 @@ from grasp.manager import KgManager
 from grasp.model import Message
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.entities import (
+    AnnotationsResult,
     Entity,
+    annotated_entities,
     annotation_feedback_instructions,
     annotation_feedback_system_message,
     format_annotated_entities,
@@ -23,6 +25,20 @@ from grasp.utils import FunctionCallException
 class CellAnnotation(Entity):
     row: int
     column: int
+
+
+class CeaCell(BaseModel):
+    value: str
+    entity: str | None = None
+    identifier: str | None = None
+
+
+class CeaAnnotationsResult(AnnotationsResult):
+    type: str = "cea_annotations"
+    header: list[str]
+    # the shown rows with their row indices
+    rows: list[int]
+    cells: list[list[CeaCell]]
 
 
 class Table(BaseModel):
@@ -159,6 +175,33 @@ class AnnotationState:
         for r in range(self.table.height):
             yield [self.get(r, c) for c in range(self.table.width)]
 
+    def cells(
+        self,
+        only_annotation_window: bool = False,
+    ) -> tuple[list[int], list[list[CeaCell]]]:
+        # If only_annotation_window is true, only the rows to annotate are
+        # returned (with their original row indices).
+        rows = []
+        cells = []
+        for i, (row, annots) in enumerate(zip(self.table.data, self.iter())):
+            if only_annotation_window and self.rows is not None and i not in self.rows:
+                continue
+
+            rows.append(i)
+            cells.append(
+                [
+                    CeaCell(value=col)
+                    if annot is None
+                    else CeaCell(
+                        value=col,
+                        entity=annot.entity,
+                        identifier=annot.identifier,
+                    )
+                    for col, annot in zip(row, annots)
+                ]
+            )
+        return rows, cells
+
     def format(
         self,
         only_annotation_window: bool = False,
@@ -167,14 +210,14 @@ class AnnotationState:
         # If only_annotation_window is true, only the rows to annotate are shown
         # (with their original row indices). If list_entities is true, the used
         # entities are listed at the end.
+        rows, cells = self.cells(only_annotation_window)
         data = [
             [str(i)]
             + [
-                col + (f" ({annot.entity})" if annot is not None else "")
-                for col, annot in zip(row, annots)
+                cell.value + (f" ({cell.entity})" if cell.entity is not None else "")
+                for cell in row
             ]
-            for i, (row, annots) in enumerate(zip(self.table.data, self.iter()))
-            if not only_annotation_window or self.rows is None or i in self.rows
+            for i, row in zip(rows, cells)
         ]
         header = ["Row"] + [
             f"Column {i}: {name}" for i, name in enumerate(self.table.header)
@@ -302,7 +345,7 @@ def annotate(
     known: set[str],
     know_before_annotate: bool = True,
     show_state_after_annotation: bool = False,
-) -> str:
+) -> str | CeaAnnotationsResult:
     manager, _ = find_manager(managers, kg)
 
     try:
@@ -319,14 +362,37 @@ def annotate(
             f"from {current.entity} to {annotation.entity}"
         )
     if show_state_after_annotation:
-        result += format_state_after_annotation(state)
+        return annotations_result(state, result)
     return result
 
 
-def format_state_after_annotation(state: AnnotationState) -> str:
-    return (
-        "\n\nThe current annotation state of the rows to annotate is the following:\n"
-        f"{state.format(only_annotation_window=True, list_entities=False)}"
+def annotations_result(
+    state: AnnotationState,
+    message: str = "",
+    list_entities: bool = False,
+) -> CeaAnnotationsResult:
+    # the rows to annotate, after a message if given
+    formatted = message
+    if message:
+        formatted += (
+            "\n\nThe current annotation state of the rows to annotate "
+            "is the following:\n"
+        )
+    formatted += state.format(only_annotation_window=True, list_entities=False)
+
+    entities = []
+    if list_entities:
+        formatted_entities, entities = annotated_entities(state.annotations.values())
+        formatted += formatted_entities
+
+    rows, cells = state.cells(only_annotation_window=True)
+    return CeaAnnotationsResult(
+        formatted=formatted,
+        message=message,
+        entities=entities,
+        header=state.table.header,
+        rows=rows,
+        cells=cells,
     )
 
 
@@ -335,7 +401,7 @@ def delete_annotation(
     column: int,
     state: AnnotationState,
     show_state_after_annotation: bool = False,
-) -> str:
+) -> str | CeaAnnotationsResult:
     try:
         current = state.annotate(row, column, None)
     except ValueError as e:
@@ -346,7 +412,7 @@ def delete_annotation(
 
     result = f"Deleted annotation {current.entity} from cell ({row}, {column})"
     if show_state_after_annotation:
-        result += format_state_after_annotation(state)
+        return annotations_result(state, result)
     return result
 
 
@@ -403,7 +469,7 @@ def call_function(
     known: set[str],
     state: AnnotationState | None = None,
     example_indices: dict | None = None,
-) -> str:
+) -> str | CeaAnnotationsResult:
     assert isinstance(state, AnnotationState), (
         "Annotations must be provided as state for CEA task"
     )
@@ -435,7 +501,7 @@ def call_function(
         )
 
     elif fn_name == "show_annotations":
-        return state.format(only_annotation_window=True)
+        return annotations_result(state, list_entities=True)
 
     elif fn_name == "stop":
         return "Stopping"
@@ -462,7 +528,7 @@ class CeaTask(GraspTask, FeedbackTask):
         fn_args: dict,
         known: set[str],
         example_indices: dict | None,
-    ) -> str:
+    ) -> str | CeaAnnotationsResult:
         return call_function(
             self.config,
             self.managers,

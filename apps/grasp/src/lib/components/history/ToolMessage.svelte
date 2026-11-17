@@ -2,9 +2,23 @@
   import MessageCard from './MessageCard.svelte';
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
-  import { flattenFunctionArgs } from '../../utils/formatters.js';
+  import AnnotationsResult from './AnnotationsResult.svelte';
+  import ExamplesResult from './ExamplesResult.svelte';
+  import SearchResults from './SearchResults.svelte';
+  import ShapesResult from './ShapesResult.svelte';
+  import TableResult from './TableResult.svelte';
+  import {
+    flattenFunctionArgs,
+    nestBulletsUnderEnumeration
+  } from '../../utils/formatters.js';
 
   export let message;
+
+  // old outputs and shares have plain string results
+  const result =
+    typeof message?.result === 'string'
+      ? { type: 'text', formatted: message.result }
+      : message?.result ?? null;
 
   const flattened = flattenFunctionArgs(message?.args ?? {});
   const argChips = [];
@@ -77,8 +91,18 @@
     <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
   {/if}
 
-  {#if message?.result}
-    <MarkdownContent content={message.result} />
+  {#if result?.type === 'search'}
+    <SearchResults {result} />
+  {:else if result?.type === 'table'}
+    <TableResult {result} />
+  {:else if result?.type === 'sparql_qa_examples'}
+    <ExamplesResult {result} />
+  {:else if result?.type === 'shapes'}
+    <ShapesResult {result} />
+  {:else if result?.type === 'cea_annotations' || result?.type === 'el_annotations'}
+    <AnnotationsResult {result} />
+  {:else if result?.formatted}
+    <MarkdownContent content={nestBulletsUnderEnumeration(result.formatted)} />
   {/if}
 </MessageCard>
 

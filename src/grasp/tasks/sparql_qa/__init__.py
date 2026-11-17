@@ -7,7 +7,7 @@ from pydantic import BaseModel, ValidationError
 from grasp.configs import GraspConfig
 from grasp.functions import check_known, find_manager
 from grasp.manager import KgManager, format_kgs
-from grasp.model import Message, ToolCall
+from grasp.model import Message, ToolCall, ToolCallResult
 from grasp.model.base import ResponseMessage
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (
@@ -509,7 +509,7 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         fn_args: dict,
         known: set[str],
         example_indices: dict | None,
-    ) -> str:
+    ) -> str | ToolCallResult:
         if fn_name != "answer" and fn_name != "cancel":
             return call_example_function(
                 self.config,

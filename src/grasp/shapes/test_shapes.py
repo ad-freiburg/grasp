@@ -1009,7 +1009,9 @@ class TestGetClassShape:
         query: str | None = None,
     ) -> str:
         shapes = shapes or Shapes(instance_pattern="?instance a {CLASS} .")
-        return get_class_shape(manager, shapes, iri, "out", query, 1, 10)
+        result = get_class_shape(manager, shapes, iri, "out", query, 1, 10)
+        # the model sees the formatted string of a structured result
+        return result if isinstance(result, str) else result.formatted
 
     def test_non_iri_argument_is_rejected_before_building_sparql(self) -> None:
         # a bare label parses as a literal, and wrapping it in <> would only

@@ -218,7 +218,7 @@ def format_tool_call(tool_call: ToolCall) -> str:
     fn_args_str = colored(json.dumps(tool_call.args, indent=2), "yellow")
     content = f"{name}({fn_args_str})"
     if tool_call.result is not None:
-        content += f":\n{tool_call.result}"
+        content += f":\n{tool_call.result.formatted}"
     return content
 
 
@@ -382,7 +382,8 @@ def is_invalid_output(
                 continue
 
             if any(
-                is_server_error(tool_call.result, hard_only=True)
+                tool_call.result is not None
+                and is_server_error(tool_call.result.formatted, hard_only=True)
                 for tool_call in msg.content.tool_calls
             ):
                 return True

@@ -122,8 +122,9 @@ def render_messages(output: dict, new_format: bool = True) -> None:
                     for tool_call in message.content.tool_calls:
                         st.markdown(f"**Tool: {tool_call.name}**")
                         st.code(json.dumps(tool_call.args, indent=2), language="json")
-                        st.markdown("**Result:**")
-                        st.markdown(tool_call.result)
+                        if tool_call.result is not None:
+                            st.markdown("**Result:**")
+                            st.markdown(tool_call.result.formatted)
 
                 if i < len(messages) - 1:
                     st.markdown("---")

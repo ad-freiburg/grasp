@@ -1,4 +1,4 @@
-from grasp.model import Message, Response
+from grasp.model import Message, Response, ToolCallResult
 from grasp.tasks.sparql_qa import SparqlQaTask
 from grasp.tasks.sparql_qa.examples import (
     call_function as sparql_qa_example_call_function,
@@ -71,7 +71,7 @@ class GeneralQaTask(SparqlQaTask):
         fn_args: dict,
         known: set[str],
         example_indices: dict | None,
-    ) -> str:
+    ) -> str | ToolCallResult:
         return sparql_qa_example_call_function(
             self.config,
             self.managers,

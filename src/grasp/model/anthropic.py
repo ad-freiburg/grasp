@@ -88,7 +88,7 @@ class AnthropicModel(Model):
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_call.id,
-                        "content": tool_call.result,
+                        "content": tool_call.result.formatted,
                     }
                 )
             if tool_results:

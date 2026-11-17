@@ -2,8 +2,9 @@ from typing import Iterable
 
 from pydantic import BaseModel
 
-from grasp.functions import parse_iri_or_literal
+from grasp.functions import SearchItem, alternative_item, parse_iri_or_literal
 from grasp.manager import KgManager, format_kgs
+from grasp.model import ToolCallResult
 from grasp.sparql.types import Alternative, ObjType
 from grasp.utils import (
     FunctionCallException,
@@ -36,6 +37,13 @@ class Entity(BaseModel):
     @property
     def is_nil(self) -> bool:
         return self.identifier == NIL
+
+
+class AnnotationsResult(ToolCallResult):
+    # message of annotate or delete_annotation, empty for show_annotations
+    message: str = ""
+    # the listed annotated entities, if any
+    entities: list[SearchItem] = []
 
 
 def nil_entity() -> Entity:
@@ -101,7 +109,7 @@ def prepare_annotation(
     return annotation
 
 
-def format_annotated_entities(annotations: Iterable[Entity]) -> str:
+def annotated_entities(annotations: Iterable[Entity]) -> tuple[str, list[SearchItem]]:
     entities: dict[str, Alternative] = {}
     for annot in annotations:
         if annot.is_nil or annot.identifier in entities:
@@ -110,12 +118,21 @@ def format_annotated_entities(annotations: Iterable[Entity]) -> str:
         entities[annot.identifier] = annot.to_alternative()
 
     if not entities:
-        return ""
+        return "", []
 
-    formatted = format_list(
-        alt.get_selection_string() for _, alt in sorted(entities.items())
-    )
-    return f"\n\nAnnotated entities:\n{formatted}"
+    lines = []
+    items = []
+    for _, alt in sorted(entities.items()):
+        line, item = alternative_item(alt)
+        lines.append(line)
+        items.append(item)
+
+    return f"\n\nAnnotated entities:\n{format_list(lines)}", items
+
+
+def format_annotated_entities(annotations: Iterable[Entity]) -> str:
+    formatted, _ = annotated_entities(annotations)
+    return formatted
 
 
 def annotation_feedback_system_message(

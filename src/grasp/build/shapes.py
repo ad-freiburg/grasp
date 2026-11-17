@@ -14,6 +14,9 @@ from grasp.manager.normalizer import Normalizer
 from grasp.shapes import (
     ClassProfile,
     PropertyProfile,
+    ShapePropertyView,
+    ShapeTargetView,
+    ShapeView,
     Target,
     TargetBnode,
     TargetClass,
@@ -444,24 +447,25 @@ def bracketed(items: list[str]) -> str:
     return f"[ {' '.join(items)} ]"
 
 
-def render_target(target: Target, manager: KgManager) -> str:
+def render_target(target: Target, manager: KgManager) -> ShapeTargetView:
     if isinstance(target, TargetLiteral):
-        return target.datatype
+        return ShapeTargetView(value=target.datatype)
     if isinstance(target, TargetBnode):
-        return "BNODE"
+        return ShapeTargetView(value="BNODE")
     if isinstance(target, TargetClass):
-        return resolve_label(
+        value = resolve_label(
             target.iri,
             CLASS_INDICES,
             target.short_iri,
             manager,
             variants=target.variants or None,
         )
-    return "IRI"
+        return ShapeTargetView(value=value, iri=target.iri)
+    return ShapeTargetView(value="IRI")
 
 
 @dataclass
-class ShapeView:
+class ShapeSelection:
     # "out" for the properties of the instances, "in" for those pointing to them
     direction: str
     properties: list[PropertyProfile]
@@ -501,7 +505,7 @@ def select_shape_view(
     direction: str = "out",
     page: int = 1,
     ranking: list[str] | None = None,
-) -> ShapeView:
+) -> ShapeSelection:
     def common(props: list[PropertyProfile]) -> list[PropertyProfile]:
         return [
             p
@@ -522,7 +526,7 @@ def select_shape_view(
         # searching shows all, best matches first
         shown = rank_properties(props, ranking)
 
-    return ShapeView(
+    return ShapeSelection(
         direction=direction,
         properties=shown[(page - 1) * k : page * k],
         page=page,
@@ -544,16 +548,15 @@ def cardinality_tag_for_property(prop: PropertyProfile, total_entities: int) -> 
 DIRECTION_NAMES = {"out": "outgoing", "in": "incoming"}
 
 
-def render_shape(
+def shape_view(
     profile: ClassProfile,
-    view: ShapeView,
+    selection: ShapeSelection,
     manager: KgManager,
     shape_config: ShapeConfig,
-) -> str:
-    header = resolve_label(profile.iri, CLASS_INDICES, profile.short_iri, manager)
-    lines = [f"{header} {{"]
+) -> ShapeView:
+    value = resolve_label(profile.iri, CLASS_INDICES, profile.short_iri, manager)
 
-    def render(prop: PropertyProfile, inverse: bool) -> str:
+    def view(prop: PropertyProfile, inverse: bool) -> ShapePropertyView:
         prop_str = resolve_label(
             prop.iri,
             ["properties"],
@@ -561,47 +564,68 @@ def render_shape(
             manager,
             variants=prop.variants or None,
         )
-        if prop.targets:
-            value_str = bracketed([render_target(t, manager) for t in prop.targets])
-        else:
-            value_str = "IRI"
-
-        if inverse:
-            # no cardinality tag: coverage and values-per-entity are defined over
-            # the focus class' own instances and do not carry over to inverse edges.
-            return f"  ^{prop_str} {value_str} ;"
-
-        tag = cardinality_tag_for_property(prop, profile.share_base)
-        tag_suffix = f" {tag}" if tag else ""
-        return f"  {prop_str} {value_str}{tag_suffix} ;"
-
-    inverse = view.direction == "in"
-    lines.extend(render(prop, inverse) for prop in view.properties)
-
-    name = DIRECTION_NAMES[view.direction]
-    info = []
-    if not view.total and not view.rare:
-        # make the empty case explicit; an empty body on its own is ambiguous
-        info.append(f"no {name} properties found for this class")
-    elif view.total_pages > 1 or view.rare or view.other:
-        info.append(
-            f"page {view.page} of {view.total_pages}, {view.total:,} {name} "
-            + ("property" if view.total == 1 else "properties")
+        # no cardinality tag for inverse edges: coverage and values-per-entity
+        # are defined over the focus class' own instances and do not carry
+        # over to inverse edges.
+        tag = "" if inverse else cardinality_tag_for_property(prop, profile.share_base)
+        return ShapePropertyView(
+            iri=prop.iri,
+            value=prop_str,
+            targets=[render_target(t, manager) for t in prop.targets],
+            inverse=inverse,
+            cardinality=tag,
         )
 
-    if view.rare:
+    inverse = selection.direction == "in"
+    properties = [view(prop, inverse) for prop in selection.properties]
+
+    name = DIRECTION_NAMES[selection.direction]
+    info = []
+    if not selection.total and not selection.rare:
+        # make the empty case explicit; an empty body on its own is ambiguous
+        info.append(f"no {name} properties found for this class")
+    elif selection.total_pages > 1 or selection.rare or selection.other:
+        info.append(
+            f"page {selection.page} of {selection.total_pages}, "
+            f"{selection.total:,} {name} "
+            + ("property" if selection.total == 1 else "properties")
+        )
+
+    if selection.rare:
         share = f"{shape_config.min_property_share:.0%}"
         info.append(
-            f"{view.rare:,} more used by less than {share} of the instances "
+            f"{selection.rare:,} more used by less than {share} of the instances "
             "(pass a query to rank all properties including these)"
         )
 
-    if view.other:
-        other = "in" if view.direction == "out" else "out"
-        info.append(f'{view.other:,} {DIRECTION_NAMES[other]} (direction="{other}")')
+    if selection.other:
+        other = "in" if selection.direction == "out" else "out"
+        info.append(
+            f'{selection.other:,} {DIRECTION_NAMES[other]} (direction="{other}")'
+        )
 
-    if info:
-        lines.append(f"  # {', '.join(info)}")
+    note = f"# {', '.join(info)}" if info else ""
+    return ShapeView(iri=profile.iri, value=value, properties=properties, note=note)
+
+
+def format_shape_view(view: ShapeView) -> str:
+    lines = [f"{view.value} {{"]
+
+    for prop in view.properties:
+        if prop.targets:
+            value_str = bracketed([t.value for t in prop.targets])
+        else:
+            value_str = "IRI"
+
+        if prop.inverse:
+            lines.append(f"  ^{prop.value} {value_str} ;")
+            continue
+
+        tag_suffix = f" {prop.cardinality}" if prop.cardinality else ""
+        lines.append(f"  {prop.value} {value_str}{tag_suffix} ;")
+
+    if view.note:
+        lines.append(f"  {view.note}")
 
     lines.append("}")
 
@@ -617,11 +641,11 @@ def emit_pseudo_shex(
     page: int = 1,
     ranking: list[str] | None = None,
 ) -> str:
-    view = select_shape_view(profile, shape_config, k, direction, page, ranking)
-    return render_shape(profile, view, manager, shape_config)
+    selection = select_shape_view(profile, shape_config, k, direction, page, ranking)
+    return format_shape_view(shape_view(profile, selection, manager, shape_config))
 
 
-def collect_iris(view: ShapeView, manager: KgManager) -> list[str]:
+def collect_iris(view: ShapeSelection, manager: KgManager) -> list[str]:
     iris: list[str] = []
     prop_norm = manager.get_normalizer("properties")
     ent_norm = manager.get_normalizer("entities")

@@ -2,8 +2,11 @@ import math
 import random
 from typing import Any
 
+from pydantic import BaseModel
+
 from grasp.configs import GraspConfig
 from grasp.functions import (
+    TableResult,
     find_manager,
     format_page_suffix,
     paginate_results,
@@ -11,6 +14,7 @@ from grasp.functions import (
     validate_query,
 )
 from grasp.manager import KgManager
+from grasp.model import ToolCallResult
 from grasp.examples import ExampleIndex, Sample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import format_list
@@ -27,6 +31,22 @@ class SparqlQaSample(Sample):
 
     def queries(self) -> list[str]:
         return [self.question] + self.paraphrases
+
+
+class SparqlQaExample(BaseModel):
+    question: str
+    sparql: str
+    selections: str
+    result: str
+    # the shown part of the execution result if it is a table
+    table: TableResult | None = None
+
+
+class SparqlQaExamplesResult(ToolCallResult):
+    type: str = "sparql_qa_examples"
+    summary: str
+    start: int
+    examples: list[SparqlQaExample]
 
 
 class SparqlQaExampleIndex(ExampleIndex):
@@ -138,7 +158,7 @@ def call_function(
     fn_args: dict,
     known: set[str],
     example_indices: dict[str, SparqlQaExampleIndex] | None = None,
-) -> str:
+) -> str | SparqlQaExamplesResult:
     ei = example_indices or {}
 
     if fn_name == "get_random_examples":
@@ -184,9 +204,10 @@ def format_examples(
     total_pages: int,
     more: bool,
     start_index: int = 0,
-) -> str:
+) -> str | SparqlQaExamplesResult:
     manager, _ = find_manager(managers, kg)
     exs = []
+    items = []
 
     for i, example in enumerate(examples, start_index):
         result, selections = prepare_sparql_result(
@@ -202,12 +223,27 @@ def format_examples(
             f"Example {i + 1}:\n{example.question}\n\n"
             + format_sparql_result(manager, result, selections)
         )
+        items.append(
+            SparqlQaExample(
+                question=example.question,
+                sparql=result.sparql,
+                selections=manager.format_selections(selections),
+                result=result.formatted,
+                table=result.table,
+            )
+        )
 
     suffix = format_page_suffix(page, total_pages, more)
     if not exs:
         return f"No examples found ({suffix})"
 
-    return f"Examples ({suffix}):\n" + "\n\n".join(exs)
+    summary = f"Examples ({suffix})"
+    return SparqlQaExamplesResult(
+        formatted=f"{summary}:\n" + "\n\n".join(exs),
+        summary=summary,
+        start=start_index,
+        examples=items,
+    )
 
 
 def get_random_examples(
@@ -221,7 +257,7 @@ def get_random_examples(
     page: int = 1,
     max_pages: int = 10,
     seed: int | None = None,
-) -> str:
+) -> str | SparqlQaExamplesResult:
     validate_page(page, max_pages)
 
     if kg not in example_indices:
@@ -264,7 +300,7 @@ def search_example(
     max_cols: int,
     page: int = 1,
     max_pages: int = 10,
-) -> str:
+) -> str | SparqlQaExamplesResult:
     validate_query(query)
     validate_page(page, max_pages)
 
@@ -304,7 +340,7 @@ def find_examples(
     max_cols: int,
     page: int = 1,
     max_pages: int = 10,
-) -> str:
+) -> str | SparqlQaExamplesResult:
     if random_examples:
         return get_random_examples(
             managers,

@@ -150,6 +150,21 @@ SelectRow = dict[str, Binding]
 
 
 @dataclass
+class TableValue:
+    # a value of a result row; short_identifier and label are only set for
+    # IRIs, label if the IRI has one in an index
+    type: str
+    value: str
+    datatype: str | None = None
+    lang: str | None = None
+    short_identifier: str | None = None
+    label: str | None = None
+
+    def binding(self) -> Binding:
+        return Binding(self.type, self.value, self.datatype, self.lang)
+
+
+@dataclass
 class SelectResult:
     variables: list[str]
     data: list[dict | None]
@@ -269,6 +284,20 @@ class Alternative:
     def has_variants(self) -> bool:
         return bool(self.variants)
 
+    def sample_aliases(self, max_aliases: int = 5) -> list[str]:
+        if not self.aliases or max_aliases <= 0:
+            return []
+        elif len(self.aliases) > max_aliases:
+            return random.sample(self.aliases, max_aliases)
+        return self.aliases
+
+    def sample_info(self, max_info: int = 10) -> list[str]:
+        if not self.info or max_info <= 0:
+            return []
+        elif len(self.info) > max_info:
+            return random.sample(self.info, max_info)
+        return self.info
+
     def get_selection_string(
         self,
         max_aliases: int = 5,
@@ -276,7 +305,10 @@ class Alternative:
         show_matched_label: bool = True,
         add_info: bool = True,
         include_variants: list[str] | None = None,
+        aliases: list[str] | None = None,
+        infos: list[str] | None = None,
     ) -> str:
+        # aliases and infos can be given to use already sampled ones
         s = self.get_label() or self.get_identifier()
 
         variants = self.variants if include_variants is None else include_variants
@@ -300,27 +332,23 @@ class Alternative:
             s += ", ".join(parts)
             s += ")"
 
-        if add_info and self.aliases and max_aliases > 0:
+        if aliases is None:
+            aliases = self.sample_aliases(max_aliases)
+
+        if add_info and aliases:
             s += ", "
             if self.has_label():
                 s += "also "
 
-            if len(self.aliases) > max_aliases:
-                aliases = random.sample(self.aliases, max_aliases)
-            else:
-                aliases = self.aliases
-
             s += "known as " + ", ".join(f'"{clip(alias)}"' for alias in aliases)
 
-            if len(self.aliases) > max_aliases:
+            if len(self.aliases or []) > len(aliases):
                 s += ", etc."
 
-        if add_info and self.info and max_info > 0:
-            if len(self.info) > max_info:
-                infos = random.sample(self.info, max_info)
-            else:
-                infos = self.info
+        if infos is None:
+            infos = self.sample_info(max_info)
 
+        if add_info and infos:
             s += ":\n" + format_list((clip(info) for info in infos), indent=2)
 
         return s

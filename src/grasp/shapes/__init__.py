@@ -68,6 +68,28 @@ class ClassProfile(BaseModel):
         return self.profiled_entities or self.total_entities
 
 
+class ShapeTargetView(BaseModel):
+    value: str
+    # only set for classes
+    iri: str | None = None
+
+
+class ShapePropertyView(BaseModel):
+    iri: str
+    value: str
+    targets: list[ShapeTargetView]
+    inverse: bool = False
+    cardinality: str = ""
+
+
+class ShapeView(BaseModel):
+    # the part of a class profile shown to the model
+    iri: str
+    value: str
+    properties: list[ShapePropertyView]
+    note: str = ""
+
+
 # precomputed profiles of the largest classes, computed on request for others
 @dataclass
 class Shapes:
