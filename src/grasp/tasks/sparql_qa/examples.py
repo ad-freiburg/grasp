@@ -221,8 +221,7 @@ def format_examples(
             max_cols,
             known,
         )
-        # the query shows all of its IRIs, also those of SERVICE clauses or
-        # vocabulary that no selection covers
+        # the query also shows IRIs no selection covers
         try:
             update_known_from_iris(known, query_iris(manager, example.sparql))
         except Exception:

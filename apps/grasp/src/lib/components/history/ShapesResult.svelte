@@ -69,7 +69,7 @@
 
   const count = (n) => `${n.toLocaleString()} ${n === 1 ? 'property' : 'properties'}`;
 
-  // a page of the outgoing or incoming properties, with what is not shown
+  // what a page of one direction does not show
   function pageText(shape) {
     const parts = [];
     if (shape.total_pages > 1) parts.push(`page ${shape.page} of ${shape.total_pages}, ${count(shape.total)}`);
@@ -85,7 +85,7 @@
         { name: shape.direction === 'in' ? 'Incoming' : 'Outgoing', props, hidden: pageText(shape) }
       ];
     }
-    // older results show both directions with counts of hidden properties
+    // older results have both directions
     return [
       { name: 'Outgoing', props: outgoing(shape), hidden: hiddenText(shape.omitted, shape.filtered) },
       {

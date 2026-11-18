@@ -13,8 +13,7 @@ marked.setOptions({
   gfm: true
 });
 
-// raw html in model outputs or notes (e.g. a placeholder like <Title>) is
-// shown as text; the browser would otherwise parse it as a tag
+// raw html like a <Title> placeholder is shown as text
 const escapeHtml = (text) =>
   text
     .replace(/&/g, '&amp;')

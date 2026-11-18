@@ -1100,10 +1100,8 @@ def query_iris(
     sparql: str,
     skip_service: bool = False,
 ) -> set[str]:
-    # the IRIs of a query outside its prologue and common vocabulary, prefixed
-    # names resolved with the prefixes of the query, the common prefixes and
-    # the prefixes of the knowledge graph; optionally without SERVICE clauses,
-    # whose IRIs belong to other endpoints
+    # IRIs of the query except prologue and common vocabulary, prefixed names
+    # resolved with query, common and knowledge graph prefixes
     parse, _ = parse_string(sparql, manager.sparql_parser)
     prefixes = {**manager.prefixes, **parse_prefixes(parse)}
     skip = {"Prologue"}
@@ -1148,8 +1146,7 @@ The SPARQL query contains invalid IRIs:
 
 
 def check_known(manager: KgManager, sparql: str, known: set[str]):
-    # SERVICE clauses are skipped, their IRIs belong to other endpoints and
-    # cannot be known from this knowledge graph
+    # IRIs of SERVICE clauses belong to other endpoints
     in_query = query_iris(manager, sparql, skip_service=True)
     unknown_in_query = in_query - known
     if not unknown_in_query:
