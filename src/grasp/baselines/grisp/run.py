@@ -312,19 +312,16 @@ class GRISPRunConfig(BaseModel):
 
 @dataclass
 class Candidate:
-    # an executed candidate query and the items it uses; groups have the same
-    # sampled aliases and infos as formatted_selections
+    # an executed candidate query and the items it uses
     query: str
     result: ExecutionResult
     selections: list[Selection]
     groups: list[SelectionGroup]
+    # same sampled aliases and infos as groups
     formatted_selections: str
 
     def preview(self) -> str:
-        # result.result is None when execution failed (timeout / backend down /
-        # parse error). The validator and improvement model get a stable
-        # "unavailable" marker then, so a transient failure is not read as a
-        # wrong query; the output keeps the raw formatted text.
+        # a failed execution is unavailable, not a wrong query
         if self.result.result is None:
             return RESULT_UNAVAILABLE
         return self.result.formatted
