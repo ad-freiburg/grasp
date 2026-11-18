@@ -68,3 +68,55 @@ a:focus {
 #app {
   min-height: 100vh;
 }
+
+/* lists of structured results (the items of a query):
+   rows divided by hairlines instead of bullets, and a small label instead
+   of a heading sentence */
+.list-label {
+  margin: 0 0 var(--spacing-xs);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+.list-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list-rows + .list-label {
+  margin-top: var(--spacing-md);
+}
+
+.list-row {
+  display: flex;
+  gap: var(--spacing-sm);
+  padding: 0.45rem 0;
+  border-top: 1px solid rgba(52, 74, 154, 0.1);
+}
+
+.list-row:first-child {
+  border-top: none;
+  padding-top: 0.15rem;
+}
+
+.list-row__body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* summary line above a result, e.g. "Got 3 rows and 2 columns in 0.05s" */
+.result-summary {
+  margin: 0 0 var(--spacing-xs);
+  font-size: 0.8rem;
+  color: var(--text-subtle);
+}
+
+/* query item hovered in the list of items below a query */
+::highlight(query-item) {
+  background-color: rgba(255, 213, 0, 0.45);
+  color: #fff;
+}

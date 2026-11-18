@@ -57,12 +57,17 @@ from grasp.baselines.grisp.utils import (
     skeleton_wording_key,
 )
 from grasp.configs import KgConfig
-from grasp.functions import sparql_result_view
+from grasp.functions import (
+    ExecutionResult,
+    SelectionGroup,
+    format_selection_groups,
+    sparql_result_view,
+)
 from grasp.manager import KgManager
 from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, Selection, SelectResult
 from grasp.sparql.utils import (
-    SPARQLExecuteException,
+    SparqlExecuteException,
 )
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 
@@ -303,6 +308,36 @@ class GRISPRunConfig(BaseModel):
     # validation and improvement models as well
     validate_disable_adapter: bool = False
     improve_disable_adapter: bool = False
+
+
+@dataclass
+class SparqlCandidate:
+    # an executed candidate query and the items it uses
+    query: str
+    result: ExecutionResult
+    selections: list[Selection]
+    groups: list[SelectionGroup]
+    # same sampled aliases and infos as groups
+    formatted_selections: str
+
+    def preview(self) -> str:
+        # a failed execution is unavailable, not a wrong query
+        if self.result.result is None:
+            return RESULT_UNAVAILABLE
+        return self.result.formatted
+
+    def output(self, manager: KgManager) -> dict:
+        return {
+            "sparql": self.result.sparql,
+            "selections": [group.model_dump() for group in self.groups],
+            "result": self.result.tool_result().model_dump(),
+            "formatted": format_sparql_result(
+                manager,
+                self.result,
+                self.selections,
+                self.formatted_selections,
+            ),
+        }
 
 
 @dataclass
@@ -686,7 +721,7 @@ def select_iris(
                     read_timeout=3.0,
                 )
                 reject = result.is_empty
-            except SPARQLExecuteException as e:
+            except SparqlExecuteException as e:
                 logger.warning(f"Error executing final SPARQL to check emptiness:\n{e}")
                 reject = e.is_client_error
             except Exception as e:
@@ -812,6 +847,7 @@ def select_iris(
             "alternatives": [
                 {
                     "identifier": alternative.get_identifier(),
+                    "iri": alternative.identifier,
                     "label": alternative.get_label(),
                     "variants": alternative.variants,
                     # shown in the selection prompt
@@ -976,7 +1012,10 @@ def generate(
     validate_model = select_model or model
     validate_tokenizer = select_tokenizer or tokenizer
 
-    def execute_and_format(query: str) -> dict:
+    def execute(query: str) -> SparqlCandidate:
+        # prepare_sparql_result returns parse-derived selections even when
+        # execution fails, so the validator/improvement model still sees the
+        # resolved items when there is no result.
         result, selections = prepare_sparql_result(
             query,
             manager.kg,
@@ -987,25 +1026,16 @@ def generate(
             request_timeout=(3.5, 6.0),
             read_timeout=3.0,
         )
-        # result.result is None when execution failed (timeout / backend down /
-        # parse error). Feed the validator and improvement model a stable
-        # "unavailable" marker in that case so a transient failure is not read
-        # as a wrong query; keep the raw formatted text in "formatted" for the
-        # human-facing output and debugging.
-        # prepare_sparql_result returns parse-derived selections even when
-        # execution fails, so the validator/improvement model still sees the
-        # resolved items when there is no result.
-        preview = result.formatted if result.result is not None else RESULT_UNAVAILABLE
-        return {
-            "sparql": result.sparql,
-            "selections": manager.format_selections(selections),
-            "result": preview,
-            "formatted": format_sparql_result(manager, result, selections),
-        }
+        formatted_selections, groups = format_selection_groups(
+            selections,
+            manager,
+            result.sparql,
+        )
+        return SparqlCandidate(query, result, selections, groups, formatted_selections)
 
     # best candidate seen so far (by validator score); used to pick the final
     # answer when no candidate clears the acceptance threshold.
-    best: dict | None = None
+    best: tuple[float, SparqlCandidate] | None = None
 
     # gold result for the oracle correctness probe, executed once up front with
     # the same timeouts used elsewhere in the loop. None if unavailable (the
@@ -1155,15 +1185,15 @@ def generate(
                     outcome = yield from resolve(current, cur_idx)
 
                     if outcome.sparql is not None:
-                        cand_out = execute_and_format(outcome.sparql)
+                        candidate = execute(outcome.sparql)
                         score = validate_query(
                             validate_model,
                             validate_tokenizer,
                             manager,
                             question,
-                            cand_out["sparql"],
-                            cand_out["selections"],
-                            cand_out["result"],
+                            candidate.result.sparql,
+                            candidate.formatted_selections,
+                            candidate.preview(),
                             logger,
                         )
                         yield {
@@ -1176,21 +1206,17 @@ def generate(
                                 else "failed"
                             ),
                         }
-                        if best is None or score > best["score"]:
-                            best = {
-                                "sparql": outcome.sparql,
-                                "score": score,
-                                "out": cand_out,
-                            }
+                        if best is None or score > best[0]:
+                            best = (score, candidate)
                         if accept is not None and score >= accept:
                             logger.debug(
                                 f"Accepting candidate with P(valid)={score:.2%}"
                             )
                             sparql = outcome.sparql
                             break
-                        evidence_sparql = cand_out["sparql"]
-                        evidence_selections = cand_out["selections"]
-                        evidence_result = cand_out["result"]
+                        evidence_sparql = candidate.result.sparql
+                        evidence_selections = candidate.formatted_selections
+                        evidence_result = candidate.preview()
                     else:
                         # partial skeleton: no executable query to validate, show
                         # the partially resolved query and its deepest selections
@@ -1239,10 +1265,8 @@ def generate(
             # improve-only mode); fall back to the best-scoring fully-resolved
             # candidate seen across all skeletons
             if sparql is None and best is not None:
-                sparql = best["sparql"]
-                logger.debug(
-                    f"Using best-scoring candidate P(valid)={best['score']:.2%}"
-                )
+                sparql = best[1].query
+                logger.debug(f"Using best-scoring candidate P(valid)={best[0]:.2%}")
 
     except OracleSkeletonUnavailable as e:
         logger.warning(f"Skipping sample, oracle skeleton unavailable: {e}")
@@ -1266,16 +1290,12 @@ def generate(
         "formatted": "No SPARQL query generated or found",
     }
     if sparql is not None:
-        # reuse the already-executed result for the chosen candidate if available
-        # (only validated candidates carry a precomputed "out")
-        if (
-            best is not None
-            and best.get("out") is not None
-            and best["sparql"] == sparql
-        ):
-            out.update(best["out"])
+        # reuse the already-executed best candidate if it was chosen
+        if best is not None and best[1].query == sparql:
+            candidate = best[1]
         else:
-            out.update(execute_and_format(sparql))
+            candidate = execute(sparql)
+        out.update(candidate.output(manager))
 
     end = time.monotonic()
     output = {
