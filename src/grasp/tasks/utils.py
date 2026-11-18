@@ -60,10 +60,14 @@ def format_sparql_result(
     manager: KgManager,
     result: ExecutionResult,
     selections: list[Selection],
+    formatted_selections: str | None = None,
 ) -> str:
+    # formatted selections can be given to use already sampled ones
     fmt = f"SPARQL query over {manager.kg}:\n```sparql\n{result.sparql}\n```"
 
-    fmt_sel = manager.format_selections(selections)
+    fmt_sel = formatted_selections
+    if fmt_sel is None:
+        fmt_sel = manager.format_selections(selections)
     if fmt_sel:
         fmt += f"\n\n{fmt_sel}"
 

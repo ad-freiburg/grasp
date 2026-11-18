@@ -165,6 +165,17 @@ class TableValue:
 
 
 @dataclass
+class TableColumn:
+    # a column of a result table, name is the column name shown to the model
+    variable: str
+    name: str
+
+
+# rows of a result table keep the values of all columns, also the omitted ones
+TableRow = dict[str, TableValue]
+
+
+@dataclass
 class SelectResult:
     variables: list[str]
     data: list[dict | None]

@@ -4,7 +4,7 @@
   export let result;
 
   $: items = Array.isArray(result?.items) ? result.items : [];
-  $: suffix = `page ${result?.page} of ${result?.total_pages}${result?.more ? '+' : ''}`;
+  $: pages = `page ${result?.page} of ${result?.total_pages}${result?.more ? '+' : ''}`;
 </script>
 
 <div class="search-results">
@@ -12,15 +12,18 @@
     <p class="note">{result.note.trim()}</p>
   {/if}
 
+  <p class="list-label">
+    {items.length ? 'Results' : 'No results'} <span class="list-label__meta">· {pages}</span>
+  </p>
   {#if items.length}
-    <p>Results ({suffix}):</p>
-    <ol start={(result.start ?? 0) + 1}>
-      {#each items as item}
-        <li><SearchItem {item} /></li>
+    <ol class="list-rows">
+      {#each items as item, index}
+        <li class="list-row">
+          <span class="list-row__rank">{(result.start ?? 0) + index + 1}</span>
+          <div class="list-row__body"><SearchItem {item} path={`items.${index}`} /></div>
+        </li>
       {/each}
     </ol>
-  {:else}
-    <p>No results ({suffix})</p>
   {/if}
 </div>
 
@@ -32,16 +35,8 @@
     overflow-wrap: anywhere;
   }
 
-  .search-results p {
-    margin: 0 0 var(--spacing-xs);
-  }
-
-  .search-results ol {
-    margin: 0;
-    padding-left: 2.5em;
-  }
-
   .note {
+    margin: 0 0 var(--spacing-sm);
     white-space: pre-wrap;
     color: var(--text-subtle);
   }

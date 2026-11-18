@@ -1,5 +1,7 @@
 <script>
   export let item;
+  // path of the item in a structured result, marks its label and identifier
+  export let path = null;
 
   $: href = /^https?:\/\//.test(item.identifier) ? item.identifier : null;
   $: identifier = item.short_identifier || item.identifier;
@@ -12,6 +14,7 @@
   }
 </script>
 
+<span data-path={path}>
 {#if item.label}
   <strong>{item.label}</strong>
 {/if}
@@ -20,27 +23,40 @@
 {:else}
   <code>{identifier}</code>
 {/if}
+</span>
 {#if item.variants?.length}
   <span class="subtle">as {item.variants.join('/')}</span>
 {/if}
 {#if showMatchedLabel}
-  <span class="subtle">matched via "{item.matched_label}"</span>
+  <span class="subtle">· matched via "{item.matched_label}"</span>
 {/if}
 {#if item.aliases?.length}
-  <div class="subtle">{aliasText(item)}</div>
+  <span class="subtle">· {aliasText(item)}</span>
 {/if}
 {#if item.infos?.length}
-  <ul>
+  <div class="infos">
     {#each item.infos as info}
-      <li>{info}</li>
+      <span class="info">{info}</span>
     {/each}
-  </ul>
+  </div>
 {/if}
 
 <style>
-  ul {
-    margin: 0;
-    padding-left: 1.25em;
+  .infos {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.3rem 0 0.15rem;
+  }
+
+  .info {
+    padding: 0.1rem 0.5rem;
+    border: 1px solid rgba(52, 74, 154, 0.18);
+    border-radius: var(--radius-sm);
+    background: rgba(52, 74, 154, 0.04);
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: var(--text-primary);
   }
 
   .subtle {

@@ -4,6 +4,9 @@
   import EntityLinkingAnnotations from './EntityLinkingAnnotations.svelte';
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
+  import ExecutionResult from './ExecutionResult.svelte';
+  import { highlightQuerySpans } from '../../utils/ranges.js';
+  import SelectionGroups from './SelectionGroups.svelte';
   import { prettyJson } from '../../utils/formatters.js';
   import { isQleverHost, sharePathForId } from '../../constants.js';
 
@@ -39,7 +42,13 @@ if (task === 'sparql-qa') {
 }
 
 const sparql = task === 'sparql-to-question' ? null : output?.sparql ?? null;
-const selections = output?.selections ?? null;
+// element containing the query, for highlighting hovered query items
+let queryEl;
+// items of the query per type, older outputs have them formatted
+const selectionGroups = Array.isArray(output?.selections) && output.selections.length
+  ? output.selections
+  : null;
+const selections = typeof output?.selections === 'string' ? output.selections : null;
 const result = output?.result ?? null;
 const endpoint = output?.endpoint ?? null;
 const ceaFormatted = task === 'cea' ? output?.formatted ?? '' : '';
@@ -332,15 +341,23 @@ function deriveQleverLink() {
       <MarkdownContent content={primaryText} />
     {/if}
 
+    <!-- contents only, the element finds the query for highlighting items -->
+    <div class="query" bind:this={queryEl}>
     {#if result}
-      <MarkdownContent content={toMarkdown(result)} />
+      <ExecutionResult {result} />
     {/if}
 
     {#if sparql}
       <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
     {/if}
+    </div>
 
-    {#if selections}
+    {#if selectionGroups}
+      <SelectionGroups
+        groups={selectionGroups}
+        on:itemhover={(event) => highlightQuerySpans(queryEl, event.detail.spans)}
+      />
+    {:else if selections}
       <MarkdownContent content={toMarkdown(selections)} />
     {/if}
 
@@ -442,6 +459,10 @@ function deriveQleverLink() {
 {/if}
 
 <style>
+  .query {
+    display: contents;
+  }
+
   .chip {
     display: inline-flex;
     align-items: center;

@@ -20,18 +20,23 @@ from grasp.sparql.types import (
     Alternative,
     AskResult,
     Binding,
+    ObjType,
     Position,
     Selection,
     SelectResult,
     SelectRow,
     iri_indices,
-    TableValue,
+    TableColumn,
+    TableRow,
+    group_selections,
 )
 from grasp.sparql.utils import (
     READ_TIMEOUT,
     REQUEST_TIMEOUT,
+    char_offset,
     find_all,
     has_scheme,
+    parse_prefixes,
     parse_string,
     wrap_iri,
 )
@@ -602,7 +607,7 @@ def call_function(
             config.sparql_read_timeout,
             config.sparql_result_max_rows,
         )
-        return result.table or result.formatted
+        return result.tool_result()
 
     elif fn_name == "list":
         return list_triples(
@@ -1201,10 +1206,16 @@ def update_known_from_selections(
 class TableResult(ToolCallResult):
     type: str = "table"
     summary: str
-    # the shown part of the table, None for omitted columns and rows and for
-    # unbound values
-    header: list[str | None]
-    rows: list[list[TableValue | None] | None]
+    # the shown columns and rows of the table, None for omitted ones; rows
+    # keep the values of all columns, e.g. for provenance of a row
+    columns: list[TableColumn | None]
+    rows: list[TableRow | None]
+
+
+class BooleanResult(ToolCallResult):
+    type: str = "boolean"
+    summary: str
+    value: bool
 
 
 @dataclass
@@ -1212,8 +1223,13 @@ class ExecutionResult:
     sparql: str
     formatted: str
     result: SelectResult | AskResult | None = None
-    # the shown part of a select result with at least one row
-    table: TableResult | None = None
+    # the shown part of a select result with at least one row, or the
+    # result of an ask query
+    structured: TableResult | BooleanResult | None = None
+
+    def tool_result(self) -> ToolCallResult:
+        # the structured result if there is one, the formatted one otherwise
+        return self.structured or ToolCallResult(formatted=self.formatted)
 
 
 def sparql_result_view(
@@ -1229,11 +1245,15 @@ def sparql_result_view(
     summary: str | None = None,
 ) -> ToolCallResult:
     # the part of a result shown to the model: a table for a select result
-    # with rows, only the formatted string otherwise; summary replaces the
-    # default one about the result size
+    # with rows, a boolean for an ask result, only the formatted string
+    # otherwise; summary replaces the default one about the result size
     if isinstance(result, AskResult):
         tmf = f" in {time:.2f}s" if time is not None else ""
-        return ToolCallResult(formatted=f"Got result{tmf}:\n{result.boolean}")
+        return BooleanResult(
+            formatted=f"Got result{tmf}:\n{result.boolean}",
+            summary=f"Got result{tmf}",
+            value=result.boolean,
+        )
 
     if summary is None:
         summary = manager.format_sparql_result_summary(
@@ -1248,7 +1268,7 @@ def sparql_result_view(
     if result.num_rows == 0:
         return ToolCallResult(formatted=summary)
 
-    header, rows = manager.sparql_result_table(
+    columns, rows = manager.sparql_result_table(
         result,
         show_top_rows,
         show_bottom_rows,
@@ -1256,11 +1276,11 @@ def sparql_result_view(
         show_right_columns,
         column_names,
     )
-    table = manager.format_sparql_table(header, rows, clip_literals)
+    table = manager.format_sparql_table(columns, rows, clip_literals)
     return TableResult(
         formatted=f"{summary}:\n{table}",
         summary=summary,
-        header=header,
+        columns=columns,
         rows=rows,
     )
 
@@ -1326,8 +1346,8 @@ def execute_sparql(
         half_columns,
         time=diff,
     )
-    table = view if isinstance(view, TableResult) else None
-    return ExecutionResult(sparql, view.formatted, result, table)
+    structured = view if isinstance(view, (TableResult, BooleanResult)) else None
+    return ExecutionResult(sparql, view.formatted, result, structured)
 
 
 def parse_iri_or_literal(
@@ -1637,21 +1657,147 @@ def paginate_results(
     return page_items, total_pages, more
 
 
-def alternative_item(alt: Alternative) -> tuple[str, SearchItem]:
-    # selection string and item with the same sampled aliases and infos
+def alternative_item(
+    alt: Alternative,
+    variants: list[str] | None = None,
+) -> tuple[str, SearchItem]:
+    # selection string and item with the same sampled aliases and infos;
+    # variants replace the ones of the alternative if given
     aliases = alt.sample_aliases()
     infos = alt.sample_info()
     item = SearchItem(
         identifier=alt.identifier,
         short_identifier=alt.short_identifier,
         label=alt.label,
-        variants=alt.variants,
+        variants=alt.variants if variants is None else variants,
         matched_label=alt.matched_label,
         aliases=aliases,
         num_aliases=len(alt.aliases or []),
         infos=infos,
     )
-    return alt.get_selection_string(aliases=aliases, infos=infos), item
+    selection = alt.get_selection_string(
+        include_variants=variants,
+        aliases=aliases,
+        infos=infos,
+    )
+    return selection, item
+
+
+class SelectedItem(SearchItem):
+    # where the item is in the query, as character offsets
+    spans: list[tuple[int, int]] = []
+
+
+class SelectionGroup(BaseModel):
+    # the items of a SPARQL query of one type, e.g. its entities
+    name: str
+    items: list[SelectedItem]
+
+
+SELECTION_GROUP_NAMES = [
+    (obj_type, obj_type.index_name) for obj_type in iri_indices()
+] + [(ObjType.UNINDEXED, "other (non-indexed) items")]
+
+
+def format_selection_groups(
+    selections: list[Selection],
+    manager: KgManager | None = None,
+    sparql: str | None = None,
+) -> tuple[str, list[SelectionGroup]]:
+    # the items of a SPARQL query per type, formatted and as groups of items
+    # with the same sampled aliases and infos; with the manager and the
+    # query, also where the items are in it
+    grouped = group_selections(selections)
+
+    formatted = []
+    groups = []
+    for obj_type, name in SELECTION_GROUP_NAMES:
+        if obj_type not in grouped:
+            continue
+
+        lines = []
+        items = []
+        for alt, variants in grouped[obj_type]:
+            line, item = alternative_item(alt, variants)
+            lines.append(line)
+            items.append(SelectedItem(**item.model_dump()))
+
+        formatted.append(f"Using {name}:\n" + format_list(lines))
+        groups.append(SelectionGroup(name=name, items=items))
+
+    if manager is not None and sparql is not None:
+        add_query_spans(groups, manager, sparql)
+
+    return "\n\n".join(formatted), groups
+
+
+def identifiers(manager: KgManager, iri: str) -> set[str]:
+    # the IRI and its normalized forms; search results show items in
+    # normalized form, e.g. on Wikidata the property wdt:P19 as wd:P19
+    ids = {iri}
+    for kind in iri_indices():
+        try:
+            norm = manager.normalize(iri, kind.index_name)
+        except Exception:
+            norm = None
+        if norm is not None:
+            ids.add(norm[0])
+    return ids
+
+
+def iri_spans(
+    manager: KgManager,
+    sparql: str,
+    skip_common: bool = True,
+) -> list[tuple[str, str, int, int]]:
+    # (IRI, as written, start, end) for all IRIs of the query outside of its
+    # prologue, by default except common vocabulary
+    parse, _ = parse_string(sparql, manager.sparql_parser, skip_empty=True)
+    prefixes = {**manager.prefixes, **parse_prefixes(parse)}
+    data = sparql.encode()
+
+    spans = []
+    for node in find_all(parse, {"IRIREF", "PNAME_NS", "PNAME_LN"}, skip={"Prologue"}):
+        binding = parse_into_binding(
+            node["value"], manager.iri_literal_parser, prefixes
+        )
+        if binding is None or binding.typ != "uri":
+            continue
+
+        longest = manager.find_longest_prefix(binding.value)
+        if skip_common and longest is not None and longest[0] in COMMON_PREFIXES:
+            continue
+
+        start, end = node["byte_span"]
+        spans.append(
+            (
+                binding.value,
+                node["value"],
+                char_offset(data, start),
+                char_offset(data, end),
+            )
+        )
+    return spans
+
+
+def add_query_spans(
+    groups: list[SelectionGroup],
+    manager: KgManager,
+    sparql: str,
+) -> None:
+    try:
+        spans = iri_spans(manager, sparql, skip_common=False)
+    except Exception:
+        return
+
+    # items are identified in normalized form, e.g. on Wikidata the
+    # property wdt:P31 in the query by wd:P31
+    for iri, _, start, end in spans:
+        ids = identifiers(manager, iri)
+        for group in groups:
+            for item in group.items:
+                if item.identifier in ids:
+                    item.spans.append((start, end))
 
 
 def format_index_alternatives(

@@ -68,10 +68,15 @@ class ClassProfile(BaseModel):
         return self.profiled_entities or self.total_entities
 
 
+# value is how the model sees an item of a shape, the other fields are its
+# parts, e.g. for displaying it
 class ShapeTargetView(BaseModel):
     value: str
+    kind: Literal["class", "literal", "iri", "bnode"] = "iri"
     # only set for classes
     iri: str | None = None
+    short_iri: str | None = None
+    label: str | None = None
 
 
 class ShapePropertyView(BaseModel):
@@ -80,6 +85,9 @@ class ShapePropertyView(BaseModel):
     targets: list[ShapeTargetView]
     inverse: bool = False
     cardinality: str = ""
+    short_iri: str = ""
+    label: str | None = None
+    variants: list[str] = Field(default_factory=list)
 
 
 class ShapeView(BaseModel):
@@ -88,6 +96,17 @@ class ShapeView(BaseModel):
     value: str
     properties: list[ShapePropertyView]
     note: str = ""
+    short_iri: str = ""
+    label: str | None = None
+    # the shown page of the outgoing ("out") or incoming ("in") properties
+    direction: Literal["out", "in"] = "out"
+    page: int = 1
+    total_pages: int = 1
+    total: int = 0
+    # properties left out because few instances have them
+    rare: int = 0
+    # properties in the other direction
+    other: int = 0
 
 
 # precomputed profiles of the largest classes, computed on request for others

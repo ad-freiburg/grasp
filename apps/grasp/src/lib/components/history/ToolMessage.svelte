@@ -6,6 +6,7 @@
   import ExamplesResult from './ExamplesResult.svelte';
   import SearchResults from './SearchResults.svelte';
   import ShapesResult from './ShapesResult.svelte';
+  import BooleanResult from './BooleanResult.svelte';
   import TableResult from './TableResult.svelte';
   import {
     flattenFunctionArgs,
@@ -93,6 +94,8 @@
 
   {#if result?.type === 'search'}
     <SearchResults {result} />
+  {:else if result?.type === 'boolean'}
+    <BooleanResult {result} />
   {:else if result?.type === 'table'}
     <TableResult {result} />
   {:else if result?.type === 'sparql_qa_examples'}

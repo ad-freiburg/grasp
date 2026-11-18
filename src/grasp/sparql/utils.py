@@ -325,6 +325,20 @@ def find_all(
             yield from find_all(child, name, skip)
 
 
+def parse_prefixes(prologue: dict | None) -> dict[str, str]:
+    prefixes = {}
+    if prologue is None:
+        return prefixes
+
+    for decl in find_all(prologue, "PrefixDecl"):
+        pfx = find(decl, "PNAME_NS")
+        iri = find(decl, "IRIREF")
+        if pfx is None or iri is None:
+            continue
+        prefixes[pfx["value"][:-1]] = iri["value"][1:-1]
+    return prefixes
+
+
 def find_terminals(parse: dict) -> Iterator[dict]:
     if "value" in parse:
         yield parse
@@ -1359,3 +1373,9 @@ def load_literal_info_sparql() -> str:
 
 def load_class_info_sparql() -> str:
     return read_resource("grasp.sparql.queries", "class.info.sparql")
+
+
+def char_offset(data: bytes, offset: int) -> int:
+    # parse positions are byte offsets, the website needs offsets in UTF-16
+    # code units as used by JavaScript strings
+    return len(data[:offset].decode(errors="replace").encode("utf-16-le")) // 2

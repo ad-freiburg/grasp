@@ -408,13 +408,8 @@ def cardinality_tag(coverage: float, avg_values: float) -> str:
         return "*"
 
 
-def resolve_label(
-    iri: str,
-    index_names: list[str],
-    short_iri: str,
-    manager: KgManager,
-    variants: list[str] | None = None,
-) -> str:
+def shown_label(iri: str, index_names: list[str], manager: KgManager) -> str | None:
+    # the label of an IRI, none if it only repeats the IRI's local name
     label = next(
         (
             label
@@ -427,7 +422,18 @@ def resolve_label(
         local_name = get_local_name_from_iri(iri, manager.prefixes)
         derived = derive_label_from_iri(iri, manager.prefixes)
         if local_name.lower() == label.lower() or derived.lower() == label.lower():
-            label = None
+            return None
+    return label
+
+
+def resolve_label(
+    iri: str,
+    index_names: list[str],
+    short_iri: str,
+    manager: KgManager,
+    variants: list[str] | None = None,
+) -> str:
+    label = shown_label(iri, index_names, manager)
 
     parts: list[str] = []
     if label:
@@ -449,9 +455,9 @@ def bracketed(items: list[str]) -> str:
 
 def render_target(target: Target, manager: KgManager) -> ShapeTargetView:
     if isinstance(target, TargetLiteral):
-        return ShapeTargetView(value=target.datatype)
+        return ShapeTargetView(value=target.datatype, kind="literal")
     if isinstance(target, TargetBnode):
-        return ShapeTargetView(value="BNODE")
+        return ShapeTargetView(value="BNODE", kind="bnode")
     if isinstance(target, TargetClass):
         value = resolve_label(
             target.iri,
@@ -460,7 +466,13 @@ def render_target(target: Target, manager: KgManager) -> ShapeTargetView:
             manager,
             variants=target.variants or None,
         )
-        return ShapeTargetView(value=value, iri=target.iri)
+        return ShapeTargetView(
+            value=value,
+            kind="class",
+            iri=target.iri,
+            short_iri=target.short_iri,
+            label=shown_label(target.iri, CLASS_INDICES, manager),
+        )
     return ShapeTargetView(value="IRI")
 
 
@@ -574,6 +586,9 @@ def shape_view(
             targets=[render_target(t, manager) for t in prop.targets],
             inverse=inverse,
             cardinality=tag,
+            short_iri=prop.short_iri,
+            label=shown_label(prop.iri, ["properties"], manager),
+            variants=prop.variants,
         )
 
     inverse = selection.direction == "in"
@@ -605,7 +620,20 @@ def shape_view(
         )
 
     note = f"# {', '.join(info)}" if info else ""
-    return ShapeView(iri=profile.iri, value=value, properties=properties, note=note)
+    return ShapeView(
+        iri=profile.iri,
+        value=value,
+        properties=properties,
+        note=note,
+        short_iri=profile.short_iri,
+        label=shown_label(profile.iri, CLASS_INDICES, manager),
+        direction="in" if inverse else "out",
+        page=selection.page,
+        total_pages=selection.total_pages,
+        total=selection.total,
+        rare=selection.rare,
+        other=selection.other,
+    )
 
 
 def format_shape_view(view: ShapeView) -> str:
