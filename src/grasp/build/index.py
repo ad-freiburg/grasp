@@ -15,6 +15,9 @@ from grasp.search_params import (
     write_search_params,
 )
 from grasp.utils import get_index_dir
+from grasp.multimodal.audio import HuggingFaceAudioModel
+from grasp.multimodal.functions import load
+from grasp.multimodal.utils import audio_base64_to_file
 
 
 def build_index(
@@ -29,6 +32,8 @@ def build_index(
     overwrite: bool = False,
     build_params: EmbeddingBuildParams | None = None,
     search_params: SearchParams | None = None,
+    embedding_provider: str = "sentence-transformer",
+    embedding_modality: str = "text",
 ) -> None:
     logger = get_logger("GRASP INDEX", log_level)
 
@@ -70,6 +75,8 @@ def build_index(
             device=embedding_device,
             batch_size=embedding_batch_size,
             dim=embedding_dim,
+            provider=embedding_provider,
+            modality=embedding_modality,
         )
 
         EmbeddingIndex.build(data, embedding_path, index_dir)
@@ -92,15 +99,40 @@ def generate_embeddings(
     device: str | None = None,
     batch_size: int = 256,
     dim: int | None = None,
+    provider: str = "sentence-transformer",
+    modality: str = "text",
 ):
-    model = SentenceTransformerModel(model_name, device)
-
     texts = list(flatten(fields for _, fields in data))
-    embedding = model.embed(texts, dim, batch_size, show_progress=True)
+    if provider == "huggingface-audio":
+        if dim is not None:
+            raise ValueError("CLAP projection dimensions cannot be truncated")
+        model = HuggingFaceAudioModel(model_name, device)
+        if modality == "audio":
+            vectors = []
+            for value in texts:
+                payload = load(value, "audio", 1024)["input_audio"]
+                path = audio_base64_to_file(payload["data"], suffix=f".{payload['format']}")
+                try:
+                    vectors.append(model.embed_audio([path]))
+                finally:
+                    os.remove(path)
+            import numpy as np
+            embedding = np.concatenate(vectors) if vectors else np.empty((0, model.dim), dtype=np.float32)
+        elif modality == "text":
+            embedding = model.embed_text(texts, batch_size)
+        else:
+            raise ValueError(f"Unsupported CLAP input modality: {modality}")
+        modalities = "text,audio"
+    elif provider == "sentence-transformer" and modality == "text":
+        model = SentenceTransformerModel(model_name, device)
+        embedding = model.embed(texts, dim, batch_size, show_progress=True)
+        modalities = "text"
+    else:
+        raise ValueError(f"Unsupported embedding provider/modality: {provider}/{modality}")
 
     save_file(
         {"embedding": embedding},
         filename=embedding_path,
-        metadata={"model": model_name},
+        metadata={"model": model_name, "provider": provider, "modality": modalities},
     )
     return embedding

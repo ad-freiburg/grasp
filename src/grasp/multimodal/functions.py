@@ -4,7 +4,6 @@ from typing import Any
 import numpy as np
 
 from grasp.configs import GraspConfig, LLMConfig
-from grasp.manager import KgManager
 from grasp.model import get_model
 from grasp.model.openai import OpenAICompletionsModel
 from grasp.model.base import Message, Response, ResponseMessage
@@ -27,6 +26,7 @@ from grasp.multimodal.utils import (
     unwrap_json_string_payload,
     MAX_IMAGE_DIMENSION,
 )
+from grasp.multimodal.audio import get_audio_caption_model
 from search_rdf.model.embedding import OpenClipModel
 
 
@@ -151,7 +151,8 @@ def analyze_image(image_url: str, prompt: str, models: list[LLMConfig], free_tex
     return json.dumps(output_messages)
 
 
-def analyze_audio(audio_url: dict, model_config: LLMConfig, free_text_output: bool) -> str:
+def analyze_audio(audio_url: dict, model_config: LLMConfig, free_text_output: bool,
+                  prompt: str | None = None) -> str:
     model = get_model(model_config)
     output_messages: dict[str, Any] = {}
 
@@ -173,6 +174,7 @@ Do not include any introductory or closing sentences!"""
         Message(
             role="user",
             content=[
+                {"type": "text", "text": prompt or "Describe and analyze this audio."},
                 audio_url,
             ],
         ),
@@ -205,35 +207,24 @@ Do not include any introductory or closing sentences!"""
         return json.dumps(output_messages)
 
 
-def caption_audio(input: str, input_type: ModalityTypes, manager: KgManager) -> str:
-    if manager.clap_model is None:
-        raise FunctionCallException("clap_model is required for audio analysis")
-
-    temp_file = None
-
+def caption_audio(input: str, config: GraspConfig) -> str:
+    caption_config = config.audio_caption
+    if caption_config is None:
+        raise FunctionCallException("No audio LLM or local audio captioner configured")
+    payload = load(input, Modality.AUDIO, config.max_image_dimension)["input_audio"]
+    path = audio_base64_to_file(payload["data"], suffix=f".{payload['format']}")
     try:
-        if input_type == ModalityTypes.FILE:
-            file_path = input
-        elif input_type == ModalityTypes.URL:
-            audio = audio_url_to_base64(input)
-            format = audio["input_audio"]["format"]
-            data = audio["input_audio"]["data"]
-            file_path = audio_base64_to_file(data, format)
-            temp_file = file_path
-        elif input_type == ModalityTypes.BASE64:
-            file_path = audio_base64_to_file(input)
-            temp_file = file_path
-        else:
-            raise FunctionCallException(
-                f"Unsupported input_type for audio: {input_type}"
-            )
-
-        output = manager.clap_model.generate_captions([file_path])
-        return "AUDIO DESCRIPTION: [" + ",".join(output) + "]"
-
+        model = get_audio_caption_model(caption_config.model, caption_config.device,
+                                        caption_config.max_new_tokens)
+        return json.dumps({
+            "model": caption_config.model,
+            "type": "audio_captions",
+            "limitations": "Fallible sound descriptions only; may hallucinate. Not question answering, reliable speech transcription, or identity evidence.",
+            "captions": model.generate_captions([path]),
+        })
     finally:
-        if temp_file is not None and os.path.exists(temp_file):
-            os.remove(temp_file)
+        if os.path.exists(path):
+            os.remove(path)
 
 
 def analyze(
@@ -241,16 +232,10 @@ def analyze(
     modality: Modality,
     models: list[str],
     config: GraspConfig,
-    manager: KgManager | None,
     prompt: str | None = None,
     user_input: list[str] | None = None,
 ) -> str:
-    if not models:
-        raise FunctionCallException("no model choice given for analysis")
-
     input = extract_user_input(input, user_input)
-
-    data_type = guess_modality_type(input)
 
     if modality == Modality.IMAGE:
         if prompt is None or not prompt.strip():
@@ -274,15 +259,24 @@ def analyze(
     if modality == Modality.AUDIO:
         audio_models = config.get_audio_models
         if audio_models:
+            selected = [model for model in audio_models if model.model in models]
+            if not selected:
+                raise FunctionCallException("No configured audio model matches the requested models")
             audio_url = load(input, modality, config.max_image_dimension)
-            return analyze_audio(
-                audio_url,
-                audio_models[0],
-                config.answer_in_free_text,
-            )  # only use the first audio model
+            try:
+                results = {}
+                for model in selected:
+                    results.update(json.loads(analyze_audio(
+                        audio_url, model, config.answer_in_free_text, prompt,
+                    )))
+                return json.dumps(results)
+            except Exception:
+                if config.audio_caption is None or not config.audio_caption.fallback_on_error:
+                    raise
+                return caption_audio(input, config)
 
-        if manager is None:
-            raise FunctionCallException("kg is required for audio analysis")
-        return caption_audio(input, data_type, manager)
+        if config.audio_caption and models and config.audio_caption.model not in models:
+            raise FunctionCallException("No local audio captioning model matches the requested models")
+        return caption_audio(input, config)
 
     raise FunctionCallException(f"Unsupported modality for analyze(): {modality}")

@@ -35,6 +35,7 @@ from grasp.utils import (
     format_section,
 )
 from grasp.multimodal.utils import (
+    image_file_to_base64,
     image_url_to_base64,
     is_multimodal_payload,
     media_reference_hint,
@@ -113,11 +114,14 @@ def system_instructions(
     if rules:
         blocks.append(format_section("Rules to follow", format_enumerate(rules)))
 
-    if task.config.get_vision_models or task.config.get_audio_models:
+    if task.config.get_vision_models or task.config.get_audio_models or task.config.audio_caption:
         rules_multimodal = multimodal_rules(Modality.IMAGE in task.config.get_default_model.modality and task.config.load_user_input)
         blocks.append(format_section("Rules regarding Multimodal Inputs", format_enumerate(rules_multimodal)))
         vision_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_vision_models]
         audio_model_list = [f'{model.model}: ({model.description})' for model in task.config.get_audio_models]
+        if task.config.audio_caption and not task.config.get_audio_models:
+            audio_model_list.append(
+                f"{task.config.audio_caption.model} (local fallback for sound captions)")
         blocks.append(
             format_section(
                 "Vision Models to Choose from for 'analyze()'",
@@ -144,8 +148,7 @@ def setup(config: GraspConfig) -> tuple[list[KgManager], dict[str, EmbeddingMode
             models,
             embedding_model=config.embedding_model,
             clip_model=config.clip_model,
-            clap_model=config.clap_model
-            )
+        )
         managers.append(manager)
 
     return managers, models
@@ -215,7 +218,7 @@ def generate(
         config.search_max_pages,
         enable_load=enable_load,
         enable_analyze=bool(
-            config.get_vision_models or config.get_audio_models
+            config.get_vision_models or config.get_audio_models or config.audio_caption
         ),
     )
     fns.extend(task.function_definitions())
@@ -243,8 +246,10 @@ def generate(
     for image in image_urls:
         if image.startswith("http"):
             normalized_images.append(image_url_to_base64(image, config.max_image_dimension))
-        else:
+        elif image.startswith("data:"):
             normalized_images.append(image)
+        else:
+            normalized_images.append(image_file_to_base64(image, config.max_image_dimension))
 
     image_urls = normalized_images
     media_inputs: list[str] | None = None

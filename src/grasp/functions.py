@@ -196,6 +196,7 @@ list(kg="wikidata", property="wdt:P19")""",
                     "Analyze multimodal input. Supported modalities are image and audio. "
                     "For images, provide a prompt describing what visual information should be extracted. "
                     "For audio, the function can generate an acoustic description or answer an audio-related prompt. "
+                    "For audio, the local fallback only generates sound captions. "
                     "This function routes internally to the correct helper function depending on modality."
                 ),
                 "parameters": {
@@ -215,15 +216,6 @@ list(kg="wikidata", property="wdt:P19")""",
                             "description": (
                                 "The modality to analyze. "
                                 "Use 'image' for visual analysis and 'audio' for acoustic analysis."
-                            ),
-                        },
-                        "kg": {
-                            "type": ["string", "null"],
-                            "enum": [*kgs, None],
-                            "description": (
-                                "Optional knowledge graph identifier. "
-                                "Required for audio analysis if a manager must be resolved via KG. "
-                                "Use null when no KG lookup is needed."
                             ),
                         },
                         "prompt": {
@@ -248,7 +240,7 @@ list(kg="wikidata", property="wdt:P19")""",
                             )
                         }
                     },
-                    "required": ["input", "modality", "kg", "prompt", "models"],
+                    "required": ["input", "modality", "prompt", "models"],
                     "additionalProperties": False,
                 },
                 "strict": True,
@@ -933,16 +925,11 @@ def call_function(
         ))
 
     elif fn_name == "analyze":
-        manager = None
-        kg = fn_args["kg"]
-        if kg is not None:
-            manager, _ = find_manager(managers, kg)
         return analyze(
             input=fn_args["input"],
             modality=fn_args["modality"],
             models=fn_args["models"],
             config=config,
-            manager=manager,
             prompt=fn_args["prompt"],
             user_input=user_input,
         )

@@ -13,7 +13,7 @@ from search_rdf.model import (
     OpenClipModel,
     SentenceTransformerModel,
 )
-from grasp.multimodal.ClapCapModel import ClapCapModel
+from grasp.multimodal.audio import HuggingFaceAudioModel
 from universal_ml_utils.configuration import load_config
 from universal_ml_utils.io import load_json, load_text
 
@@ -25,7 +25,7 @@ from grasp.sparql.utils import find_longest_prefix
 from grasp.utils import get_index_dir
 
 SearchIndex = KeywordIndex | EmbeddingIndex | FuzzyIndex
-EmbeddingModel = HuggingFaceImageModel | OpenClipModel | SentenceTransformerModel | ClapCapModel
+EmbeddingModel = HuggingFaceImageModel | OpenClipModel | SentenceTransformerModel | HuggingFaceAudioModel
 
 
 @dataclass
@@ -256,6 +256,8 @@ def load_embedding_model(
         model = OpenClipModel(index.model)
     elif provider == "huggingface-image":
         model = HuggingFaceImageModel(index.model)
+    elif provider == "huggingface-audio":
+        model = HuggingFaceAudioModel(index.model)
     else:
         raise ValueError(f"Unknown embedding model provider {provider}")
 
@@ -418,7 +420,7 @@ less to the overall score. No special query operators like AND/OR are supported.
     elif index_type == "embedding":
         return "Retrieves items by cosine similarity between their \
 embeddings and the query embedding. The embedding model used depends on the \
-index and may support text, images, or both."
+index and may support text, images, audio, or combinations of these."
 
     else:
         raise ValueError(f"Unknown index type {index_type}")

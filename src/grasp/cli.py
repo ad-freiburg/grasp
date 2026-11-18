@@ -101,6 +101,14 @@ def add_embedding_args(parser: argparse.ArgumentParser) -> None:
         "Only applicable when building an embedding index",
     )
     group.add_argument(
+        "--emb-provider", choices=["sentence-transformer", "huggingface-audio"],
+        default="sentence-transformer", help="Embedding model provider",
+    )
+    group.add_argument(
+        "--emb-modality", choices=["text", "audio"], default="text",
+        help="Input field modality (audio fields contain paths, URLs, or data URLs)",
+    )
+    group.add_argument(
         "--emb-model",
         type=str,
         default="Qwen/Qwen3-Embedding-0.6B",
@@ -1415,6 +1423,8 @@ def main():
                 args.overwrite,
                 get_embedding_build_params(args),
                 get_embedding_search_params(args),
+                embedding_provider=args.emb_provider,
+                embedding_modality=args.emb_modality,
             )
 
     elif args.command == "notes":

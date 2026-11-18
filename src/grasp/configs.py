@@ -139,6 +139,14 @@ class LLMConfig(ModelConfig):
     description: str
 
 
+class AudioCaptionConfig(BaseModel):
+    model: str = "MU-NLPC/whisper-tiny-audio-captioning"
+    device: str | None = None
+    max_new_tokens: int = Field(default=100, ge=1, le=256)
+    # API errors propagate by default; do not silently mask failures.
+    fallback_on_error: bool = False
+
+
 class GraspConfig(BaseModel):
     # function set, notes, and knowledge graphs
     fn_set: Literal[
@@ -161,7 +169,7 @@ class GraspConfig(BaseModel):
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
-    clap_model: str | None = None
+    audio_caption: AudioCaptionConfig | None = Field(default_factory=AudioCaptionConfig)
 
     # optional task specific parameters
     # map[task_name, map[param_name, param_value]]

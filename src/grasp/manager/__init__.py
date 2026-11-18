@@ -13,7 +13,7 @@ from search_rdf.model import (
     SentenceTransformerModel,
     HuggingFaceImageModel,
 )
-from grasp.multimodal.ClapCapModel import ClapCapModel
+from grasp.multimodal.audio import HuggingFaceAudioModel
 from universal_ml_utils.logging import get_logger
 from universal_ml_utils.table import generate_table
 
@@ -81,6 +81,7 @@ from grasp.utils import (
     get_index_dir,
     ordered_unique,
 )
+from grasp.multimodal.functions import load
 from grasp.multimodal.utils import (
     Modality,
     audio_base64_to_file,
@@ -142,7 +143,6 @@ class KgManager:
         models: dict[str, EmbeddingModel] | None = None,
         embedding_model: str | None = None,
         clip_model: str | None = None,
-        clap_model: str | None = None,
     ) -> dict[str, EmbeddingModel]:
         if models is None:
             models = {}
@@ -172,11 +172,6 @@ class KgManager:
             self.clip_model = OpenClipModel(clip_model)
         else:
             self.clip_model = None
-
-        if clap_model:
-            self.clap_model = ClapCapModel(version=clap_model)
-        else:
-            self.clap_model = None
 
         return models
 
@@ -568,7 +563,6 @@ class KgManager:
         modality: Modality,
         models: dict[str, EmbeddingModel],
     ) -> list[float]:
-        from grasp.multimodal.functions import load  # avoid circular import (multimodal.functions itself imports grasp.manager)
         model_key = self.get_embedding_model_key(index)
         model = models[model_key]
 
@@ -577,7 +571,7 @@ class KgManager:
                 return model.embed([query])[0].tolist()
             elif isinstance(model, OpenClipModel):
                 return model.embed_text([query])[0].tolist()
-            elif isinstance(model, ClapCapModel):
+            elif isinstance(model, HuggingFaceAudioModel):
                 return model.embed_text([query])[0].tolist()
             else:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
@@ -593,6 +587,8 @@ class KgManager:
                 raise ValueError(f"Unsupported embedding model type: {type(model)} for modality: {modality}")
 
         elif modality == Modality.AUDIO:
+            if not isinstance(model, HuggingFaceAudioModel):
+                raise ValueError(f"Model {model_key} does not support audio queries")
             audio_payload = load(query, modality, self.max_image_dimension)
             data = audio_payload["input_audio"]["data"]
             format = audio_payload["input_audio"]["format"]
