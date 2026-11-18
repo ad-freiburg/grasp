@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from itertools import chain
 
 from grasp.manager import KgManager
-from grasp.manager.utils import find_obj_type_from_prefixes, get_common_sparql_prefixes
-from grasp.sparql.types import Alternative, ObjType, Position, Selection, iri_indices
+from grasp.manager.utils import find_term_kind, get_common_sparql_prefixes
+from grasp.sparql.types import KgItem, TermKind, Position, Selection, iri_indices
 from grasp.sparql.utils import (
     find_all,
     infer_position_from_prefix,
@@ -13,51 +13,51 @@ from grasp.sparql.utils import (
 )
 
 __all__ = [
-    "Item",
-    "extract_sparql_items",
-    "selections_from_items",
+    "Term",
+    "extract_sparql_terms",
+    "selections_from_terms",
 ]
 
 
 @dataclass
-class Item:
+class Term:
     parse: dict
-    item_span: tuple[int, int]
+    span: tuple[int, int]
     prefix: str
-    item: str
+    text: str
     suffix: str
-    alternative: Alternative
-    obj_type: ObjType
+    kg_item: KgItem
+    kind: TermKind
     variant: str | None
     # inferred for IRIs, None if unknown
     position: Position | None = None
 
-    def same_as(self, other: "Item") -> bool:
-        return self.alternative.identifier == other.alternative.identifier
+    def same_as(self, other: "Term") -> bool:
+        return self.kg_item.identifier == other.kg_item.identifier
 
     @property
     def is_literal(self) -> bool:
-        return self.obj_type == ObjType.LITERAL
+        return self.kind == TermKind.LITERAL
 
     @property
     def is_unindexed(self) -> bool:
-        return self.obj_type == ObjType.UNINDEXED
+        return self.kind == TermKind.UNINDEXED
 
     @property
     def is_unknown(self) -> bool:
-        return self.obj_type == ObjType.UNKNOWN
+        return self.kind == TermKind.UNKNOWN
 
     @property
     def is_common(self) -> bool:
-        return self.obj_type == ObjType.COMMON
+        return self.kind == TermKind.COMMON
 
     @property
     def has_label(self) -> bool:
-        return self.alternative.has_label()
+        return self.kg_item.has_label()
 
     @property
     def selection(self) -> Selection:
-        return Selection(self.alternative, self.obj_type, self.variant)
+        return Selection(self.kg_item, self.kind, self.variant)
 
 
 def byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int, int]:
@@ -73,29 +73,29 @@ def byte_span(parse: dict, start: int = sys.maxsize, end: int = 0) -> tuple[int,
 COMMON_PREFIXES = get_common_sparql_prefixes()
 
 
-def get_item(
+def get_term(
     parse: dict,
     manager: KgManager,
     sparql_encoded: bytes,
-) -> Item | None:
+) -> Term | None:
     # return tuple with identifier, variant, label, synonyms
     # and additional info
     (byte_start, byte_end) = byte_span(parse)
     prefix = sparql_encoded[:byte_start].decode()
-    item = sparql_encoded[byte_start:byte_end].decode()
+    text = sparql_encoded[byte_start:byte_end].decode()
     suffix = sparql_encoded[byte_end:].decode()
     start = len(prefix)
-    end = start + len(item)
+    end = start + len(text)
 
     kwargs = {
         "parse": parse,
-        "item": item,
-        "item_span": (start, end),
+        "text": text,
+        "span": (start, end),
         "prefix": prefix,
         "suffix": suffix,
     }
 
-    binding = parse_into_binding(item, manager.iri_literal_parser, manager.prefixes)
+    binding = parse_into_binding(text, manager.iri_literal_parser, manager.prefixes)
     if binding is None:
         return None
 
@@ -107,14 +107,14 @@ def get_item(
         else:
             info = None
 
-        return Item(
-            alternative=Alternative(
+        return Term(
+            kg_item=KgItem(
                 identifier=binding.identifier(),
                 short_identifier=binding.identifier(),
                 label=binding.value,
-                info=[info] if info else None,
+                infos=[info] if info else [],
             ),
-            obj_type=ObjType.LITERAL,
+            kind=TermKind.LITERAL,
             variant=None,
             **kwargs,
         )
@@ -127,55 +127,55 @@ def get_item(
     except Exception:
         position = None
 
-    obj_types = iri_indices(position)
+    kinds = iri_indices(position)
 
     # check whether the iri is a valid entity, class, or property
-    for obj_type in obj_types:
-        norm = manager.normalize(iri, obj_type.index_name)
+    for kind in kinds:
+        norm = manager.normalize(iri, kind.index_name)
         if norm is None:
             continue
 
         identifier, variant = norm
-        if not manager.check_identifier(identifier, obj_type.index_name):
+        if not manager.check_identifier(identifier, kind.index_name):
             continue
 
         infos = manager.get_info_for_identifiers_from_index(
-            [identifier], obj_type.index_name
+            [identifier], kind.index_name
         )
-        alternative = manager.build_alternative_with_info(
+        kg_item = manager.build_kg_item_with_info(
             identifier,
             infos.get(identifier, {}),
             variants=[variant] if variant else None,
         )
 
-        return Item(
-            alternative=alternative,
-            obj_type=obj_type,
+        return Term(
+            kg_item=kg_item,
+            kind=kind,
             variant=variant,
             position=position,
             **kwargs,
         )
 
-    item_obj_type = find_obj_type_from_prefixes(iri, manager.prefixes, COMMON_PREFIXES)
+    term_kind = find_term_kind(iri, manager.prefixes, COMMON_PREFIXES)
 
     variant = None
-    if item_obj_type == ObjType.UNINDEXED:
+    if term_kind == TermKind.UNINDEXED:
         # try to get infos from live endpoint
         infos = {}
-        for obj_type in obj_types:
-            norm = manager.normalize(iri, obj_type.index_name)
+        for kind in kinds:
+            norm = manager.normalize(iri, kind.index_name)
             if norm is None:
                 continue
 
-            identifier, obj_type_variant = norm
-            if obj_type_variant:
-                variant = obj_type_variant
+            identifier, norm_variant = norm
+            if norm_variant:
+                variant = norm_variant
 
-            obj_type_infos = manager.get_info_for_identifiers_from_index(
-                [identifier], obj_type.index_name
+            index_infos = manager.get_info_for_identifiers_from_index(
+                [identifier], kind.index_name
             )
             # merge infos across types
-            for key, value in obj_type_infos.get(identifier, {}).items():
+            for key, value in index_infos.get(identifier, {}).items():
                 if key not in infos or not isinstance(infos[key], list):
                     infos[key] = value
                 else:
@@ -185,36 +185,36 @@ def get_item(
     else:
         infos = None
 
-    return Item(
-        alternative=manager.build_alternative_with_info(
+    return Term(
+        kg_item=manager.build_kg_item_with_info(
             identifier=iri,
             info=infos,
             variants=[variant] if variant else None,
         ),
-        obj_type=item_obj_type,
+        kind=term_kind,
         variant=None,
         position=position,
         **kwargs,
     )
 
 
-def selections_from_items(item: list[Item]) -> list[Selection]:
-    return [item.selection for item in item]
+def selections_from_terms(terms: list[Term]) -> list[Selection]:
+    return [term.selection for term in terms]
 
 
 def selections_from_sparql(
     sparql: str,
     manager: KgManager,
 ) -> list[Selection]:
-    _, items = extract_sparql_items(sparql, manager)
-    return selections_from_items(items)
+    _, terms = extract_sparql_terms(sparql, manager)
+    return selections_from_terms(terms)
 
 
-def extract_sparql_items(
+def extract_sparql_terms(
     sparql: str,
     manager: KgManager,
     is_prefix: bool = False,
-) -> tuple[str, list[Item]]:
+) -> tuple[str, list[Term]]:
     sparql_encoded = sparql.encode()
 
     parse, _ = parse_string(
@@ -225,19 +225,19 @@ def extract_sparql_items(
         is_prefix=is_prefix,
     )
 
-    # get all items in triples
-    items = filter(
-        lambda item: item is not None,
+    # get all terms in triples
+    terms = filter(
+        lambda term: term is not None,
         chain(
             (
                 # get IRIs (excluding prefixes)
-                get_item(iri, manager, sparql_encoded)
+                get_term(iri, manager, sparql_encoded)
                 for iri in find_all(parse, name="iri", skip={"Prologue"})
             ),
             # commented out for now, since not used anywhere
             # (
             #     # get literals in triples
-            #     get_item(lit, manager, sparql_encoded)
+            #     get_term(lit, manager, sparql_encoded)
             #     for triple in find_all(parse, name="TriplesSameSubject")
             #     for lit in find_all(
             #         triple,
@@ -248,4 +248,4 @@ def extract_sparql_items(
     )
 
     # by occurence position in the query
-    return sparql, sorted(items, key=lambda item: item.item_span)  # type: ignore
+    return sparql, sorted(terms, key=lambda term: term.span)  # type: ignore

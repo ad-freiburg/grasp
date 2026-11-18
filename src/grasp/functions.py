@@ -15,12 +15,12 @@ from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
 from grasp.model import ToolCallResult
 from grasp.shapes import PropertyProfile, Shapes, ShapeView
-from grasp.sparql.item import parse_into_binding
+from grasp.sparql.term import parse_into_binding
 from grasp.sparql.types import (
-    Alternative,
+    KgItem,
     AskResult,
     Binding,
-    ObjType,
+    TermKind,
     Position,
     Selection,
     SelectResult,
@@ -28,6 +28,7 @@ from grasp.sparql.types import (
     iri_indices,
     TableColumn,
     TableRow,
+    format_kg_item,
     group_selections,
 )
 from grasp.sparql.utils import (
@@ -937,30 +938,19 @@ def update_known_from_index_iris(
     iris: list[str],
     manager: KgManager,
 ) -> None:
-    for obj_type in iri_indices():
+    for kind in iri_indices():
         update_known_from_iris(
             known,
             iris,
-            manager.get_normalizer(obj_type.index_name),
+            manager.get_normalizer(kind.index_name),
         )
-
-
-class SearchItem(BaseModel):
-    identifier: str
-    short_identifier: str | None = None
-    label: str | None = None
-    variants: list[str] | None = None
-    matched_label: str | None = None
-    # the sampled aliases and infos shown to the model
-    aliases: list[str] = []
-    num_aliases: int = 0
-    infos: list[str] = []
 
 
 class SearchResult(ToolCallResult):
     type: str = "search"
     note: str = ""
-    items: list[SearchItem]
+    # trimmed, with the aliases and infos shown to the model
+    items: list[KgItem]
     start: int
     page: int
     total_pages: int
@@ -1007,7 +997,7 @@ def search_single_index(
     normalizer = manager.get_normalizer(index_name)
     update_known_from_alts(known, alts, normalizer)
 
-    return format_index_alternatives(alts, k, page, total_pages, more)
+    return format_search_results(alts, k, page, total_pages, more)
 
 
 def search_entity(
@@ -1166,7 +1156,7 @@ def update_known_from_iris(
 
 def update_known_from_alts(
     known: set[str],
-    alts: Iterable[Alternative],
+    alts: Iterable[KgItem],
     normalizer: Normalizer | None = None,
 ):
     for alt in alts:
@@ -1195,11 +1185,11 @@ def update_known_from_selections(
     selections: list[Selection],
     manager: KgManager,
 ):
-    for obj_type in iri_indices():
+    for kind in iri_indices():
         update_known_from_alts(
             known,
-            (sel.alternative for sel in selections if sel.obj_type == obj_type),
-            manager.get_normalizer(obj_type.index_name),
+            (sel.kg_item for sel in selections if sel.kind == kind),
+            manager.get_normalizer(kind.index_name),
         )
 
 
@@ -1623,20 +1613,20 @@ search index due to:
 
 """
 
-    alternatives = manager.search_index(
+    kg_items = manager.search_index(
         index,
         query,
         k * max_pages + 1,
         identifier_map,
         query_type=query_type,
     )
-    alternatives, total_pages, more = paginate_results(alternatives, k, page, max_pages)
+    kg_items, total_pages, more = paginate_results(kg_items, k, page, max_pages)
 
     # update known items
     normalizer = manager.get_normalizer(index)
-    update_known_from_alts(known, alternatives, normalizer)
+    update_known_from_alts(known, kg_items, normalizer)
 
-    return format_index_alternatives(alternatives, k, page, total_pages, more, info)
+    return format_search_results(kg_items, k, page, total_pages, more, info)
 
 
 def format_page_suffix(page: int, total_pages: int, more: bool) -> str:
@@ -1657,33 +1647,7 @@ def paginate_results(
     return page_items, total_pages, more
 
 
-def alternative_item(
-    alt: Alternative,
-    variants: list[str] | None = None,
-) -> tuple[str, SearchItem]:
-    # selection string and item with the same sampled aliases and infos;
-    # variants replace the ones of the alternative if given
-    aliases = alt.sample_aliases()
-    infos = alt.sample_info()
-    item = SearchItem(
-        identifier=alt.identifier,
-        short_identifier=alt.short_identifier,
-        label=alt.label,
-        variants=alt.variants if variants is None else variants,
-        matched_label=alt.matched_label,
-        aliases=aliases,
-        num_aliases=len(alt.aliases or []),
-        infos=infos,
-    )
-    selection = alt.get_selection_string(
-        include_variants=variants,
-        aliases=aliases,
-        infos=infos,
-    )
-    return selection, item
-
-
-class SelectedItem(SearchItem):
+class SelectedItem(KgItem):
     # where the item is in the query, as character offsets
     spans: list[tuple[int, int]] = []
 
@@ -1694,41 +1658,43 @@ class SelectionGroup(BaseModel):
     items: list[SelectedItem]
 
 
-SELECTION_GROUP_NAMES = [
-    (obj_type, obj_type.index_name) for obj_type in iri_indices()
-] + [(ObjType.UNINDEXED, "other (non-indexed) items")]
+SELECTION_GROUP_NAMES = [(kind, kind.index_name) for kind in iri_indices()] + [
+    (TermKind.UNINDEXED, "other (non-indexed) items")
+]
 
 
-def format_selection_groups(
+def selection_groups(
     selections: list[Selection],
     manager: KgManager | None = None,
     sparql: str | None = None,
-) -> tuple[str, list[SelectionGroup]]:
-    # the items of a SPARQL query per type, formatted and as groups of items
-    # with the same sampled aliases and infos; with the manager and the
+) -> list[SelectionGroup]:
+    # the trimmed items of a SPARQL query per type; with the manager and the
     # query, also where the items are in it
     grouped = group_selections(selections)
 
-    formatted = []
     groups = []
-    for obj_type, name in SELECTION_GROUP_NAMES:
-        if obj_type not in grouped:
+    for kind, name in SELECTION_GROUP_NAMES:
+        if kind not in grouped:
             continue
 
-        lines = []
-        items = []
-        for alt, variants in grouped[obj_type]:
-            line, item = alternative_item(alt, variants)
-            lines.append(line)
-            items.append(SelectedItem(**item.model_dump()))
-
-        formatted.append(f"Using {name}:\n" + format_list(lines))
+        items = [
+            SelectedItem(**{**item.trim().model_dump(), "variants": variants})
+            for item, variants in grouped[kind]
+        ]
         groups.append(SelectionGroup(name=name, items=items))
 
     if manager is not None and sparql is not None:
         add_query_spans(groups, manager, sparql)
 
-    return "\n\n".join(formatted), groups
+    return groups
+
+
+def format_selection_groups(groups: list[SelectionGroup]) -> str:
+    return "\n\n".join(
+        f"Using {group.name}:\n"
+        + format_list(format_kg_item(item) for item in group.items)
+        for group in groups
+    )
 
 
 def identifiers(manager: KgManager, iri: str) -> set[str]:
@@ -1800,8 +1766,8 @@ def add_query_spans(
                     item.spans.append((start, end))
 
 
-def format_index_alternatives(
-    alternatives: list[Alternative],
+def format_search_results(
+    kg_items: list[KgItem],
     k: int,
     page: int,
     total_pages: int,
@@ -1811,15 +1777,11 @@ def format_index_alternatives(
     suffix = format_page_suffix(page, total_pages, more)
     start = (page - 1) * k
 
-    lines = []
-    items = []
-    for i, alt in enumerate(alternatives):
-        selection, item = alternative_item(alt)
-        lines.append(f"{start + i + 1}. {selection}")
-        items.append(item)
-
-    if lines:
-        formatted = f"Results ({suffix}):\n" + "\n".join(lines)
+    items = [item.trim() for item in kg_items]
+    if items:
+        formatted = f"Results ({suffix}):\n" + "\n".join(
+            f"{start + i + 1}. {format_kg_item(item)}" for i, item in enumerate(items)
+        )
     else:
         formatted = f"No results ({suffix})"
 
@@ -1880,17 +1842,17 @@ search index due to:
 
 """
 
-    alternatives = manager.search_index(
+    kg_items = manager.search_index(
         index,
         query,
         k=k * max_pages + 1,
         identifier_map=identifier_map,
         query_type=query_type,
     )
-    alternatives, total_pages, more = paginate_results(alternatives, k, page, max_pages)
+    kg_items, total_pages, more = paginate_results(kg_items, k, page, max_pages)
 
     # update known items
     normalizer = manager.get_normalizer(index)
-    update_known_from_alts(known, alternatives, normalizer)
+    update_known_from_alts(known, kg_items, normalizer)
 
-    return format_index_alternatives(alternatives, k, page, total_pages, more, info)
+    return format_search_results(kg_items, k, page, total_pages, more, info)

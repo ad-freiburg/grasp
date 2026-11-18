@@ -6,6 +6,7 @@ from grasp.functions import (
 )
 from grasp.manager import KgManager
 from grasp.sparql.types import iri_indices
+from grasp.sparql.types import format_kg_item
 from grasp.tasks.exploration.functions import (
     note_function_definitions as base_note_function_definitions,
 )
@@ -134,15 +135,15 @@ def show_explored(
 
     items = []
     for iri in page_items:
-        alt = manager.build_alternative_with_info(iri, infos.get(iri))
-        items.append(alt.get_selection_string())
+        item = manager.build_kg_item_with_info(iri, infos.get(iri))
+        items.append(format_kg_item(item.trim()))
 
     return header + format_enumerate(items, start=start)
 
 
 def seed_index_name(iri: str, manager: KgManager) -> str:
-    for obj_type in iri_indices():
-        norm = manager.normalize(iri, obj_type.index_name)
-        if norm is not None and manager.check_identifier(norm[0], obj_type.index_name):
-            return obj_type.index_name
+    for kind in iri_indices():
+        norm = manager.normalize(iri, kind.index_name)
+        if norm is not None and manager.check_identifier(norm[0], kind.index_name):
+            return kind.index_name
     return "entities"

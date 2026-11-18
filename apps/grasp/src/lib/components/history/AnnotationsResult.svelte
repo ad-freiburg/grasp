@@ -1,6 +1,6 @@
 <script>
   import EntityLinkingAnnotations from './EntityLinkingAnnotations.svelte';
-  import SearchItem from './SearchItem.svelte';
+  import KgItem from './KgItem.svelte';
 
   export let result;
 
@@ -58,7 +58,7 @@
     <p>Annotated entities:</p>
     <ul>
       {#each entities as item}
-        <li><SearchItem {item} /></li>
+        <li><KgItem {item} /></li>
       {/each}
     </ul>
   {/if}

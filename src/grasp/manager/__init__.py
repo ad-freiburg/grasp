@@ -37,7 +37,7 @@ from grasp.manager.utils import (
 from grasp.search_params import resolve_index_search_params
 from grasp.shapes import Shapes, load_shapes
 from grasp.sparql.types import (
-    Alternative,
+    KgItem,
     AskResult,
     Binding,
     Position,
@@ -466,19 +466,19 @@ class KgManager:
         return data.main_field(id) or data.field(id, 0)
 
     def get_iri_label(self, identifier: str) -> str | None:
-        for obj_type in iri_indices():
-            label = self.get_label(identifier, obj_type.index_name)
+        for kind in iri_indices():
+            label = self.get_label(identifier, kind.index_name)
             if label is not None:
                 return label
         return None
 
-    def build_alternative_with_info(
+    def build_kg_item_with_info(
         self,
         identifier: str,
         info: dict | None = None,
         variants: list[str] | None = None,
         matched_via: str | None = None,
-    ) -> Alternative:
+    ) -> KgItem:
         if info is None:
             info = {}
 
@@ -487,7 +487,7 @@ class KgManager:
         aliases = info.get("alias", [])
         other = info.get("other", [])
 
-        return self.build_alternative(
+        return self.build_kg_item(
             identifier,
             label,
             aliases,
@@ -496,7 +496,7 @@ class KgManager:
             matched_via,
         )
 
-    def build_alternative(
+    def build_kg_item(
         self,
         identifier: str,
         label: str | None = None,
@@ -504,7 +504,7 @@ class KgManager:
         other: list[str] | None = None,
         variants: list[str] | None = None,
         matched_via: str | None = None,
-    ) -> Alternative:
+    ) -> KgItem:
         # preprocess some fields
         if variants is not None:
             variants = ordered_unique(variants)
@@ -515,13 +515,13 @@ class KgManager:
         if other is not None:
             other = ordered_unique(other)
 
-        return Alternative(
+        return KgItem(
             identifier=identifier,
             short_identifier=self.format_identifier(identifier),
             label=label,
             variants=variants,
-            aliases=aliases,
-            info=other,
+            aliases=aliases or [],
+            infos=other or [],
             matched_label=matched_via,
         )
 
@@ -569,7 +569,7 @@ class KgManager:
         k: int = 10,
         identifier_map: dict[str, list[str]] | None = None,
         query_type: str = "text",
-    ) -> list[Alternative]:
+    ) -> list[KgItem]:
         start = time.monotonic()
         cache_key = None
         if identifier_map is None:
@@ -618,7 +618,7 @@ class KgManager:
         info_sparql = self.get_info_sparql(index_name)
         infos = self.get_info_for_identifiers(identifiers, info_sparql, data)
 
-        alternatives = []
+        kg_items = []
         for identifier in identifiers:
             if identifier_map is not None:
                 variants = identifier_map.get(identifier)
@@ -627,14 +627,14 @@ class KgManager:
 
             matched_via = field_map.get(identifier)
 
-            alternative = self.build_alternative_with_info(
+            kg_item = self.build_kg_item_with_info(
                 identifier,
                 infos.get(identifier, {}),
                 variants,
                 matched_via,
             )
-            alternative.score = score_map.get(identifier)
-            alternatives.append(alternative)
+            kg_item.score = score_map.get(identifier)
+            kg_items.append(kg_item)
 
         end = time.monotonic()
         time_ms = (end - start) * 1000
@@ -642,9 +642,9 @@ class KgManager:
         # threshold to only cache expensive ones
         if cache_key is not None and time_ms >= SEARCH_CACHE_MIN_MS:
             with self.search_lock:
-                self.search_cache[cache_key] = alternatives
+                self.search_cache[cache_key] = kg_items
 
-        return alternatives
+        return kg_items
 
     def search_kwargs(
         self,
@@ -897,10 +897,9 @@ class KgManager:
 
     def format_selections(self, selections: list[Selection]) -> str:
         # import here to avoid a circular import
-        from grasp.functions import format_selection_groups
+        from grasp.functions import format_selection_groups, selection_groups
 
-        formatted, _ = format_selection_groups(selections)
-        return formatted
+        return format_selection_groups(selection_groups(selections))
 
 
 DEFAULT_DESCRIPTIONS = {

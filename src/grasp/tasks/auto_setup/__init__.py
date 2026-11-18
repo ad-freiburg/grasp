@@ -14,7 +14,7 @@ from grasp.manager.utils import (
     merge_prefixes,
 )
 from grasp.model import Message
-from grasp.sparql.item import extract_sparql_items
+from grasp.sparql.term import extract_sparql_terms
 from grasp.sparql.types import IRI_INDEX_NAMES, iri_indices
 from grasp.sparql.utils import (
     get_qlever_endpoint,
@@ -75,12 +75,12 @@ def update_known_from_sparql(sparql: str, known: set[str], manager: KgManager) -
     try:
         # temporarily disable info retrieval
         manager.set_info_retrieval(enable=False)
-        _, items = extract_sparql_items(sparql, manager)
-        for obj_type in iri_indices():
-            normalizer = manager.get_normalizer(obj_type.index_name)
+        _, terms = extract_sparql_terms(sparql, manager)
+        for kind in iri_indices():
+            normalizer = manager.get_normalizer(kind.index_name)
             update_known_from_alts(
                 known,
-                (item.alternative for item in items if not item.is_literal),
+                (term.kg_item for term in terms if not term.is_literal),
                 normalizer,
             )
     except Exception:
