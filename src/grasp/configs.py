@@ -169,7 +169,9 @@ class GraspConfig(BaseModel):
     # for embedding indices and example indices
     embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
     clip_model: str = "hf-hub:laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
-    audio_caption: AudioCaptionConfig | None = Field(default_factory=AudioCaptionConfig)
+    # Local audio captioning fallback, disabled by default so analyze() is only
+    # available when vision/audio models (or an explicit audio_caption) are configured.
+    audio_caption: AudioCaptionConfig | None = None
 
     # optional task specific parameters
     # map[task_name, map[param_name, param_value]]
