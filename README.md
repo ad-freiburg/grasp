@@ -2,6 +2,10 @@
 
 ## News
 
+- November 12th 2026:
+  - GRISP has been accepted to [EACL 2027](https://2027.eacl.org/), preprint available at
+    [arxiv.org/abs/2604.21133](https://arxiv.org/abs/2604.21133)
+
 - August 21st 2026:
   - GRASP won the [WikiKGQA 2026 challenge](https://wikikgqa.org) at ISWC 2026;
     our [paper](https://ad-publications.cs.uni-freiburg.de/WIKIKGQA_grasp_grisp_WB_2026.pdf) also evaluates GRISP
@@ -11,13 +15,13 @@
   - Entity linking [paper](https://ad-publications.cs.uni-freiburg.de/ISWC_entity_linking_grasp_BWB_2026.pdf) accepted as a poster at [ISWC 2026](https://iswc2026.semanticweb.org/)
   - Try it at [grasp.cs.uni-freiburg.de/entity-linking](https://grasp.cs.uni-freiburg.de/entity-linking)
 
+<details>
+<summary>Older news</summary>
+
 - April 22nd 2026:
   - arXiv preprint of GRISP (Guided Recurrent IRI Selection over SPARQL Skeletons),
     an alternative QA baseline included in this repository, available at
     [arxiv.org/abs/2604.21133](https://arxiv.org/abs/2604.21133)
-
-<details>
-<summary>Older news</summary>
 
 - February 16th 2026:
   - GRASP has been used to generate WDQL, a dataset of Wikidata query logs
