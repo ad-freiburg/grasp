@@ -6,8 +6,8 @@ from grasp.configs import GraspConfig, KgInfo
 from grasp.manager import KgManager
 from grasp.sparql.types import Position
 from grasp.sparql.utils import (
-    SPARQLException,
-    SPARQLExecuteException,
+    SparqlException,
+    SparqlExecuteException,
     stream_with_timeout,
     complete_prefix,
     derive_constraint_query_from_sparql,
@@ -95,7 +95,7 @@ class TestStreamWithTimeout:
         }
         response = _FakeResponse(data)
 
-        with pytest.raises(SPARQLExecuteException, match="exceeded 1 rows"):
+        with pytest.raises(SparqlExecuteException, match="exceeded 1 rows"):
             stream_with_timeout(
                 "SELECT ?x WHERE { ?x ?p ?o }",
                 response,  # type: ignore
@@ -341,14 +341,14 @@ class TestCompletePrefix:
         assert position == "object"
 
     def test_fails_within_filter_function_arguments(self):
-        with pytest.raises(SPARQLException):
+        with pytest.raises(SparqlException):
             complete_prefix(
                 "SELECT ?x WHERE { FILTER(CONTAINS(?label, ",
                 SPARQL_PARSER,
             )
 
     def test_fails_within_property_path(self):
-        with pytest.raises(SPARQLException):
+        with pytest.raises(SparqlException):
             complete_prefix(
                 "SELECT ?x WHERE { ?s <http://example.org/p1>/",
                 SPARQL_PARSER,
@@ -408,7 +408,7 @@ class TestDeriveConstraintQueryFromSparql:
     def test_raises_when_placeholder_is_not_in_a_triple(self):
         query = "SELECT ?z WHERE { ?a <http://example.org/p1> ?z . FILTER(?z != <rep>x</rep>) }"
 
-        with pytest.raises(SPARQLException):
+        with pytest.raises(SparqlException):
             derive(query)
 
     def test_ignores_triples_inside_optional(self):
@@ -550,7 +550,7 @@ class TestDeriveConstraintQueryFromSparql:
 
     def test_raises_when_no_current_placeholder(self):
         query = "SELECT ?x WHERE { ?x <http://example.org/p1> ?o }"
-        with pytest.raises(SPARQLException):
+        with pytest.raises(SparqlException):
             derive_constraint_query_from_sparql(query, SPARQL_PARSER)
 
     # pruning of all-variable padding triples (iri_only)

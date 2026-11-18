@@ -54,7 +54,7 @@ def get_qlever_endpoint(kg: str) -> str:
     return f"{QLEVER_API}/{kg}"
 
 
-class SPARQLException(Exception):
+class SparqlException(Exception):
     def __init__(self, message: str, query: str | None = None) -> None:
         super().__init__(message)
         self.query = query
@@ -462,7 +462,7 @@ def complete_prefix(
         if var_in_triple(parse, current_var):
             return parse, position, current_var
 
-    raise SPARQLException("Failed to complete SPARQL prefix", prefix)
+    raise SparqlException("Failed to complete SPARQL prefix", prefix)
 
 
 def var_in_triple(parse: dict, var: str) -> bool:
@@ -591,7 +591,7 @@ def derive_constraint_query_from_sparql(
     # sides constrain it, unresolved ones do not.
     match = CURRENT_PLACEHOLDER.search(sparql)
     if match is None:
-        raise SPARQLException("no current placeholder in query", sparql)
+        raise SparqlException("no current placeholder in query", sparql)
 
     # position depends only on the left context
     prefix = replace_unresolved_placeholders(sparql[: match.start()])
@@ -900,7 +900,7 @@ def prettify(
     return (s.strip() + " " + rest).strip()
 
 
-class SPARQLExecuteException(SPARQLException):
+class SparqlExecuteException(SparqlException):
     def __init__(
         self,
         message: str,
@@ -941,7 +941,7 @@ def stream_with_timeout(
 
             chunk = next(self.stream, b"")
             if chunk and seconds and time.monotonic() - start > seconds:
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     f"Took longer than {seconds} seconds to read SPARQL result",
                     sparql,
                 )
@@ -968,7 +968,7 @@ def stream_with_timeout(
                     sparql_result_max_rows is not None
                     and row_count > sparql_result_max_rows
                 ):
-                    raise SPARQLExecuteException(
+                    raise SparqlExecuteException(
                         f"SPARQL result exceeded {sparql_result_max_rows:,} rows",
                         sparql,
                     )
@@ -1066,7 +1066,7 @@ def execute(
             else:
                 return SelectResult.from_json(res)
 
-        except SPARQLExecuteException as e:
+        except SparqlExecuteException as e:
             # retry if not last retry
             if i < max_retries:
                 continue
@@ -1089,7 +1089,7 @@ def execute(
             else:
                 timeout_fmt = f" (timeout={request_timeout}s)"
 
-            raise SPARQLExecuteException(
+            raise SparqlExecuteException(
                 f"SPARQL query timed out{timeout_fmt}", sparql
             ) from e
 
@@ -1111,7 +1111,7 @@ def execute(
             if status in (401, 403) and auth is None:
                 # almost always a missing Basic Auth configuration, which is
                 # not obvious from the bare status code
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     f"Endpoint {endpoint} requires authentication but no "
                     "credentials were sent, set GRASP_BASICAUTH_<KG>_USER "
                     "and GRASP_BASICAUTH_<KG>_PASSWD for the knowledge graph "
@@ -1125,7 +1125,7 @@ def execute(
                 # token, so Basic Auth credentials meant for an authenticating
                 # proxy in front of an endpoint turn into a confusing 400 as
                 # soon as the endpoint is queried directly
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     f"Endpoint {endpoint} rejected the request with 400 while "
                     f"Basic Auth credentials were sent: {qlever_ex or body}; "
                     "if this endpoint does not require authentication, unset "
@@ -1137,13 +1137,13 @@ def execute(
 
             # immediately return on client error
             if client_error and qlever_ex:
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     qlever_ex,
                     sparql,
                     status_code=status,
                 ) from e
             elif client_error:
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     body if body else "Client error",
                     sparql,
                     status_code=status,
@@ -1152,19 +1152,19 @@ def execute(
             elif i < max_retries - 1:
                 continue
             elif qlever_ex:
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     qlever_ex,
                     sparql,
                     status_code=status,
                 ) from e
             else:
-                raise SPARQLExecuteException(
+                raise SparqlExecuteException(
                     body if body else "Server error",
                     sparql,
                     status_code=status,
                 ) from e
 
-    raise SPARQLExecuteException(
+    raise SparqlExecuteException(
         f"Maximum retries reached ({max_retries})",
         sparql,
     )

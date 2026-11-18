@@ -67,7 +67,7 @@ from grasp.manager import KgManager
 from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, Selection, SelectResult
 from grasp.sparql.utils import (
-    SPARQLExecuteException,
+    SparqlExecuteException,
 )
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 
@@ -311,7 +311,7 @@ class GRISPRunConfig(BaseModel):
 
 
 @dataclass
-class Candidate:
+class SparqlCandidate:
     # an executed candidate query and the items it uses
     query: str
     result: ExecutionResult
@@ -721,7 +721,7 @@ def select_iris(
                     read_timeout=3.0,
                 )
                 reject = result.is_empty
-            except SPARQLExecuteException as e:
+            except SparqlExecuteException as e:
                 logger.warning(f"Error executing final SPARQL to check emptiness:\n{e}")
                 reject = e.is_client_error
             except Exception as e:
@@ -1012,7 +1012,7 @@ def generate(
     validate_model = select_model or model
     validate_tokenizer = select_tokenizer or tokenizer
 
-    def execute(query: str) -> Candidate:
+    def execute(query: str) -> SparqlCandidate:
         # prepare_sparql_result returns parse-derived selections even when
         # execution fails, so the validator/improvement model still sees the
         # resolved items when there is no result.
@@ -1031,11 +1031,11 @@ def generate(
             manager,
             result.sparql,
         )
-        return Candidate(query, result, selections, groups, formatted_selections)
+        return SparqlCandidate(query, result, selections, groups, formatted_selections)
 
     # best candidate seen so far (by validator score); used to pick the final
     # answer when no candidate clears the acceptance threshold.
-    best: tuple[float, Candidate] | None = None
+    best: tuple[float, SparqlCandidate] | None = None
 
     # gold result for the oracle correctness probe, executed once up front with
     # the same timeouts used elsewhere in the loop. None if unavailable (the

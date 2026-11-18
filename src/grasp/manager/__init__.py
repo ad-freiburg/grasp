@@ -53,7 +53,7 @@ from grasp.sparql.types import (
 from grasp.sparql.utils import (
     READ_TIMEOUT,
     REQUEST_TIMEOUT,
-    SPARQLException,
+    SparqlException,
     ask_to_select,
     derive_constraint_query_from_sparql,
     execute,
@@ -720,17 +720,17 @@ class KgManager:
     ) -> list[str]:
         typ = query_type(sparql, self.sparql_parser)
         if typ != "select":
-            raise SPARQLException("SPARQL query is not a SELECT query", sparql)
+            raise SparqlException("SPARQL query is not a SELECT query", sparql)
 
         self.logger.debug(f"Getting candidate identifiers with {sparql}")
         result = self.execute_sparql(sparql, request_timeout, read_timeout, max_retries)
 
         if not isinstance(result, SelectResult):
-            raise SPARQLException("SPARQL query is not a SELECT query", sparql)
+            raise SparqlException("SPARQL query is not a SELECT query", sparql)
         if result.num_columns != 1:
-            raise SPARQLException("SPARQL query must return a single column", sparql)
+            raise SparqlException("SPARQL query must return a single column", sparql)
         if max_candidates is not None and len(result) > max_candidates:
-            raise SPARQLException(
+            raise SparqlException(
                 f"Got more than the maximum supported number of "
                 f"candidates ({max_candidates:,})",
                 sparql,
