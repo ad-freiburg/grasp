@@ -1,11 +1,20 @@
+from types import SimpleNamespace
+
+import pytest
+
 from grasp.functions import (
+    check_known,
     order_triples,
+    query_iris,
     row_iris,
     update_known_from_index_iris,
     update_known_from_selections,
 )
 from grasp.manager.normalizer import Normalizer
+from grasp.manager.utils import find_longest_prefix, get_common_sparql_prefixes
 from grasp.sparql.types import KgItem, Binding, TermKind, Selection
+from grasp.sparql.utils import load_iri_and_literal_parser, load_sparql_parser
+from grasp.utils import FunctionCallException
 
 
 class VariantNormalizer(Normalizer):
@@ -98,3 +107,62 @@ def test_all_classes_of_an_entity_come_first():
     order = order_triples(rows, TripleManager())  # type: ignore
     # types by class popularity, then the other properties, then repeats
     assert order == [4, 3, 2, 0, 1]
+
+
+EX = "http://example.org/kg#"
+REMOTE = "http://example.org/remote/"
+
+
+@pytest.fixture(scope="module")
+def manager():
+    prefixes = {**get_common_sparql_prefixes(), "ex": EX}
+    return SimpleNamespace(
+        kg="example",
+        prefixes=prefixes,
+        sparql_parser=load_sparql_parser(),
+        iri_literal_parser=load_iri_and_literal_parser(),
+        find_longest_prefix=lambda iri: find_longest_prefix(iri, prefixes),
+        format_iri=lambda iri: iri,
+    )
+
+
+SERVICE_QUERY = f"""PREFIX remote: <{REMOTE}>
+SELECT ?value WHERE {{
+  ex:place_1 geo:hasGeometry/geo:asWKT ?wkt .
+  SERVICE remote: {{
+    _:config remote:endpoint <http://example.org/raster> ;
+      remote:input ?wkt ; remote:output ?value .
+  }}
+}}"""
+
+
+def test_query_iris_resolves_query_prefixes(manager):
+    iris = query_iris(manager, SERVICE_QUERY)
+    assert iris == {
+        EX + "place_1",
+        REMOTE,
+        REMOTE + "endpoint",
+        "http://example.org/raster",
+        REMOTE + "input",
+        REMOTE + "output",
+    }
+
+
+def test_query_iris_skips_service(manager):
+    iris = query_iris(manager, SERVICE_QUERY, skip_service=True)
+    assert iris == {EX + "place_1"}
+
+
+def test_check_known_ignores_service(manager):
+    check_known(manager, SERVICE_QUERY, {EX + "place_1"})
+    with pytest.raises(FunctionCallException, match="without being known"):
+        check_known(manager, SERVICE_QUERY, set())
+
+
+def test_check_known_undefined_prefix(manager):
+    sparql = "SELECT ?x WHERE { ?x foo:bar ex:place_1 . ?x foo:baz ?y }"
+    with pytest.raises(FunctionCallException) as exc:
+        check_known(manager, sparql, {EX + "place_1"})
+    message = str(exc.value)
+    assert "foo: (e.g. foo:bar)" in message
+    assert "neither declared in the query nor common or example prefixes" in message
