@@ -55,6 +55,8 @@
 
   .example {
     display: grid;
+    /* does not grow with wide content like queries or tables */
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--spacing-sm);
     padding-bottom: var(--spacing-sm);
   }

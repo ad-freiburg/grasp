@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { wsEndpoint, kgEndpoint, COPYRIGHT, MATERIAL_URL } from '../constants.js';
   import StepCard from './StepCard.svelte';
   import OutputCard from './OutputCard.svelte';
@@ -30,7 +30,8 @@
   $: hasSteps = steps.length > 0;
   $: hasOutput = output !== null;
   $: hasResult = hasSteps || hasOutput || error !== null;
-  $: question, autoResize();
+  // after the update, filling the input can change its width on phones
+  $: question, tick().then(autoResize);
 
   $: skeletonsStep = steps.find(s => s.type === 'skeletons') ?? null;
   $: trace = buildTrace(steps, hasOutput);
@@ -237,6 +238,12 @@
     }
   }
 
+  // tapping a button must not blur the input, on phones that would move
+  // the buttons back next to it before the click lands
+  function keepInputFocus(event) {
+    if (document.activeElement === textareaEl) event.preventDefault();
+  }
+
   function autoResize() {
     if (!textareaEl) return;
     textareaEl.style.height = 'auto';
@@ -283,7 +290,7 @@
     <main class="main-content" class:main-content--centered={!hasResult}>
     <!-- Input -->
     <div class="input-section" class:input-section--running={running}>
-      <div class="input-row">
+      <div class="input-row" class:input-row--filled={question.trim().length > 0}>
         <textarea
           class="question-input"
           placeholder={connected ? (kg ? `Ask a question over ${kg}...` : 'Ask a question...') : 'Connecting...'}
@@ -291,10 +298,12 @@
           bind:this={textareaEl}
           on:keydown={handleKeydown}
           on:input={autoResize}
+          on:focus={autoResize}
+          on:blur={autoResize}
           rows="1"
           disabled={!connected || running}
         ></textarea>
-        <div class="input-actions">
+        <div class="input-actions" on:mousedown={keepInputFocus} role="presentation">
           {#if examples.length > 0}
             <div class="examples-dropdown" bind:this={examplesButtonEl}>
               <button
@@ -683,6 +692,43 @@
     display: inline-flex;
     align-items: center;
     gap: var(--spacing-xs);
+  }
+
+  @media (max-width: 600px) {
+    .input-section {
+      padding: var(--spacing-md);
+    }
+
+    /* the input gets its own line while it is focused or filled, the
+       buttons move below it */
+    .input-row--filled,
+    .input-row:has(> .question-input:focus) {
+      flex-wrap: wrap;
+    }
+
+    .input-row--filled > .question-input,
+    .input-row:has(> .question-input:focus) > .question-input {
+      flex-basis: 100%;
+    }
+
+    .input-row--filled > .input-actions,
+    .input-row:has(> .question-input:focus) > .input-actions {
+      margin-left: auto;
+    }
+
+    /* examples menu spans the input box instead of hanging off the
+       button, so it stays on screen */
+    .examples-dropdown {
+      position: static;
+    }
+
+    .examples-menu {
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      min-width: 0;
+      max-width: none;
+    }
   }
 
   .icon-button {

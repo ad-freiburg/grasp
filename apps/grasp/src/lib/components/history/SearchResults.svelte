@@ -5,6 +5,8 @@
 
   $: items = Array.isArray(result?.items) ? result.items : [];
   $: pages = `page ${result?.page} of ${result?.total_pages}${result?.more ? '+' : ''}`;
+  // older results name the type of their items, e.g. literal alternatives
+  $: label = result?.label || (items.length ? 'Results' : 'No results');
 </script>
 
 <div class="search-results">
@@ -13,7 +15,7 @@
   {/if}
 
   <p class="list-label">
-    {items.length ? 'Results' : 'No results'} <span class="list-label__meta">· {pages}</span>
+    {label} <span class="list-label__meta">· {pages}</span>
   </p>
   {#if items.length}
     <ol class="list-rows">

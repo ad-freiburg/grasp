@@ -5,6 +5,8 @@
   import { STT_TASKS, transcribeEndpoint } from '../constants.js';
 
   export let value = '';
+  // focus the input on load, not wanted when a shared conversation loads
+  export let autofocus = true;
   export let disabled = false;
   export let isRunning = false;
   export let isCancelling = false;
@@ -55,6 +57,7 @@
   let elSpecialInstructions = '';
   let elPreviousPayload = null;
   let elTextareaEl;
+  let elFieldsetEl;
   let elBackdropEl;
   let appliedInitialElRef = null;
 
@@ -182,11 +185,12 @@
     ? `Annotating only the highlighted part (characters ${elWindow.from}–${elWindow.to}), the rest is used as context.`
     : 'Annotating the whole text. Select a part of it above to only annotate that window.';
 
-  $: value, autoResize();
+  // after the update, filling the input can change its width on phones
+  $: value, tick().then(autoResize);
   $: if (isElTask) {
     elText;
     elTextareaEl;
-    elAutoResize();
+    tick().then(elAutoResize);
   }
   $: if (!isCeaTask && textareaEl && value === '' && previousValue !== '') {
     focusInput();
@@ -196,7 +200,7 @@
   onMount(async () => {
     detectDevice();
     await tick();
-    focusInput();
+    if (autofocus) focusInput();
     if (!isCeaTask) {
       autoResize();
     }
@@ -252,6 +256,15 @@
       clearElState();
     }
     focusInput();
+  }
+
+  // tapping a button must not blur the input, on phones that would move
+  // the buttons back next to it before the click lands
+  function keepInputFocus(event) {
+    const active = document.activeElement;
+    if (active === textareaEl || (isElTask && elFieldsetEl?.contains(active))) {
+      event.preventDefault();
+    }
   }
 
   function onKeydown(event) {
@@ -1006,7 +1019,12 @@
     </div>
   {/if}
   <div class="composer__input-wrapper">
-    <div class="composer__input-row">
+    <div
+      class="composer__input-row"
+      class:composer__input-row--filled={isElTask
+        ? elText.trim().length > 0
+        : !isCeaTask && value.trim().length > 0}
+    >
       {#if isCeaTask}
         <div class="composer__upload-fieldset">
           <input
@@ -1168,7 +1186,7 @@
           {/if}
         </div>
       {:else if isElTask}
-        <div class="composer__el-fieldset">
+        <div class="composer__el-fieldset" bind:this={elFieldsetEl}>
           <div class="composer__el-input-wrap">
             <div
               class="composer__el-backdrop"
@@ -1183,6 +1201,8 @@
               bind:this={elTextareaEl}
               rows="1"
               on:input={elAutoResize}
+              on:focus={elAutoResize}
+              on:blur={elAutoResize}
               on:select={handleElSelect}
               on:scroll={syncElScroll}
               disabled={disabled || isRunning || isCancelling}
@@ -1242,10 +1262,12 @@
           rows="1"
           on:keydown={onKeydown}
           on:input={autoResize}
+          on:focus={autoResize}
+          on:blur={autoResize}
         ></textarea>
       {/if}
       {#if showReloadAction}
-        <div class="composer__input-actions">
+        <div class="composer__input-actions" on:mousedown={keepInputFocus} role="presentation">
           <button
             type="button"
             class="icon-button icon-button--danger icon-button--reload"
@@ -1257,7 +1279,7 @@
           </button>
         </div>
       {:else if showActions}
-        <div class="composer__input-actions">
+        <div class="composer__input-actions" on:mousedown={keepInputFocus} role="presentation">
       {#if showCancel}
             <button
               type="button"
@@ -1544,6 +1566,27 @@
     outline: none;
   }
 
+  /* on phones the input gets its own line while it is focused or filled,
+     the buttons move below it */
+  @media (max-width: 600px) {
+    .composer__input-row--filled,
+    .composer__input-row:has(> .composer__input:focus),
+    .composer__input-row:has(> .composer__el-fieldset:focus-within) {
+      flex-wrap: wrap;
+    }
+
+    .composer__input-row--filled > .composer__el-fieldset,
+    .composer__input-row > .composer__el-fieldset:focus-within {
+      flex-basis: 100%;
+    }
+
+    .composer__input-row--filled > .composer__input-actions,
+    .composer__input-row:has(> .composer__input:focus) > .composer__input-actions,
+    .composer__input-row:has(> .composer__el-fieldset:focus-within) > .composer__input-actions {
+      margin-left: auto;
+    }
+  }
+
   .composer__el-fieldset {
     flex: 1;
     display: flex;
@@ -1596,6 +1639,13 @@
   .composer__el-input:focus {
     outline: none;
     border-color: rgba(52, 74, 154, 0.4);
+  }
+
+  /* a wrapped placeholder would be cut off in the one-line input */
+  .composer__el-input::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .composer__el-input:disabled {
