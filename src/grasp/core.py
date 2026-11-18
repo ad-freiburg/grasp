@@ -1,5 +1,4 @@
 import json
-import math
 import time
 import traceback
 import uuid
@@ -21,7 +20,15 @@ from grasp.manager.utils import (
     describe_index_type,
     get_common_sparql_prefixes,
 )
-from grasp.model import Message, Model, Response, ToolCall, ToolCallResult, get_model
+from grasp.model import (
+    LimitUsage,
+    Message,
+    Model,
+    Response,
+    ToolCall,
+    ToolCallResult,
+    get_model,
+)
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
@@ -36,15 +43,6 @@ from grasp.utils import (
     format_response,
     format_section,
 )
-
-
-def format_duration(seconds: int) -> str:
-    minutes, seconds = divmod(seconds, 60)
-    if minutes == 0:
-        return f"{seconds}s"
-    elif seconds == 0:
-        return f"{minutes:,}m"
-    return f"{minutes:,}m {seconds}s"
 
 
 @dataclass
@@ -65,19 +63,16 @@ class Limits:
             self.max_time is not None and self.elapsed >= self.max_time
         )
 
+    def usage(self) -> LimitUsage:
+        return LimitUsage(
+            steps=self.steps,
+            max_steps=self.max_steps,
+            elapsed=self.elapsed,
+            max_time=self.max_time,
+        )
+
     def format(self) -> str:
-        steps = min(self.steps, self.max_steps)
-        parts = [
-            f"{steps:,} of {self.max_steps:,} steps ({self.max_steps - steps:,} left)"
-        ]
-        if self.max_time is not None:
-            used = min(self.elapsed, self.max_time)
-            parts.append(
-                f"{format_duration(math.floor(used))} of "
-                f"{format_duration(math.ceil(self.max_time))} "
-                f"({format_duration(math.ceil(self.max_time - used))} left)"
-            )
-        return f"Used {', '.join(parts)}."
+        return self.usage().format()
 
 
 def system_instructions(
@@ -449,9 +444,12 @@ def generate(
             tool_call.result = result
             tool_call.elapsed = time.monotonic() - fn_start
             if config.show_limits:
-                # only shown to the model
+                # shown in the app, and in the formatted result only for the model
+                tool_call.limits = limits.usage()
                 tool_call.result = result.model_copy(
-                    update={"formatted": f"{result.formatted}\n\n{limits.format()}"}
+                    update={
+                        "formatted": f"{result.formatted}\n\n{tool_call.limits.format()}"
+                    }
                 )
 
             yield {
@@ -460,6 +458,7 @@ def generate(
                 "args": tool_call.args,
                 "result": result.model_dump(),
                 "elapsed": tool_call.elapsed,
+                "limits": tool_call.limits.model_dump() if tool_call.limits else None,
             }
 
             if task.done(tool_call.name):
