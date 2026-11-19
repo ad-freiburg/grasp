@@ -21,8 +21,14 @@ def test_function_definition():
     # strict mode: all arguments required, optional ones nullable
     assert parameters["additionalProperties"] is False
     assert set(parameters["required"]) == set(ListArgs.model_fields)
-    assert {"type": "null"} in parameters["properties"]["subject"]["anyOf"]
+    assert parameters["properties"]["subject"]["type"] == ["string", "null"]
     assert parameters["properties"]["kg"]["enum"] == ["wd", "fb"]
+    # titles and defaults are left out
+    assert "title" not in parameters
+    assert parameters["properties"]["page"] == {
+        "description": ListArgs.model_fields["page"].description,
+        "type": "integer",
+    }
 
 
 def test_args_validation():
