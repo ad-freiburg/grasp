@@ -1,4 +1,6 @@
-from grasp.function_args import ArgKind, arg_kinds, function_definition
+from pydantic import BaseModel, Field
+
+from grasp.function_args import ArgKind, Iri, Sparql, arg_kinds, function_definition
 from grasp.functions import ExecuteArgs, ListArgs
 from grasp.tasks.sparql_qa import AnswerArgs
 
@@ -14,7 +16,12 @@ def test_arg_kinds():
 
 
 def test_function_definition():
-    definition = function_definition("list", "List triples.", ListArgs, ["wd", "fb"])
+    definition = function_definition(
+        "list",
+        "List triples.",
+        ListArgs,
+        {"kg": ["wd", "fb"]},
+    )
     assert definition["name"] == "list"
     assert definition["strict"] is True
     parameters = definition["parameters"]
@@ -35,3 +42,25 @@ def test_args_validation():
     args = ListArgs.model_validate({"kg": "wd", "subject": "wd:Q1", "page": "2"})
     assert args.subject == "wd:Q1" and args.property is None and args.page == 2
     assert args.unclipped is False
+
+
+class Attempt(BaseModel):
+    kg: str = Field(description="The knowledge graph")
+    sparql: Sparql = Field(description="The query")
+
+
+class NestedArgs(BaseModel):
+    explanation: str = Field(description="Why")
+    best_attempt: Attempt | None = Field(default=None, description="The attempt")
+    items: list[Iri] = Field(default=[], description="Some items")
+
+
+def test_nested_args():
+    assert arg_kinds(NestedArgs) == {
+        "best_attempt.sparql": ArgKind.SPARQL,
+        "items": ArgKind.IRI,
+    }
+    definition = function_definition("cancel", "Cancel.", NestedArgs, {"kg": ["wd"]})
+    attempt = definition["parameters"]["$defs"]["Attempt"]
+    assert attempt["properties"]["kg"]["enum"] == ["wd"]
+    assert attempt["additionalProperties"] is False

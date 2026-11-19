@@ -129,7 +129,7 @@ For example, to execute a SPARQL query over Wikidata to find the jobs of \
 Albert Einstein, do the following:
 execute(kg="wikidata", sparql="SELECT ?job WHERE { wd:Q937 wdt:P106 ?job }")""",
             ExecuteArgs,
-            kgs,
+            {"kg": kgs},
         ),
         function_definition(
             "list",
@@ -146,7 +146,7 @@ Or to find examples of how the property "place of birth" is used in Wikidata, \
 do the following:
 list(kg="wikidata", property="wdt:P19")""",
             ListArgs,
-            kgs,
+            {"kg": kgs},
         ),
     ]
 

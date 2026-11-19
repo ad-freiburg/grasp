@@ -91,7 +91,7 @@ Provide your final SPARQL query and a concise answer to the user question \
 based on the query results. Only include the direct answer, no reasoning \
 or step summaries. This function will stop the generation process.""",
             AnswerArgs,
-            kgs,
+            {"kg": kgs},
         ),
         {
             "name": "cancel",

@@ -25,20 +25,30 @@ def function_definition(
     name: str,
     description: str,
     args: type[BaseModel],
-    kgs: list[str],
+    enums: dict[str, list[str]],
 ) -> dict[str, Any]:
-    # a strict definition as the model APIs take it, with the kg argument
-    # limited to the given knowledge graphs
+    # a strict definition as the model APIs take it; enums limit arguments to
+    # values known only at runtime, e.g. kg to the knowledge graphs, also in
+    # nested arguments
     parameters = strict_json_schema(args)
-    kg = parameters["properties"].get("kg")
-    if kg is not None:
-        kg["enum"] = kgs
+    add_enums(parameters, enums)
     return {
         "name": name,
         "description": description,
         "parameters": parameters,
         "strict": True,
     }
+
+
+def add_enums(schema: dict[str, Any], enums: dict[str, list[str]]) -> None:
+    for name, prop in schema.get("properties", {}).items():
+        if name in enums:
+            prop["enum"] = enums[name]
+        add_enums(prop, enums)
+    if "items" in schema:
+        add_enums(schema["items"], enums)
+    for definition in schema.get("$defs", {}).values():
+        add_enums(definition, enums)
 
 
 def strict_json_schema(args: type[BaseModel]) -> dict[str, Any]:
@@ -75,15 +85,21 @@ def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
-def arg_kinds(args: type[BaseModel]) -> dict[str, ArgKind]:
-    # the arguments marked as knowledge graph terms or SPARQL queries; the
-    # mark of an optional argument is within its type
+def arg_kinds(args: type[BaseModel], prefix: str = "") -> dict[str, ArgKind]:
+    # the arguments marked as knowledge graph terms or SPARQL queries, nested
+    # ones with dotted keys; the mark of an optional argument or of the items
+    # of a list is within its type
     kinds = {}
     for name, field in args.model_fields.items():
+        key = f"{prefix}.{name}" if prefix else name
         marks = list(field.metadata)
         for arg in get_args(field.annotation):
             marks.extend(getattr(arg, "__metadata__", ()))
         kind = next((mark for mark in marks if isinstance(mark, ArgKind)), None)
         if kind is not None:
-            kinds[name] = kind
+            kinds[key] = kind
+
+        for arg in [field.annotation, *get_args(field.annotation)]:
+            if isinstance(arg, type) and issubclass(arg, BaseModel):
+                kinds.update(arg_kinds(arg, key))
     return kinds
