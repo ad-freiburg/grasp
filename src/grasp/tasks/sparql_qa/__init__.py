@@ -2,9 +2,10 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from grasp.configs import GraspConfig
+from grasp.function_args import Sparql, function_definition
 from grasp.functions import check_known, find_manager, selection_groups
 from grasp.manager import KgManager, format_kgs
 from grasp.model import Message, ToolCall, ToolCallResult
@@ -65,6 +66,17 @@ should be an ASK query.',
     ]
 
 
+class AnswerArgs(BaseModel):
+    kg: str = Field(
+        description="The knowledge graph on which the final SPARQL query needs "
+        "to be executed",
+    )
+    sparql: Sparql = Field(description="The final SPARQL query")
+    answer: str = Field(
+        description="The answer to the question based on the SPARQL query results",
+    )
+
+
 def functions(
     managers: list[KgManager],
     config: GraspConfig,
@@ -72,36 +84,15 @@ def functions(
 ) -> list[dict]:
     kgs = [manager.kg for manager in managers]
     fns = [
-        {
-            "name": "answer",
-            "description": """\
+        function_definition(
+            "answer",
+            """\
 Provide your final SPARQL query and a concise answer to the user question \
 based on the query results. Only include the direct answer, no reasoning \
 or step summaries. This function will stop the generation process.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph on which the final SPARQL query \
-needs to be executed",
-                    },
-                    "sparql": {
-                        "type": "string",
-                        "description": "The final SPARQL query",
-                    },
-                    "answer": {
-                        "type": "string",
-                        "description": "The answer to the question based \
-on the SPARQL query results",
-                    },
-                },
-                "required": ["kg", "sparql", "answer"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+            AnswerArgs,
+            kgs,
+        ),
         {
             "name": "cancel",
             "description": """\
@@ -369,10 +360,11 @@ def output(
     }
 
     if answer is not None:
+        answer_args = AnswerArgs.model_validate(answer.args)
         output["type"] = "answer"
-        output["answer"] = answer.args["answer"].strip()
-        output["sparql"] = answer.args["sparql"]
-        output["kg"] = answer.args["kg"]
+        output["answer"] = answer_args.answer.strip()
+        output["sparql"] = answer_args.sparql
+        output["kg"] = answer_args.kg
         formatted = output["answer"]
 
     else:
@@ -529,8 +521,9 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         # locate the final query to verify: the answer's query, or a
         # cancel's best attempt (a concrete {sparql, kg} object)
         if fn_name == "answer":
-            kg = fn_args.get("kg")
-            sparql = fn_args.get("sparql")
+            answer_args = AnswerArgs.model_validate(fn_args)
+            kg = answer_args.kg
+            sparql = answer_args.sparql
         else:
             best_attempt = fn_args.get("best_attempt")
             if not best_attempt:

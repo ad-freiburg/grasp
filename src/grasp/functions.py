@@ -5,11 +5,12 @@ from itertools import chain
 from typing import TYPE_CHECKING, Iterable
 
 from grammar_utils.parse import LR1Parser  # type: ignore
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from search_rdf import EmbeddingIndex
 from universal_ml_utils.ops import partition_by
 
 from grasp.configs import GraspConfig, ShapeConfig
+from grasp.function_args import Iri, Sparql, Term, function_definition
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
@@ -55,6 +56,36 @@ MODALITY_QUERY_TYPES = {
 }
 
 
+class ExecuteArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to query")
+    sparql: Sparql = Field(description="The SPARQL query to execute")
+
+
+class ListArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to use")
+    subject: Iri | None = Field(
+        default=None,
+        description="IRI for constraining the subject (null for unconstrained)",
+    )
+    property: Iri | None = Field(
+        default=None,
+        description="IRI for constraining the property (null for unconstrained)",
+    )
+    object: Term | None = Field(
+        default=None,
+        description="IRI or literal for constraining the object (null for unconstrained)",
+    )
+    page: int = Field(
+        default=1,
+        description="Page number (1-indexed) for paginating results (default should be 1)",
+    )
+    unclipped: bool = Field(
+        default=False,
+        description="Whether to show full unclipped literal values "
+        "(default should be false, typically only needed to inspect very long string literals)",
+    )
+
+
 def kg_functions(
     managers: list[KgManager],
     fn_set: str,
@@ -88,36 +119,21 @@ def kg_functions(
     index_names = sorted(known_indices)
 
     fns = [
-        {
-            "name": "execute",
-            "description": """\
+        function_definition(
+            "execute",
+            """\
 Execute a SPARQL query and retrieve its results as a table if successful, \
 and an error message otherwise.
 
 For example, to execute a SPARQL query over Wikidata to find the jobs of \
 Albert Einstein, do the following:
 execute(kg="wikidata", sparql="SELECT ?job WHERE { wd:Q937 wdt:P106 ?job }")""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to query",
-                    },
-                    "sparql": {
-                        "type": "string",
-                        "description": "The SPARQL query to execute",
-                    },
-                },
-                "required": ["kg", "sparql"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "list",
-            "description": f"""\
+            ExecuteArgs,
+            kgs,
+        ),
+        function_definition(
+            "list",
+            f"""\
 List triples from the knowledge graph satisfying the given subject, property, \
 and object constraints. At most {list_k} results are returned per page (use \
 pagintion to see more results).
@@ -129,48 +145,9 @@ list(kg="wikidata", subject="wd:Q937")
 Or to find examples of how the property "place of birth" is used in Wikidata, \
 do the following:
 list(kg="wikidata", property="wdt:P19")""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to use",
-                    },
-                    "subject": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the subject (null for unconstrained)",
-                    },
-                    "property": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the property (null for unconstrained)",
-                    },
-                    "object": {
-                        "type": ["string", "null"],
-                        "description": "IRI or literal for constraining the object (null for unconstrained)",
-                    },
-                    "page": {
-                        "type": "integer",
-                        "description": "Page number (1-indexed) for paginating results (default should be 1)",
-                    },
-                    "unclipped": {
-                        "type": "boolean",
-                        "description": "Whether to show full unclipped literal values "
-                        "(default should be false, typically only needed to inspect very long string literals)",
-                    },
-                },
-                "required": [
-                    "kg",
-                    "page",
-                    "subject",
-                    "property",
-                    "object",
-                    "unclipped",
-                ],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+            ListArgs,
+            kgs,
+        ),
     ]
 
     if fn_set == "base":
@@ -596,10 +573,11 @@ def call_function(
     example_indices: dict | None = None,
 ) -> str | ToolCallResult:
     if fn_name == "execute":
+        execute_args = ExecuteArgs.model_validate(fn_args)
         result = execute_sparql(
             managers,
-            fn_args["kg"],
-            fn_args["sparql"],
+            execute_args.kg,
+            execute_args.sparql,
             config.result_max_rows,
             config.result_max_columns,
             known,
@@ -611,14 +589,15 @@ def call_function(
         return result.tool_result()
 
     elif fn_name == "list":
+        list_args = ListArgs.model_validate(fn_args)
         return list_triples(
             managers,
-            fn_args["kg"],
-            fn_args.get("subject"),
-            fn_args.get("property"),
-            fn_args.get("object"),
-            fn_args.get("page") or 1,
-            fn_args.get("unclipped") or False,
+            list_args.kg,
+            list_args.subject,
+            list_args.property,
+            list_args.object,
+            list_args.page,
+            list_args.unclipped,
             config.list_k,
             known,
             config.sparql_request_timeout,
