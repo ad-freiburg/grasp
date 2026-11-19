@@ -1,7 +1,5 @@
-# Arguments of functions as pydantic models: the definitions for the model
-# APIs are generated from them, independent of their SDKs, and the arguments
-# of function calls are validated with them; annotations mark arguments that
-# are knowledge graph terms or SPARQL queries
+# Function arguments as pydantic models, for definitions independent of model
+# SDKs and validated calls; annotations mark KG terms and SPARQL queries
 
 from enum import StrEnum
 from typing import Annotated, Any, get_args
@@ -27,9 +25,8 @@ def function_definition(
     args: type[BaseModel],
     enums: dict[str, list[str]],
 ) -> dict[str, Any]:
-    # a strict definition as the model APIs take it; enums limit arguments to
-    # values known only at runtime, e.g. kg to the knowledge graphs, also in
-    # nested arguments
+    # strict definition for the model APIs; enums limit arguments to values
+    # known at runtime, e.g. kg, also nested ones
     parameters = strict_json_schema(args)
     add_enums(parameters, enums)
     return {
@@ -52,9 +49,8 @@ def add_enums(schema: dict[str, Any], enums: dict[str, list[str]]) -> None:
 
 
 def strict_json_schema(args: type[BaseModel]) -> dict[str, Any]:
-    # the JSON schema of the arguments for the strict mode of the model APIs:
     # all properties required and no others, nullable ones with a null type;
-    # titles and defaults are left out, defaults only apply when validating
+    # no titles and defaults, defaults only apply when validating
     return strict_schema(args.model_json_schema())
 
 
@@ -86,9 +82,8 @@ def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def arg_kinds(args: type[BaseModel], prefix: str = "") -> dict[str, ArgKind]:
-    # the arguments marked as knowledge graph terms or SPARQL queries, nested
-    # ones with dotted keys; the mark of an optional argument or of the items
-    # of a list is within its type
+    # marked arguments, nested ones with dotted keys; marks of optional
+    # arguments and list items are within their type
     kinds = {}
     for name, field in args.model_fields.items():
         key = f"{prefix}.{name}" if prefix else name
