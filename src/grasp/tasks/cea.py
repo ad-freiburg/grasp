@@ -1,11 +1,12 @@
 import sys
 from typing import Any, Iterator
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from universal_ml_utils.table import generate_table
 
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
+from grasp.function_args import Iri, function_definition
 from grasp.functions import find_manager
 from grasp.manager import KgManager
 from grasp.model import Message
@@ -267,74 +268,56 @@ You may need to adapt your annotations based on new insights along the way.
 annotation process."""
 
 
+class AnnotateArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to use for the annotation")
+    row: int = Field(
+        description="The row index of the cell to annotate (0-based, ignoring header)",
+    )
+    column: int = Field(
+        description="The column index of the cell to annotate (0-based, ignoring "
+        "header)",
+    )
+    entity: Iri | None = Field(
+        description="The IRI of the entity to annotate the cell with, or null if "
+        "unknown",
+    )
+
+
+class DeleteAnnotationArgs(BaseModel):
+    row: int = Field(
+        description="The row index of the cell to clear (0-based, ignoring header)",
+    )
+    column: int = Field(
+        description="The column index of the cell to clear (0-based, ignoring header)",
+    )
+
+
 def functions(managers: list[KgManager]) -> list[dict]:
     kgs = [manager.kg for manager in managers]
-    fns = [
-        {
-            "name": "annotate",
-            "description": """\
+    return [
+        function_definition(
+            "annotate",
+            """\
 Annotate a cell in the table with an entity from the specified knowledge graph.
 This function overwrites any previous annotation of the cell.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to use for the annotation",
-                    },
-                    "row": {
-                        "type": "integer",
-                        "description": "The row index of the cell to annotate (0-based, ignoring header)",
-                    },
-                    "column": {
-                        "type": "integer",
-                        "description": "The column index of the cell to annotate (0-based, ignoring header)",
-                    },
-                    "entity": {
-                        "type": ["string", "null"],
-                        "description": "The IRI of the entity to annotate the cell with, or null if unknown",
-                    },
-                },
-                "required": ["kg", "row", "column", "entity"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "delete_annotation",
-            "description": "Delete the annotation of a cell in the table.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "row": {
-                        "type": "integer",
-                        "description": "The row index of the cell to clear (0-based, ignoring header)",
-                    },
-                    "column": {
-                        "type": "integer",
-                        "description": "The column index of the cell to clear (0-based, ignoring header)",
-                    },
-                },
-                "required": ["row", "column"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "show_annotations",
-            "description": "Show the current annotations of the rows to annotate, "
+            AnnotateArgs,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "delete_annotation",
+            "Delete the annotation of a cell in the table.",
+            DeleteAnnotationArgs,
+        ),
+        function_definition(
+            "show_annotations",
+            "Show the current annotations of the rows to annotate, "
             "including information about the annotated entities.",
-            # an empty object schema makes some vllm models generate endlessly
-            "parameters": {},
-        },
-        {
-            "name": "stop",
-            "description": "Finalize your annotations and stop the annotation process.",
-            "parameters": {},
-        },
+        ),
+        function_definition(
+            "stop",
+            "Finalize your annotations and stop the annotation process.",
+        ),
     ]
-    return fns
 
 
 def annotate(
@@ -482,12 +465,13 @@ def call_function(
     show_state_after_annotate = cea_kwargs.get("show_state_after_annotate", False)
 
     if fn_name == "annotate":
+        annotate_args = AnnotateArgs.model_validate(fn_args)
         return annotate(
             managers,
-            fn_args["kg"],
-            fn_args["row"],
-            fn_args["column"],
-            fn_args["entity"],
+            annotate_args.kg,
+            annotate_args.row,
+            annotate_args.column,
+            annotate_args.entity,
             state,
             known,
             know_before_annotate,
@@ -495,9 +479,10 @@ def call_function(
         )
 
     elif fn_name == "delete_annotation":
+        delete_args = DeleteAnnotationArgs.model_validate(fn_args)
         return delete_annotation(
-            fn_args["row"],
-            fn_args["column"],
+            delete_args.row,
+            delete_args.column,
             state,
             show_state_after_annotate,
         )

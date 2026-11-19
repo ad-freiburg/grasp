@@ -1,6 +1,9 @@
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import BaseModel, Field
 
 from grasp.configs import GraspConfig
+from grasp.function_args import Sparql, function_definition
 from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
 from grasp.model import Message, Response
@@ -9,50 +12,33 @@ from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import format_list
 
 
+class AnswerArgs(BaseModel):
+    sparql: Sparql = Field(description="The final cleaned SPARQL query")
+    questions: list[
+        Annotated[
+            str,
+            Field(description="A natural language question for the SPARQL query"),
+        ]
+    ] = Field(description="A list of natural language questions for the SPARQL query")
+
+
+class CancelArgs(BaseModel):
+    reason: str = Field(description="The reason for cancelling the task")
+
+
 def functions() -> list[dict]:
-    fns = [
-        {
-            "name": "answer",
-            "description": "Finalize your output and stop.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sparql": {
-                        "type": "string",
-                        "description": "The final cleaned SPARQL query",
-                    },
-                    "questions": {
-                        "type": "array",
-                        "description": "A list of natural language questions for the SPARQL query",
-                        "items": {
-                            "type": "string",
-                            "description": "A natural language question for the SPARQL query",
-                        },
-                    },
-                },
-                "required": ["sparql", "questions"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "cancel",
-            "description": "Stop the task without producing an output.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "The reason for cancelling the task",
-                    },
-                },
-                "required": ["reason"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+    return [
+        function_definition(
+            "answer",
+            "Finalize your output and stop.",
+            AnswerArgs,
+        ),
+        function_definition(
+            "cancel",
+            "Stop the task without producing an output.",
+            CancelArgs,
+        ),
     ]
-    return fns
 
 
 def rules() -> list[str]:
@@ -150,12 +136,13 @@ def output(
         tool_call = last.content.tool_calls[0]
         output: dict[str, Any] = {"formatted": "No output", **tool_call.args}
         if tool_call.name == "answer":
+            answer_args = AnswerArgs.model_validate(tool_call.args)
             output["type"] = "answer"
-            questions = tool_call.args["questions"]
+            questions = answer_args.questions
             output["formatted"] = f"Questions:\n{format_list(questions)}\n\n"
 
             result, formatted = prepare_sparql(
-                tool_call.args["sparql"],
+                answer_args.sparql,
                 managers,
                 max_rows,
                 max_columns,
@@ -167,9 +154,10 @@ def output(
             output["formatted"] += formatted
 
         elif tool_call.name == "cancel":
+            cancel_args = CancelArgs.model_validate(tool_call.args)
             output["type"] = "cancel"
-            output["reason"] = tool_call.args["reason"]
-            output["formatted"] = f"Cancelled:\n{tool_call.args['reason']}"
+            output["reason"] = cancel_args.reason
+            output["formatted"] = f"Cancelled:\n{cancel_args.reason}"
 
         else:
             raise ValueError(f"Unknown output tool call {tool_call.name}")

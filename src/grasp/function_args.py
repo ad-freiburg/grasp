@@ -22,13 +22,16 @@ Sparql = Annotated[str, ArgKind.SPARQL]
 def function_definition(
     name: str,
     description: str,
-    args: type[BaseModel],
-    enums: dict[str, list[str]],
+    args: type[BaseModel] | None = None,
+    enums: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     # strict definition for the model APIs; enums limit arguments to values
     # known at runtime, e.g. kg, also nested ones
+    if args is None:
+        # an empty object schema makes some vllm models generate endlessly
+        return {"name": name, "description": description, "parameters": {}}
     parameters = strict_json_schema(args)
-    add_enums(parameters, enums)
+    add_enums(parameters, enums or {})
     return {
         "name": name,
         "description": description,

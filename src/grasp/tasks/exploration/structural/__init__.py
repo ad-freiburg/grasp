@@ -8,11 +8,17 @@ from grasp.tasks.base import GraspTask
 from grasp.tasks.exploration import shared_rules
 from grasp.tasks.exploration.functions import call_function as call_note_function
 from grasp.tasks.exploration.structural.functions import (
+    MarkExploredArgs,
+    ShowExploredArgs,
     mark_explored,
     note_function_definitions,
     show_explored,
 )
-from grasp.tasks.functions import find_frequent, find_frequent_function_definition
+from grasp.tasks.functions import (
+    FindFrequentArgs,
+    find_frequent,
+    find_frequent_function_definition,
+)
 from grasp.tasks.sparql_qa.examples import (
     EXAMPLE_FUNCTIONS,
     call_function as call_example_function,
@@ -117,34 +123,37 @@ class StructuralExplorationTask(GraspTask):
         assert isinstance(self.config, NotesConfig)
         assert isinstance(self.state, StructuralExplorationState)
         if fn_name == "mark_explored":
+            mark_args = MarkExploredArgs.model_validate(fn_args)
             result = mark_explored(
                 self.managers,
-                fn_args["kg"],
+                mark_args.kg,
                 self.state.explored,
-                fn_args["iri"],
+                mark_args.iri,
                 self.explored_this_round,
             )
             self.explored_this_round = True
             return result
 
         elif fn_name == "show_explored":
+            show_args = ShowExploredArgs.model_validate(fn_args)
             return show_explored(
                 self.managers,
-                fn_args["kg"],
+                show_args.kg,
                 self.state.explored,
-                fn_args["page"],
+                show_args.page,
                 self.config.list_k,
             )
 
         elif fn_name == "find_frequent":
+            find_args = FindFrequentArgs.model_validate(fn_args)
             return find_frequent(
                 self.managers,
-                fn_args["kg"],
-                fn_args["position"],
-                fn_args.get("subject"),
-                fn_args.get("property"),
-                fn_args.get("object"),
-                fn_args.get("page", 1),
+                find_args.kg,
+                find_args.position,
+                find_args.subject,
+                find_args.property,
+                find_args.object,
+                find_args.page,
                 self.config.list_k,
                 known,
                 self.config.sparql_request_timeout,

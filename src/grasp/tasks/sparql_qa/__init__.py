@@ -77,6 +77,26 @@ class AnswerArgs(BaseModel):
     )
 
 
+class BestAttempt(BaseModel):
+    sparql: Sparql = Field(description="The best SPARQL query so far")
+    kg: str = Field(
+        description="The knowledge graph on which the SPARQL query needs to be "
+        "executed",
+    )
+
+
+class CancelArgs(BaseModel):
+    explanation: str = Field(
+        description="A detailed explanation of why you could not find a "
+        "satisfactory SPARQL query",
+    )
+    best_attempt: BestAttempt | None = Field(
+        default=None,
+        description="Your best attempt at a SPARQL query so far, can be omitted "
+        "if there is none",
+    )
+
+
 def functions(
     managers: list[KgManager],
     config: GraspConfig,
@@ -93,45 +113,15 @@ or step summaries. This function will stop the generation process.""",
             AnswerArgs,
             {"kg": kgs},
         ),
-        {
-            "name": "cancel",
-            "description": """\
+        function_definition(
+            "cancel",
+            """\
 If you are unable to find a SPARQL query that answers the question well, \
 you can call this function instead of the answer function. This function will \
 stop the generation process.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "explanation": {
-                        "type": "string",
-                        "description": "A detailed explanation of why you \
-could not find a satisfactory SPARQL query",
-                    },
-                    "best_attempt": {
-                        "type": ["object", "null"],
-                        "description": "Your best attempt at a SPARQL query so far, \
-can be omitted if there is none",
-                        "properties": {
-                            "sparql": {
-                                "type": "string",
-                                "description": "The best SPARQL query so far",
-                            },
-                            "kg": {
-                                "type": "string",
-                                "enum": kgs,
-                                "description": "The knowledge graph on which \
-the SPARQL query needs to be executed",
-                            },
-                        },
-                        "required": ["sparql", "kg"],
-                        "additionalProperties": False,
-                    },
-                },
-                "required": ["explanation", "best_attempt"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+            CancelArgs,
+            {"kg": kgs},
+        ),
     ]
 
     fns.extend(example_functions(config, example_indices))
@@ -359,12 +349,13 @@ def output(
         "endpoint": None,
     }
 
+    # answers and cancels can also be parsed from the last message, e.g. a
+    # query without kg, so their arguments are read without validation
     if answer is not None:
-        answer_args = AnswerArgs.model_validate(answer.args)
         output["type"] = "answer"
-        output["answer"] = answer_args.answer.strip()
-        output["sparql"] = answer_args.sparql
-        output["kg"] = answer_args.kg
+        output["answer"] = answer.args["answer"].strip()
+        output["sparql"] = answer.args["sparql"]
+        output["kg"] = answer.args["kg"]
         formatted = output["answer"]
 
     else:
@@ -525,13 +516,12 @@ class SparqlQaTask(GraspTask, FeedbackTask):
             kg = answer_args.kg
             sparql = answer_args.sparql
         else:
-            best_attempt = fn_args.get("best_attempt")
-            if not best_attempt:
+            best_attempt = CancelArgs.model_validate(fn_args).best_attempt
+            if best_attempt is None:
                 return result
 
-            assert isinstance(best_attempt, dict)
-            kg = best_attempt.get("kg")
-            sparql = best_attempt.get("sparql")
+            kg = best_attempt.kg
+            sparql = best_attempt.sparql
 
         assert kg is not None and sparql is not None, "kg and sparql must be provided"
 

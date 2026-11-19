@@ -28,13 +28,23 @@ from grasp.sparql.utils import (
     load_property_info_sparql,
 )
 from grasp.tasks.auto_setup.functions import (
+    AddPrefixArgs,
+    DeletePrefixArgs,
+    SetDescriptionArgs,
+    SetQueryArgs,
+    ShowIndexSetupArgs,
+    UpdatePrefixArgs,
     index_functions,
     info_functions,
     validate_index_sparql,
     validate_info_sparql,
 )
 from grasp.tasks.base import GraspTask
-from grasp.tasks.functions import find_frequent, find_frequent_function_definition
+from grasp.tasks.functions import (
+    FindFrequentArgs,
+    find_frequent,
+    find_frequent_function_definition,
+)
 from grasp.utils import FunctionCallException, format_prefixes, get_index_dir
 
 # maps index name to index sparql and info sparql reference defaults,
@@ -371,14 +381,15 @@ and repeat, otherwise stop."""
         manager = self.managers[0]
 
         if fn_name == "find_frequent":
+            find_args = FindFrequentArgs.model_validate(fn_args)
             return find_frequent(
                 self.managers,
-                fn_args["kg"],
-                fn_args["position"],
-                fn_args.get("subject"),
-                fn_args.get("property"),
-                fn_args.get("object"),
-                fn_args.get("page", 1),
+                find_args.kg,
+                find_args.position,
+                find_args.subject,
+                find_args.property,
+                find_args.object,
+                find_args.page,
                 self.config.list_k,
                 known,
                 self.config.sparql_request_timeout,
@@ -389,7 +400,7 @@ and repeat, otherwise stop."""
             return self.show_setup()
 
         elif fn_name == "show_index_setup":
-            index = fn_args["index"]
+            index = ShowIndexSetupArgs.model_validate(fn_args).index
             if index not in other_index_setups(manager, self.input["name"]):
                 raise FunctionCallException(f"No setup found for the {index} index")
             # use a fresh empty `known` so the running self.known set
@@ -398,19 +409,29 @@ and repeat, otherwise stop."""
             return format_index_state(state, manager)
 
         elif fn_name == "set_query":
-            return self.set_query(manager, **fn_args, known=known)
+            query_args = SetQueryArgs.model_validate(fn_args)
+            return self.set_query(
+                manager,
+                query_args.type,
+                query_args.sparql,
+                known,
+            )
 
         elif fn_name == "add_prefix":
-            return self.add_prefix(manager, fn_args["short"], fn_args["namespace"])
+            add_args = AddPrefixArgs.model_validate(fn_args)
+            return self.add_prefix(manager, add_args.short, add_args.namespace)
 
         elif fn_name == "delete_prefix":
-            return self.delete_prefix(manager, fn_args["short"])
+            delete_args = DeletePrefixArgs.model_validate(fn_args)
+            return self.delete_prefix(manager, delete_args.short)
 
         elif fn_name == "update_prefix":
-            return self.update_prefix(manager, fn_args["short"], fn_args["namespace"])
+            update_args = UpdatePrefixArgs.model_validate(fn_args)
+            return self.update_prefix(manager, update_args.short, update_args.namespace)
 
         elif fn_name == "set_description":
-            return self.set_description(fn_args["description"])
+            description_args = SetDescriptionArgs.model_validate(fn_args)
+            return self.set_description(description_args.description)
 
         elif fn_name == "stop":
             return "Stopping"
