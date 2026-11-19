@@ -133,6 +133,67 @@ class GetClassShapeArgs(BaseModel):
     )
 
 
+class SearchFilterArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    index: str = Field(description="The index to search in")
+    sparql: Sparql | None = Field(
+        description="The SPARQL query for filtering or null for an unconstrained "
+        "search",
+    )
+    query: str = Field(description="The search query")
+    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+
+
+QUERY_TYPE_DESCRIPTION = "How to interpret the query string: " + ", ".join(
+    f'"{query_type}" for {desc}'
+    for query_types in MODALITY_QUERY_TYPES.values()
+    for query_type, desc in query_types
+)
+
+
+# offered when more than one modality is known, otherwise the query is text
+class MultimodalSearchFilterArgs(SearchFilterArgs):
+    query_type: Literal["image", "text"] = Field(
+        default="text",
+        description=QUERY_TYPE_DESCRIPTION,
+    )
+
+
+class SearchConstraints(BaseModel):
+    subject: Iri | None = Field(
+        description="IRI for constraining the subject (null for unconstrained)",
+    )
+    property: Iri | None = Field(
+        description="IRI for constraining the property (null for unconstrained)",
+    )
+    object: Term | None = Field(
+        description="IRI or literal for constraining the object (null for "
+        "unconstrained)",
+    )
+
+
+class SearchConstraintsArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    index: str = Field(description="The index to search in")
+    position: Literal["subject", "property", "object"] = Field(
+        description="The position/type of item to look for",
+    )
+    query: str = Field(description="The search query")
+    constraints: SearchConstraints | None = Field(
+        default=None,
+        description="Constraints for the search (null for unconstrained)",
+    )
+    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+
+
+# offered when more than one modality is known, otherwise the query is text
+class MultimodalSearchConstraintsArgs(SearchConstraintsArgs):
+    query_type: Literal["image", "text"] = Field(
+        default="text",
+        description=QUERY_TYPE_DESCRIPTION,
+    )
+
+
 def kg_functions(
     managers: list[KgManager],
     fn_set: str,
@@ -208,11 +269,6 @@ list(kg="wikidata", property="wdt:P19")""",
     has_property_index = "properties" in known_indices
     has_literal_index = "literals" in known_indices
     has_class_index = "classes" in known_indices
-
-    page_prop = {
-        "type": "integer",
-        "description": PAGE_DESCRIPTION,
-    }
 
     if fn_set in ["search", "search_extended", "all"]:
         if has_entity_index:
@@ -326,50 +382,21 @@ query="restaurant", index="literals", page=1)""",
                 ),
             )
 
-    # prepare query type arg
-    query_types = [typ for mod in known_modalities for typ in MODALITY_QUERY_TYPES[mod]]
-    query_type_prop = {
-        "type": "string",
-        "enum": sorted(qt for qt, _ in query_types),
-        "description": "How to interpret the query string: "
-        + ", ".join(f'"{qt}" for {desc}' for qt, desc in query_types),
-    }
+    # query types only with more than one modality
+    multimodal = len(known_modalities) > 1
+    filter_model = MultimodalSearchFilterArgs if multimodal else SearchFilterArgs
+    constraints_model = (
+        MultimodalSearchConstraintsArgs if multimodal else SearchConstraintsArgs
+    )
 
     if fn_set in ["search_filter", "all"] and index_names:
-        search_filter_props = {
-            "kg": {
-                "type": "string",
-                "enum": kgs,
-                "description": "The knowledge graph to search",
-            },
-            "index": {
-                "type": "string",
-                "enum": index_names,
-                "description": "The index to search in",
-            },
-            "sparql": {
-                "type": ["string", "null"],
-                "description": "The SPARQL query for filtering or null for an unconstrained search",
-            },
-            "query": {
-                "type": "string",
-                "description": "The search query",
-            },
-            "page": page_prop,
-        }
-        search_filter_required = ["kg", "index", "sparql", "query", "page"]
-
-        if len(query_types) > 1:
-            search_filter_props["query_type"] = query_type_prop
-            search_filter_required.append("query_type")
-
         search_filter_name = (
             "search" if fn_set == "search_filter" else "search_with_filter"
         )
         fns.append(
-            {
-                "name": search_filter_name,
-                "description": f"""\
+            function_definition(
+                search_filter_name,
+                f"""\
 Search for knowledge graph items in a context-sensitive way by specifying a filter \
 SPARQL query together with a search query. The SPARQL query must be a single-column SELECT \
 query returning knowledge graph identifiers (IRIs or literals). The search is then restricted \
@@ -384,79 +411,19 @@ Or to search for properties of Albert Einstein related to his birth in \
 Wikidata, do the following:
 {search_filter_name}(kg="wikidata", index="properties", sparql="SELECT DISTINCT ?p WHERE {{ wd:Q937 ?p ?o }}", \
 query="birth", page=1)""",
-                "parameters": {
-                    "type": "object",
-                    "properties": search_filter_props,
-                    "required": search_filter_required,
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
+                filter_model,
+                {"kg": kgs, "index": index_names},
+            ),
         )
 
     if fn_set == "search_constraints" and index_names:
-        search_constraints_props = {
-            "kg": {
-                "type": "string",
-                "enum": kgs,
-                "description": "The knowledge graph to search",
-            },
-            "index": {
-                "type": "string",
-                "enum": index_names,
-                "description": "The index to search in",
-            },
-            "position": {
-                "type": "string",
-                "enum": ["subject", "property", "object"],
-                "description": "The position/type of item to look for",
-            },
-            "query": {
-                "type": "string",
-                "description": "The search query",
-            },
-            "constraints": {
-                "type": ["object", "null"],
-                "description": "Constraints for the search (null for unconstrained)",
-                "properties": {
-                    "subject": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the subject (null for unconstrained)",
-                    },
-                    "property": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the property (null for unconstrained)",
-                    },
-                    "object": {
-                        "type": ["string", "null"],
-                        "description": "IRI or literal for constraining the object (null for unconstrained)",
-                    },
-                },
-                "required": ["subject", "property", "object"],
-                "additionalProperties": False,
-            },
-            "page": page_prop,
-        }
-        search_constraints_required = [
-            "kg",
-            "index",
-            "position",
-            "query",
-            "constraints",
-            "page",
-        ]
-
-        if len(query_types) > 1:
-            search_constraints_props["query_type"] = query_type_prop
-            search_constraints_required.append("query_type")
-
         search_constraints_name = (
             "search" if fn_set == "search_constraints" else "search_with_constraints"
         )
         fns.append(
-            {
-                "name": search_constraints_name,
-                "description": f"""\
+            function_definition(
+                search_constraints_name,
+                f"""\
 Search for knowledge graph items at a particular position (subject, property, or object) \
 with optional constraints. If constraints are provided, they are used to limit the search \
 space accordingly. At most {search_k} results are returned per page (use pagination \
@@ -469,14 +436,9 @@ Or to search for properties of Albert Einstein related to his birth in Wikidata,
 do the following:
 {search_constraints_name}(kg="wikidata", index="properties", position="property", query="birth", \
 constraints={{"subject": "wd:Q937"}}, page=1)""",
-                "parameters": {
-                    "type": "object",
-                    "properties": search_constraints_props,
-                    "required": search_constraints_required,
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
+                constraints_model,
+                {"kg": kgs, "index": index_names},
+            ),
         )
 
     return fns
@@ -625,38 +587,41 @@ def call_function(
     elif fn_name == "search_with_constraints" or (
         fn_name == "search" and config.fn_set == "search_constraints"
     ):
+        constraints_args = MultimodalSearchConstraintsArgs.model_validate(fn_args)
+        constraints = constraints_args.constraints
         return search_with_constraints(
             managers,
-            fn_args["kg"],
-            fn_args["index"],
-            fn_args["position"],
-            fn_args["query"],
-            fn_args.get("constraints"),
+            constraints_args.kg,
+            constraints_args.index,
+            constraints_args.position,
+            constraints_args.query,
+            constraints.model_dump() if constraints is not None else None,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            constraints_args.query_type,
             config.sparql_request_timeout,
             config.sparql_read_timeout,
-            page=fn_args.get("page") or 1,
+            page=constraints_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_with_filter" or (
         fn_name == "search" and config.fn_set == "search_filter"
     ):
+        filter_args = MultimodalSearchFilterArgs.model_validate(fn_args)
         return search_with_filter(
             managers,
-            fn_args["kg"],
-            fn_args["index"],
-            fn_args["sparql"],
-            fn_args["query"],
+            filter_args.kg,
+            filter_args.index,
+            filter_args.sparql,
+            filter_args.query,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            filter_args.query_type,
             config.know_before_use,
             config.sparql_request_timeout,
             config.sparql_read_timeout,
-            page=fn_args.get("page") or 1,
+            page=filter_args.page,
             max_pages=config.search_max_pages,
         )
 

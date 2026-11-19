@@ -1,6 +1,7 @@
 # Function arguments as pydantic models, for definitions independent of model
 # SDKs and validated calls; annotations mark KG terms and SPARQL queries
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated, Any, get_args
 
@@ -23,7 +24,7 @@ def function_definition(
     name: str,
     description: str,
     args: type[BaseModel] | None = None,
-    enums: dict[str, list[str]] | None = None,
+    enums: dict[str, Sequence[str | None]] | None = None,
 ) -> dict[str, Any]:
     # strict definition for the model APIs; enums limit arguments to values
     # known at runtime, e.g. kg, also nested ones
@@ -40,10 +41,10 @@ def function_definition(
     }
 
 
-def add_enums(schema: dict[str, Any], enums: dict[str, list[str]]) -> None:
+def add_enums(schema: dict[str, Any], enums: dict[str, Sequence[str | None]]) -> None:
     for name, prop in schema.get("properties", {}).items():
         if name in enums:
-            prop["enum"] = enums[name]
+            prop["enum"] = list(enums[name])
         add_enums(prop, enums)
     if "items" in schema:
         add_enums(schema["items"], enums)
