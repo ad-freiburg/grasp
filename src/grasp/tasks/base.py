@@ -68,6 +68,10 @@ class GraspTask(ABC):
         return input
 
     @property
+    def include_common_prefixes(self) -> bool:
+        return True
+
+    @property
     def default_input_field(self) -> str | None:
         return None
 

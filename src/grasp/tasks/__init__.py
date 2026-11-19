@@ -5,6 +5,8 @@ from grasp.manager import KgManager
 from grasp.tasks.auto_setup import AutoSetupTask
 from grasp.tasks.base import GraspTask
 from grasp.tasks.cea import CeaTask
+from grasp.tasks.construct_gen import ConstructGenTask
+from grasp.tasks.construct_gen.review import ConstructReviewTask
 from grasp.tasks.exploration import (
     FunctionalExplorationTask,
     StructuralExplorationTask,
@@ -47,6 +49,8 @@ _REGISTRY: dict[str, type[GraspTask]] = {
         NotesFromSamplesTask,
         AutoSetupTask,
         ShapesSetupTask,
+        ConstructGenTask,
+        ConstructReviewTask,
     ]
 }
 
