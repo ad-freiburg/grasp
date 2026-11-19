@@ -1,5 +1,5 @@
 from grasp.model import ToolCall
-from grasp.provenance.state import Provenance
+from grasp.provenance.state import Provenance, ProvenanceState
 from grasp.provenance.test_trace import (
     EX,
     NOTES,
@@ -100,8 +100,8 @@ def test_record_call():
     ]
     _, recorded = run(manager, provenance, calls)
 
-    assert provenance.shown == {EX + "place_1": "c1", EX + "x": "c2"}
-    assert provenance.used[EX + "x"] == "c1"
+    assert provenance.state.shown == {EX + "place_1": "c1", EX + "x": "c2"}
+    assert provenance.state.used[EX + "x"] == "c1"
     items = by_iri(recorded[2])
     assert items[EX + "place_1"]["status"] == "retrieved"
     assert items[EX + "place_1"]["shown_by"]["id"] == "c1"
@@ -141,25 +141,27 @@ def test_record_without_items():
     _, recorded = run(manager, provenance, [(answer, []), (search, [])])
     assert recorded == [None, None]
     # the query of a stopping call is the output, it uses no items
-    assert provenance.used == {}
+    assert provenance.state.used == {}
 
 
 def test_state_continues():
     manager = example_manager()
     # known items of an older conversation without their calls, and items
     # known from the setup, count as shown
-    provenance = Provenance({}, [], {"known": [EX + "old"]})
+    provenance = Provenance({}, [], ProvenanceState(known={EX + "old"}))
     provenance.known.add(EX + "setup")
-    provenance.mark_seen()
+    provenance.attribute_known()
     call = table_call("c1", "SELECT * WHERE { ?s ?p ?o }", [])
     messages, _ = run(manager, provenance, [(call, [EX + "new"])])
-    assert provenance.dump() == {
+    dumped = provenance.state.model_dump()
+    assert dumped == {
         "known": [EX + "new", EX + "old", EX + "setup"],
         "shown": {EX + "new": "c1"},
         "used": {},
     }
 
-    restored = Provenance({}, [], provenance.dump())
+    # as the app sends it back for a follow-up
+    restored = Provenance({}, [], ProvenanceState.model_validate(dumped))
     sparql = "SELECT ?v WHERE { ex:old ex:setup ex:new }"
     items = by_iri(restored.query(manager, sparql, messages))
     assert items[EX + "old"]["status"] == "retrieved"

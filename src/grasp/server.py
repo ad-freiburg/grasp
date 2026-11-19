@@ -33,6 +33,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from grasp.configs import ServerConfig
 from grasp.core import generate, load_notes, setup
 from grasp.model import Message
+from grasp.provenance.state import ProvenanceState
 from grasp.tasks import Task
 from grasp.examples import load_example_indices
 
@@ -40,7 +41,7 @@ from grasp.examples import load_example_indices
 class Past(BaseModel):
     messages: conlist(Message, min_length=1)  # type: ignore
     # provenance state of the past conversation
-    provenance: dict[str, Any]
+    provenance: ProvenanceState
 
 
 class Request(BaseModel):

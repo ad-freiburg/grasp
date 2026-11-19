@@ -29,6 +29,7 @@ from grasp.model import (
     ToolCallResult,
     get_model,
 )
+from grasp.provenance.state import ProvenanceState
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
@@ -177,7 +178,7 @@ def generate(
     notes: list[str] | None = None,
     example_indices: dict[str, ExampleIndex] | None = None,
     past_messages: list[Message] | None = None,
-    past_provenance: dict[str, Any] | None = None,
+    past_provenance: ProvenanceState | None = None,
     logger: Logger = get_logger("GRASP"),
     yield_output: bool = False,
     custom_model: Model | None = None,
@@ -211,7 +212,7 @@ def generate(
 
     input = task.setup(input)
     # items the setup made known were shown by no tool call
-    task.provenance.mark_seen()
+    task.provenance.attribute_known()
 
     # setup functions (after setup so tasks can configure based on input)
     fns = kg_functions(
@@ -564,7 +565,7 @@ def generate(
         "elapsed": end - limits.start,
         "error": error,
         "messages": [message.model_dump() for message in messages],
-        "provenance": task.provenance.dump(),
+        "provenance": task.provenance.state.model_dump(),
     }
 
     if yield_output:

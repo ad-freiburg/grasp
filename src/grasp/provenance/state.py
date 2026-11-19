@@ -5,7 +5,10 @@
 # and the ids of the calls are stored, references to the parts of the calls
 # are built from the messages when an item is used.
 
+from dataclasses import dataclass
 from typing import Any, Sequence
+
+from pydantic import BaseModel, field_serializer
 
 from grasp.functions import identifiers, iri_spans
 from grasp.manager import KgManager
@@ -19,8 +22,28 @@ from grasp.provenance.trace import (
     note_iris,
 )
 
-# tool calls of the messages by id, with their step
-Calls = dict[str, tuple[int, dict]]
+
+class ProvenanceState(BaseModel):
+    # what is stored in outputs and continued in follow-ups: the known items,
+    # and the ids of the tool calls that first showed and first used an item
+    known: set[str] = set()
+    shown: dict[str, str] = {}
+    used: dict[str, str] = {}
+
+    @field_serializer("known")
+    def sorted_known(self, known: set[str]) -> list[str]:
+        return sorted(known)
+
+
+@dataclass
+class TraceCall:
+    # a tool call of the messages as dict, with its step
+    step: int
+    call: dict
+
+
+# tool calls of the messages by id
+Calls = dict[str, TraceCall]
 
 
 class Provenance:
@@ -28,31 +51,24 @@ class Provenance:
         self,
         kg_notes: dict[str, list[str]],
         notes: list[str],
-        state: dict[str, Any] | None = None,
+        state: ProvenanceState | None = None,
     ) -> None:
-        state = state or {}
-        # passed to the functions, which add the items their results show
-        self.known: set[str] = set(state.get("known", []))
-        # ids of the tool calls that first showed and first used an item
-        self.shown: dict[str, str] = dict(state.get("shown", {}))
-        self.used: dict[str, str] = dict(state.get("used", {}))
-        # known items with a source or known without a tool call, e.g. from
-        # the task setup or older follow-ups
-        self.seen = set(self.known)
+        self.state = state or ProvenanceState()
+        # known items with a call that showed them, or known without one,
+        # e.g. from the task setup or older follow-ups
+        self.attributed = set(self.state.known)
         self.kg_notes = kg_notes
         self.notes = notes
         self.noted_by_kg: dict[str, dict[str, str]] = {}
 
-    def dump(self) -> dict[str, Any]:
-        return {
-            "known": sorted(self.known),
-            "shown": self.shown,
-            "used": self.used,
-        }
+    @property
+    def known(self) -> set[str]:
+        # passed to the functions, which add the items their results show
+        return self.state.known
 
-    def mark_seen(self) -> None:
+    def attribute_known(self) -> None:
         # items known so far without a tool call, e.g. from the task setup
-        self.seen |= self.known
+        self.attributed |= self.state.known
 
     def record(
         self,
@@ -64,7 +80,7 @@ class Provenance:
         # compared with the calls before; afterwards the items it showed and
         # used are part of the state. None for calls without a knowledge graph
         # or items, and for stopping calls, whose query is the output
-        new = self.known - self.seen
+        new = self.state.known - self.attributed
         manager = next(
             (m for m in managers if m.kg == tool_call.args.get("kg")),
             None,
@@ -76,13 +92,14 @@ class Provenance:
                 items = self.arg_items(manager, usage, messages)
             except Exception:
                 pass
-            for iris in usage[0].values():
+            used, _ = usage
+            for iris in used.values():
                 for iri in iris:
-                    self.used.setdefault(iri, tool_call.id)
+                    self.state.used.setdefault(iri, tool_call.id)
 
         for iri in new:
-            self.shown[iri] = tool_call.id
-        self.seen |= new
+            self.state.shown[iri] = tool_call.id
+        self.attributed |= new
         return items
 
     def query(
@@ -146,8 +163,8 @@ class Provenance:
     ) -> dict[str, Any]:
         # an item with its status and the calls that showed and first used it
         ids = identifiers(manager, iri)
-        shown = first_call(ids, self.shown, calls)
-        used = first_call(ids, self.used, calls)
+        shown = first_call(ids, self.state.shown, calls)
+        used = first_call(ids, self.state.used, calls)
         item: dict[str, Any] = {
             "identifier": iri,
             "written": written,
@@ -161,7 +178,7 @@ class Provenance:
 
         noted = self.noted(manager)
         note = next((noted[i] for i in ids if i in noted), None)
-        if shown is None and ids & self.seen:
+        if shown is None and ids & self.attributed:
             # known without a tool call that showed it
             item["status"] = "retrieved"
         elif shown is None and note is not None:
@@ -169,7 +186,7 @@ class Provenance:
             item["note"] = note
         elif shown is None:
             item["status"] = "unverified"
-        elif used is None or calls[shown][0] < calls[used][0]:
+        elif used is None or calls[shown].step < calls[used].step:
             item["status"] = "retrieved"
         else:
             item["status"] = "verified"
@@ -178,7 +195,7 @@ class Provenance:
 
 def tool_calls(messages: Sequence[Message | dict]) -> Calls:
     return {
-        call["id"]: (step, call)
+        call["id"]: TraceCall(step, call)
         for step, call in enumerate(iter_tool_calls(messages), start=1)
     }
 
@@ -186,10 +203,10 @@ def tool_calls(messages: Sequence[Message | dict]) -> Calls:
 def first_call(ids: set[str], sources: dict[str, str], calls: Calls) -> str | None:
     # the earliest call of the messages among the sources of the identifiers
     found = [sources[i] for i in ids if sources.get(i) in calls]
-    return min(found, key=lambda id: calls[id][0], default=None)
+    return min(found, key=lambda id: calls[id].step, default=None)
 
 
 def ref(manager: KgManager, iri: str, id: str, calls: Calls) -> dict[str, Any]:
-    step, call = calls[id]
-    usage = arg_usage(manager, call.get("args") or {})
-    return call_ref(manager, iri, call, step, usage)
+    traced = calls[id]
+    usage = arg_usage(manager, traced.call.get("args") or {})
+    return call_ref(manager, iri, traced.call, traced.step, usage)

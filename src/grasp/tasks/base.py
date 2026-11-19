@@ -4,7 +4,7 @@ from typing import Any
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
 from grasp.model import FunctionDefinition, Message, ToolCallResult
-from grasp.provenance.state import Provenance
+from grasp.provenance.state import Provenance, ProvenanceState
 from grasp.examples import Sample
 
 
@@ -28,7 +28,7 @@ class GraspTask(ABC):
         self,
         managers: list[KgManager],
         config: GraspConfig,
-        provenance: dict[str, Any] | None = None,
+        provenance: ProvenanceState | None = None,
         example_indices: dict | None = None,
         kg_notes: dict[str, list[str]] | None = None,
         notes: list[str] | None = None,

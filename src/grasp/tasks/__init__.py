@@ -1,8 +1,8 @@
 from enum import StrEnum
-from typing import Any
 
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
+from grasp.provenance.state import ProvenanceState
 from grasp.tasks.auto_setup import AutoSetupTask
 from grasp.tasks.base import GraspTask
 from grasp.tasks.cea import CeaTask
@@ -56,7 +56,7 @@ def get_task(
     task: str,
     managers: list[KgManager],
     config: GraspConfig,
-    provenance: dict[str, Any] | None = None,
+    provenance: ProvenanceState | None = None,
     example_indices: dict | None = None,
     kg_notes: dict[str, list[str]] | None = None,
     notes: list[str] | None = None,
