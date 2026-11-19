@@ -44,14 +44,27 @@ def add_enums(schema: dict[str, Any], enums: dict[str, list[str]]) -> None:
         add_enums(prop, enums)
     if "items" in schema:
         add_enums(schema["items"], enums)
-    for definition in schema.get("$defs", {}).values():
-        add_enums(definition, enums)
 
 
 def strict_json_schema(args: type[BaseModel]) -> dict[str, Any]:
-    # all properties required and no others, nullable ones with a null type;
-    # no titles and defaults, defaults only apply when validating
-    return strict_schema(args.model_json_schema())
+    # all properties required and no others, nullable ones with a null type,
+    # nested models inline; no titles and defaults, those only apply when validating
+    schema = args.model_json_schema()
+    definitions = schema.pop("$defs", {})
+    return strict_schema(inline_refs(schema, definitions))
+
+
+def inline_refs(schema: Any, definitions: dict[str, Any]) -> Any:
+    # replaces references to nested models with their definitions
+    if isinstance(schema, list):
+        return [inline_refs(item, definitions) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    if "$ref" in schema:
+        name = schema["$ref"].removeprefix("#/$defs/")
+        rest = {key: value for key, value in schema.items() if key != "$ref"}
+        schema = {**definitions[name], **rest}
+    return {key: inline_refs(value, definitions) for key, value in schema.items()}
 
 
 def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -66,16 +79,20 @@ def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
         schema["additionalProperties"] = False
     if "items" in schema:
         schema["items"] = strict_schema(schema["items"])
-    if "$defs" in schema:
-        schema["$defs"] = {
-            name: strict_schema(definition)
-            for name, definition in schema["$defs"].items()
-        }
     if "anyOf" in schema:
         variants = [strict_schema(variant) for variant in schema.pop("anyOf")]
-        if all(variant.keys() == {"type"} for variant in variants):
-            # e.g. a nullable string as ["string", "null"]
-            schema["type"] = [variant["type"] for variant in variants]
+        detailed = [variant for variant in variants if variant.keys() != {"type"}]
+        if len(detailed) <= 1 and all("type" in variant for variant in variants):
+            # e.g. a nullable string or nested model as ["string", "null"] or
+            # ["object", "null"], with the properties of the model
+            types = [variant["type"] for variant in variants]
+            details = {
+                key: value
+                for variant in detailed
+                for key, value in variant.items()
+                if key != "type"
+            }
+            schema = {"type": types, **schema, **details}
         else:
             schema["anyOf"] = variants
     return schema

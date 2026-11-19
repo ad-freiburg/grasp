@@ -61,6 +61,25 @@ def test_nested_args():
         "items": ArgKind.IRI,
     }
     definition = function_definition("cancel", "Cancel.", NestedArgs, {"kg": ["wd"]})
-    attempt = definition["parameters"]["$defs"]["Attempt"]
-    assert attempt["properties"]["kg"]["enum"] == ["wd"]
-    assert attempt["additionalProperties"] is False
+    # nested models inline, as in hand-written definitions
+    parameters = definition["parameters"]
+    assert "$defs" not in parameters
+    assert parameters["properties"]["best_attempt"] == {
+        "type": ["object", "null"],
+        "description": "The attempt",
+        "properties": {
+            "kg": {
+                "description": "The knowledge graph",
+                "type": "string",
+                "enum": ["wd"],
+            },
+            "sparql": {"description": "The query", "type": "string"},
+        },
+        "required": ["kg", "sparql"],
+        "additionalProperties": False,
+    }
+    assert parameters["properties"]["items"] == {
+        "description": "Some items",
+        "type": "array",
+        "items": {"type": "string"},
+    }
