@@ -53,11 +53,9 @@ def note_iris(manager: KgManager, notes: list[str]) -> dict[str, str]:
     terms = []
     for note in notes:
         data = note.encode()
-        # the lexer fails if the text ends within a possible token, e.g.
-        # "and" or "values.", a trailing space avoids that
         tokens = [
             (name, start, end)
-            for name, (start, end) in TEXT_PARSER.lex(note + " ")
+            for name, (start, end) in TEXT_PARSER.lex(note)
             if name is not None
         ]
         for i, (name, start, end) in enumerate(tokens):
