@@ -1,5 +1,16 @@
+<script context="module">
+  // statuses of items, for the query of the output and the arguments of tool
+  // calls
+  export const STATUS = {
+    retrieved: { text: 'surfaced before use', title: 'A tool result showed this item before it was used' },
+    verified: { text: 'surfaced after use', title: 'This item was used before a tool result showed it' },
+    noted: { text: 'from notes', title: 'No tool result showed this item, but the notes contain it' },
+    unverified: { text: 'never surfaced', title: 'No tool result showed this item, it may be made up' }
+  };
+</script>
+
 <script>
-  import { tick } from 'svelte';
+  import { getContext, tick } from 'svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
   import ExecutionResult from './ExecutionResult.svelte';
   import KgItem from './KgItem.svelte';
@@ -10,15 +21,13 @@
   export let qleverLink = null;
   // execution result as the model saw it, from the output
   export let result = null;
-  // trace provenance from the output
+  // trace provenance of the output or a tool call
   export let trace = null;
+  // the legend is only shown for the output
+  export let legend = true;
 
-  const STATUS = {
-    retrieved: { text: 'surfaced before use', title: 'A tool result showed this item before the query used it' },
-    verified: { text: 'surfaced after use', title: 'The query used this item before a tool result showed it' },
-    instructed: { text: 'from instruction', title: 'No tool result showed this item, but the instruction or its notes contain it' },
-    unverified: { text: 'never surfaced', title: 'No tool result showed this item, it may be made up' }
-  };
+  // tool calls by id, for the arguments of the calls items come from
+  const toolCalls = getContext('toolCalls');
 
   // tooltip over a query item: { item, left, top, width, above }
   let sparqlWrapEl;
@@ -112,8 +121,8 @@
     return item.label ? `${item.label} (${item.written})` : item.written;
   }
 
-  function callArgs(call) {
-    return Object.entries(call?.args ?? {})
+  function callArgs(ref) {
+    return Object.entries($toolCalls?.get(ref.id)?.args ?? {})
       .filter(([key]) => key !== 'kg')
       .map(([key, value]) => {
         let text = typeof value === 'string' ? value : JSON.stringify(value);
@@ -206,9 +215,9 @@
               <code>{shown.text}</code>
             {/if}
           </div>
-        {:else if tip.item.instruction}
-          <p class="tip__note">{STATUS.instructed.title}:</p>
-          <p class="tip__instruction">{tip.item.instruction.text}</p>
+        {:else if tip.item.note}
+          <p class="tip__note">{STATUS.noted.title}:</p>
+          <p class="tip__quote">{tip.item.note}</p>
         {:else if !tip.item.shown_by}
           <p class="tip__note">{STATUS.unverified.title}.</p>
         {/if}
@@ -230,7 +239,7 @@
     {/if}
   </div>
 
-  {#if traceItems.length > 0}
+  {#if legend && traceItems.length > 0}
     <p class="legend">
       {#each Object.entries(STATUS) as [status, info]}
         {#if statuses.has(status)}
@@ -292,8 +301,8 @@
     font-size: 0.82rem;
   }
 
-  /* the instruction line containing the item, like a shown result part */
-  .tip__instruction {
+  /* the note containing the item, like a shown result part */
+  .tip__quote {
     margin: 0;
     max-height: 10rem;
     overflow-y: auto;
@@ -422,7 +431,7 @@
     color: #6b5d12;
   }
 
-  .badge--instructed {
+  .badge--noted {
     background: color-mix(in srgb, var(--color-uni-blue) 14%, transparent);
     color: var(--color-uni-blue);
   }
@@ -462,7 +471,7 @@
     background: rgb(230, 200, 40);
   }
 
-  .swatch--instructed {
+  .swatch--noted {
     background: rgb(110, 140, 235);
   }
 

@@ -3,7 +3,8 @@ from types import SimpleNamespace
 import pytest
 
 from grasp.manager.utils import find_longest_prefix, get_common_sparql_prefixes
-from grasp.provenance.trace import instruction_iris, trace_provenance
+from grasp.model import ToolCall
+from grasp.provenance.trace import call_provenance, note_iris, trace_provenance
 from grasp.sparql.utils import load_iri_and_literal_parser, load_sparql_parser
 
 EX = "http://example.org/kg#"
@@ -35,57 +36,62 @@ SELECT ?value WHERE {{
 }}"""
 
 
-INSTRUCTION = f"""You are a question answering assistant.
-- Notes: the raster service is called with PREFIX remote: <{REMOTE}> and
-SERVICE remote: {{ _:config remote:endpoint <http://example.org/raster> }}.
-- Places link via ex:teilfläche; links like https://en.wikipedia.org/wiki/<Title>.
-- Use rdfs:label for labels, e.g. ex:place_<nr>."""
+NOTES = [
+    f"The raster service is called with PREFIX remote: <{REMOTE}> and "
+    "SERVICE remote: { _:config remote:endpoint <http://example.org/raster> }.",
+    "Places link via ex:teilfläche; links like https://en.wikipedia.org/wiki/<Title>.",
+    "Use rdfs:label for labels, e.g. ex:place_<nr>, and remote:output for values.",
+    "PREFIXES foo: <http://example.org/foo/> are no declaration, foo:bar is unknown.",
+]
 
 
-def test_instruction_iris(manager):
-    iris = instruction_iris(manager, [{"role": "system", "content": INSTRUCTION}])
+def test_note_iris(manager):
+    iris = note_iris(manager, NOTES)
     assert REMOTE in iris
-    assert REMOTE + "endpoint" in iris
+    assert iris[REMOTE + "endpoint"] == NOTES[0]
     assert "http://example.org/raster" in iris
-    assert EX + "teilfläche" in iris
-    assert iris[EX + "teilfläche"].startswith("- Places link")
+    assert iris[EX + "teilfläche"] == NOTES[1]
+    # prefixes declared in one note hold for the others
+    assert iris[REMOTE + "output"] == NOTES[2]
     # no relative IRIs, undefined prefixes or common vocabulary
     assert "Title" not in iris
-    assert not any(iri.startswith("Notes") for iri in iris)
+    assert not any(
+        iri.startswith(("Places", "https:", "http://example.org/foo/b")) for iri in iris
+    )
     assert "http://www.w3.org/2000/01/rdf-schema#label" not in iris
 
 
-def test_instruction_iris_only_system(manager):
-    assert instruction_iris(manager, [{"role": "user", "content": INSTRUCTION}]) == {}
+def table_call(id: str, sparql: str, shown: list[str]) -> dict:
+    return {
+        "id": id,
+        "name": "execute",
+        "args": {"kg": "example", "sparql": sparql},
+        "result": {
+            "type": "table",
+            "rows": [{"s": {"type": "uri", "value": iri}} for iri in shown],
+        },
+        "new_known": shown,
+    }
 
 
-def test_trace_status_from_instruction(manager):
+def assistant(*calls: dict) -> dict:
+    return {"role": "assistant", "content": {"tool_calls": list(calls)}}
+
+
+def test_trace_status_from_notes(manager):
     sparql = (
         f"PREFIX remote: <{REMOTE}>\n"
         "SELECT ?v WHERE { ex:place_1 ex:x ?v . ?v remote:endpoint ?e }"
     )
-    call = {
-        "id": "c1",
-        "name": "execute",
-        "args": {"kg": "example", "sparql": "SELECT * WHERE { ?s ?p ?o }"},
-        "result": {
-            "type": "table",
-            "rows": [{"s": {"type": "uri", "value": EX + "place_1"}}],
-        },
-        "new_known": [EX + "place_1"],
-    }
-    messages = [
-        {"role": "system", "content": INSTRUCTION},
-        {"role": "assistant", "content": {"tool_calls": [call]}},
-    ]
-    trace = trace_provenance(manager, sparql, messages)
+    call = table_call("c1", "SELECT * WHERE { ?s ?p ?o }", [EX + "place_1"])
+    trace = trace_provenance(manager, sparql, [assistant(call)], NOTES)
     assert trace is not None
-    status = {item["identifier"]: item["status"] for item in trace["items"]}
-    assert status[EX + "place_1"] == "retrieved"
-    assert status[REMOTE + "endpoint"] == "instructed"
-    assert status[EX + "x"] == "unverified"
-    item = next(i for i in trace["items"] if i["identifier"] == REMOTE + "endpoint")
-    assert "remote:endpoint" in item["instruction"]["text"]
+    items = {item["identifier"]: item for item in trace["items"]}
+    assert items[EX + "place_1"]["status"] == "retrieved"
+    assert items[EX + "place_1"]["shown_by"]["step"] == 1
+    assert items[REMOTE + "endpoint"]["status"] == "noted"
+    assert items[REMOTE + "endpoint"]["note"] == NOTES[0]
+    assert items[EX + "x"]["status"] == "unverified"
 
 
 def test_trace_shown_by_example(manager):
@@ -103,8 +109,7 @@ def test_trace_shown_by_example(manager):
         },
         "new_known": [REMOTE + "endpoint"],
     }
-    messages = [{"role": "assistant", "content": {"tool_calls": [call]}}]
-    trace = trace_provenance(manager, sparql, messages)
+    trace = trace_provenance(manager, sparql, [assistant(call)], [])
     assert trace is not None
     item = next(i for i in trace["items"] if i["identifier"] == REMOTE + "endpoint")
     assert item["status"] == "retrieved"
@@ -112,3 +117,67 @@ def test_trace_shown_by_example(manager):
     shown = item["shown_by"]["shown"]
     assert shown["type"] == "example" and shown["question"] == "Raster?"
     assert "remote:endpoint" in shown["line"]
+
+
+def test_trace_older_traces(manager):
+    call = table_call("c1", "SELECT * WHERE { ?s ?p ?o }", [EX + "place_1"])
+    del call["new_known"]
+    sparql = "SELECT ?v WHERE { ex:place_1 ex:x ?v }"
+    assert trace_provenance(manager, sparql, [assistant(call)], []) is None
+
+
+def test_call_provenance(manager):
+    # ex:x is used before it is shown, ex:place_1 shown before it is used
+    first = table_call("c1", "SELECT * WHERE { ?s ex:x ?o }", [EX + "place_1"])
+    second = table_call("c2", "SELECT * WHERE { ?s ?p ?o }", [EX + "x"])
+    current = ToolCall(
+        id="c3",
+        name="execute",
+        args={
+            "kg": "example",
+            "sparql": "SELECT ?v WHERE { ex:place_1 ex:x ?v . ?v ex:y ?w }",
+        },
+    )
+    messages = [assistant(first, second, current.model_dump())]
+
+    provenance = call_provenance([manager], messages, current, {}, [])
+    assert provenance is not None
+    items = {item["identifier"]: item for item in provenance["items"]}
+    assert items[EX + "place_1"]["status"] == "retrieved"
+    assert items[EX + "place_1"]["shown_by"]["id"] == "c1"
+    assert items[EX + "place_1"]["spans"] == [[18, 28]]
+    assert items[EX + "x"]["status"] == "verified"
+    assert items[EX + "x"]["first_used_by"]["id"] == "c1"
+    assert items[EX + "y"]["status"] == "unverified"
+
+
+def test_call_provenance_args(manager):
+    first = table_call("c1", "SELECT * WHERE { ?s ?p ?o }", [EX + "place_1"])
+    current = ToolCall(
+        id="c2",
+        name="list",
+        args={"kg": "example", "subject": "ex:place_1", "property": "ex:teilfläche"},
+    )
+    messages = [assistant(first, current.model_dump())]
+
+    provenance = call_provenance([manager], messages, current, {"example": NOTES}, [])
+    assert provenance is not None
+    items = {item["identifier"]: item for item in provenance["items"]}
+    assert items[EX + "place_1"]["args"] == ["subject"]
+    assert items[EX + "place_1"]["status"] == "retrieved"
+    assert items[EX + "teilfläche"]["args"] == ["property"]
+    assert items[EX + "teilfläche"]["status"] == "noted"
+
+
+def test_call_provenance_none(manager):
+    answer = ToolCall(
+        id="c1",
+        name="answer",
+        args={"kg": "example", "sparql": "SELECT ?v WHERE { ex:place_1 ex:x ?v }"},
+    )
+    messages = [assistant(answer.model_dump())]
+    assert call_provenance([manager], messages, answer, {}, []) is None
+
+    search = ToolCall(id="c2", name="search", args={"kg": "example", "query": "x"})
+    messages = [assistant(search.model_dump())]
+    assert call_provenance([manager], messages, search, {}, []) is None

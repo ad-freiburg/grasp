@@ -133,7 +133,7 @@
     border-bottom-color: rgb(230, 200, 40);
   }
 
-  .item--instructed {
+  .item--noted {
     background: rgba(110, 140, 235, 0.25);
     border-bottom-color: rgb(110, 140, 235);
   }

@@ -82,6 +82,13 @@ def load_iri_and_literal_parser() -> LR1Parser:
     return LR1Parser(iri_and_literal_grammar, iri_and_literal_lexer)
 
 
+def load_iri_text_parser() -> LR1Parser:
+    # only its lexer is used, to find IRIs and prefixed names in text
+    grammar = read_resource("grasp.sparql.grammar", "iri_text.y")
+    lexer = read_resource("grasp.sparql.grammar", "iri_text.l")
+    return LR1Parser(grammar, lexer)
+
+
 def find_longest_prefix(iri: str, prefixes: dict[str, str]) -> tuple[str, str] | None:
     longest = None
     for short, long in prefixes.items():

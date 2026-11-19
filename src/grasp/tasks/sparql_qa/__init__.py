@@ -278,6 +278,8 @@ def prepare_formatted_output(
 def output(
     messages: list[Message],
     managers: list[KgManager],
+    kg_notes: dict[str, list[str]],
+    notes: list[str],
     max_rows: int,
     max_cols: int,
     request_timeout: tuple[float, float],
@@ -329,9 +331,15 @@ def output(
     formatted_output["formatted"] = formatted + "\n\n" + formatted_output["formatted"]
     output.update(formatted_output)
 
-    # where the query's items come from in the trace, no extra queries
+    # where the query's items come from in the trace and notes, no extra
+    # queries
     manager, _ = find_manager(managers, output["kg"] or managers[0].kg)
-    trace = trace_provenance(manager, output["sparql"], messages)
+    trace = trace_provenance(
+        manager,
+        output["sparql"],
+        messages,
+        kg_notes.get(manager.kg, []) + notes,
+    )
     if trace is not None:
         output["provenance"] = {"trace": trace}
     return output
@@ -495,6 +503,8 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         return output(
             messages,
             self.managers,
+            self.kg_notes,
+            self.notes,
             self.config.result_max_rows,
             self.config.result_max_columns,
             self.config.sparql_request_timeout,

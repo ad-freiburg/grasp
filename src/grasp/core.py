@@ -29,6 +29,7 @@ from grasp.model import (
     ToolCallResult,
     get_model,
 )
+from grasp.provenance.trace import call_provenance
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
@@ -193,7 +194,21 @@ def generate(
         config.tool_choice = "auto"
         logger.debug("Setting tool choice to auto for general-qa task")
 
-    task = get_task(task_name, managers, config, past_known, example_indices)
+    feedback_notes = notes
+    feedback_kg_notes = kg_notes
+    if config.notes_only_for_feedback:
+        notes = None
+        kg_notes = None
+
+    task = get_task(
+        task_name,
+        managers,
+        config,
+        past_known,
+        example_indices,
+        kg_notes,
+        notes,
+    )
 
     input = task.setup(input)
 
@@ -209,12 +224,6 @@ def generate(
     yield {"type": "input", "input": input}
 
     model = custom_model or get_model(config)
-
-    feedback_notes = notes
-    feedback_kg_notes = kg_notes
-    if config.notes_only_for_feedback:
-        notes = None
-        kg_notes = None
 
     # setup messages
     system_instruction = system_instructions(
@@ -448,6 +457,13 @@ def generate(
             tool_call.result = result
             tool_call.elapsed = time.monotonic() - fn_start
             tool_call.new_known = sorted(task.known - known_before)
+            tool_call.provenance = call_provenance(
+                managers,
+                messages,
+                tool_call,
+                task.kg_notes,
+                task.notes,
+            )
             if config.show_limits:
                 # shown in the app, and in the formatted result only for the model
                 tool_call.limits = limits.usage()
@@ -465,6 +481,7 @@ def generate(
                 "result": result.model_dump(),
                 "elapsed": tool_call.elapsed,
                 "limits": tool_call.limits.model_dump() if tool_call.limits else None,
+                "provenance": tool_call.provenance,
             }
 
             if task.done(tool_call.name):

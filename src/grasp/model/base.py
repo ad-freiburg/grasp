@@ -89,6 +89,9 @@ class ToolCall(BaseModel):
     # knowledge graph items this function call added to the known items,
     # e.g. for tracing where the items of a final query come from
     new_known: list[str] | None = None
+    # where the knowledge graph items in the arguments come from, compared
+    # with the function calls before
+    provenance: dict[str, Any] | None = None
     # step and time limits after this call, if shown to the model
     limits: LimitUsage | None = None
 

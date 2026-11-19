@@ -29,12 +29,17 @@ class GraspTask(ABC):
         config: GraspConfig,
         known: set[str] | None = None,
         example_indices: dict | None = None,
+        kg_notes: dict[str, list[str]] | None = None,
+        notes: list[str] | None = None,
     ) -> None:
         self.managers = managers
         self.config = config
         self.state: Any = None
         self.known = known or set()
         self.example_indices = example_indices or {}
+        # the notes shown to the model
+        self.kg_notes = kg_notes or {}
+        self.notes = notes or []
         # set for the last step after a limit, to relax checks on stopping
         self.last_step = False
 

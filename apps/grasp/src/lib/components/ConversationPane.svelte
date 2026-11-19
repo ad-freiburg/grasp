@@ -1,5 +1,6 @@
 <script>
-  import { onMount, onDestroy, afterUpdate, tick } from 'svelte';
+  import { onMount, onDestroy, afterUpdate, tick, setContext } from 'svelte';
+  import { writable } from 'svelte/store';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import InputMessage from './history/InputMessage.svelte';
@@ -72,6 +73,13 @@
     // Timeouts will clean themselves up
     recentToolMessages = [];
   });
+
+  // tool calls by id, for the arguments of the calls provenance refers to
+  const toolCalls = writable(new Map());
+  setContext('toolCalls', toolCalls);
+  $: toolCalls.set(
+    new Map(histories.flat().filter((message) => message?.type === 'tool').map((message) => [message.id, message]))
+  );
 
   const unsubscribeJump = provenanceJump.subscribe((jump) => {
     if (jump) jumpToToolCall(jump);
