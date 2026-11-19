@@ -1,6 +1,12 @@
 from grasp.model import ToolCall
 from grasp.provenance.state import Provenance
-from grasp.provenance.test_trace import EX, NOTES, REMOTE, SERVICE_QUERY
+from grasp.provenance.test_trace import (
+    EX,
+    NOTES,
+    REMOTE,
+    SERVICE_QUERY,
+    example_manager,
+)
 
 
 def table_call(id: str, sparql: str, shown: list[str]) -> dict:
@@ -36,7 +42,8 @@ def by_iri(provenance: dict | None) -> dict[str, dict]:
     return {item["identifier"]: item for item in provenance["items"]}
 
 
-def test_query_status_from_notes(manager):
+def test_query_status_from_notes():
+    manager = example_manager()
     provenance = Provenance({"example": NOTES}, [])
     call = table_call("c1", "SELECT * WHERE { ?s ?p ?o }", [EX + "place_1"])
     messages, _ = run(manager, provenance, [(call, [EX + "place_1"])])
@@ -53,7 +60,8 @@ def test_query_status_from_notes(manager):
     assert items[EX + "x"]["status"] == "unverified"
 
 
-def test_query_shown_by_example(manager):
+def test_query_shown_by_example():
+    manager = example_manager()
     provenance = Provenance({}, [])
     call = {
         "id": "c1",
@@ -78,7 +86,8 @@ def test_query_shown_by_example(manager):
     assert "remote:endpoint" in shown["line"]
 
 
-def test_record_call(manager):
+def test_record_call():
+    manager = example_manager()
     # ex:x is used before it is shown, ex:place_1 shown before it is used
     provenance = Provenance({}, [])
     calls = [
@@ -102,7 +111,8 @@ def test_record_call(manager):
     assert items[EX + "y"]["status"] == "unverified"
 
 
-def test_record_args(manager):
+def test_record_args():
+    manager = example_manager()
     provenance = Provenance({"example": NOTES}, [])
     first = table_call("c1", "SELECT * WHERE { ?s ?p ?o }", [])
     current = {
@@ -119,7 +129,8 @@ def test_record_args(manager):
     assert items[EX + "teilfläche"]["status"] == "noted"
 
 
-def test_record_without_items(manager):
+def test_record_without_items():
+    manager = example_manager()
     provenance = Provenance({}, [])
     answer = {
         "id": "c1",
@@ -133,7 +144,8 @@ def test_record_without_items(manager):
     assert provenance.used == {}
 
 
-def test_state_continues(manager):
+def test_state_continues():
+    manager = example_manager()
     # known items of an older conversation without their calls, and items
     # known from the setup, count as shown
     provenance = Provenance({}, [], {"known": [EX + "old"]})

@@ -1,7 +1,29 @@
+from functools import cache
+from types import SimpleNamespace
+
+from grasp.manager.utils import find_longest_prefix, get_common_sparql_prefixes
 from grasp.provenance.trace import note_iris
+from grasp.sparql.utils import load_iri_and_literal_parser, load_sparql_parser
 
 EX = "http://example.org/kg#"
 REMOTE = "http://example.org/remote/"
+
+
+# a knowledge graph manager with the ex prefix and no indices, also used by
+# the tests of the provenance state
+@cache
+def example_manager() -> SimpleNamespace:
+    prefixes = {**get_common_sparql_prefixes(), "ex": EX}
+    return SimpleNamespace(
+        kg="example",
+        prefixes=prefixes,
+        sparql_parser=load_sparql_parser(),
+        iri_literal_parser=load_iri_and_literal_parser(),
+        find_longest_prefix=lambda iri: find_longest_prefix(iri, prefixes),
+        normalize=lambda iri, index: None,
+        get_iri_label=lambda iri: None,
+        format_iri=lambda iri: iri,
+    )
 
 
 SERVICE_QUERY = f"""PREFIX remote: <{REMOTE}>
@@ -23,7 +45,8 @@ NOTES = [
 ]
 
 
-def test_note_iris(manager):
+def test_note_iris():
+    manager = example_manager()
     iris = note_iris(manager, NOTES)
     assert REMOTE in iris
     assert iris[REMOTE + "endpoint"] == NOTES[0]
