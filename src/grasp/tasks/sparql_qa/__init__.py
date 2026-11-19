@@ -13,7 +13,7 @@ from grasp.functions import (
 from grasp.manager import KgManager, find_manager, format_kgs
 from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.model.base import ResponseMessage
-from grasp.provenance.trace import trace_provenance
+from grasp.provenance.state import Provenance
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (
     SparqlQaSample,
@@ -278,8 +278,7 @@ def prepare_formatted_output(
 def output(
     messages: list[Message],
     managers: list[KgManager],
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
+    provenance: Provenance,
     max_rows: int,
     max_cols: int,
     request_timeout: tuple[float, float],
@@ -334,14 +333,8 @@ def output(
     # where the query's items come from in the trace and notes, no extra
     # queries
     manager, _ = find_manager(managers, output["kg"] or managers[0].kg)
-    trace = trace_provenance(
-        manager,
-        output["sparql"],
-        messages,
-        kg_notes.get(manager.kg, []) + notes,
-    )
-    if trace is not None:
-        output["provenance"] = {"trace": trace}
+    trace = provenance.query(manager, output["sparql"], messages)
+    output["provenance"] = {"trace": trace}
     return output
 
 
@@ -503,8 +496,7 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         return output(
             messages,
             self.managers,
-            self.kg_notes,
-            self.notes,
+            self.provenance,
             self.config.result_max_rows,
             self.config.result_max_columns,
             self.config.sparql_request_timeout,

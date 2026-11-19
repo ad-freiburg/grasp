@@ -204,7 +204,7 @@ let running = false;
         if (parsed) {
           past = {
             messages: parsed.pastMessages ?? [],
-            known: parsed.pastKnown ?? []
+            provenance: pastProvenance(parsed.pastProvenance, parsed.pastKnown)
           };
           if (Array.isArray(parsed.histories)) {
             histories = parsed.histories;
@@ -539,7 +539,7 @@ let running = false;
         pendingCancelSignal = false;
         past = {
           messages: enrichedPayload.messages ?? [],
-          known: enrichedPayload.known ?? []
+          provenance: pastProvenance(enrichedPayload.provenance, enrichedPayload.known)
         };
         persistLastOutput(enrichedPayload);
       }
@@ -629,7 +629,7 @@ let running = false;
       task,
       input: payloadInput,
       knowledge_graphs: selectedKgs,
-      past: past ? { messages: past.messages, known: past.known } : null
+      past: past ? { messages: past.messages, provenance: past.provenance } : null
     };
   try {
       socket?.send(JSON.stringify(payload));
@@ -750,12 +750,18 @@ let running = false;
     );
   }
 
+  // provenance state of a past conversation; older outputs and shares only
+  // have the known items
+  function pastProvenance(provenance, known) {
+    return provenance ?? { known: known ?? [] };
+  }
+
   function persistLastOutput(outputMessage) {
     const sessionStore = getSessionStorage();
     if (!sessionStore) return;
     const payload = {
       pastMessages: outputMessage.messages ?? [],
-      pastKnown: outputMessage.known ?? [],
+      pastProvenance: pastProvenance(outputMessage.provenance, outputMessage.known),
       histories
     };
     sessionStore.setItem(
@@ -870,7 +876,7 @@ let running = false;
       lastInput: shareInput,
       lastOutput: {
         pastMessages: past?.messages ?? [],
-        pastKnown: past?.known ?? [],
+        pastProvenance: past?.provenance ?? pastProvenance(),
         histories: snapshot
       }
     };

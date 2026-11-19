@@ -403,7 +403,7 @@ and repeat, otherwise stop."""
             index = ShowIndexSetupArgs.model_validate(fn_args).index
             if index not in other_index_setups(manager, self.input["name"]):
                 raise FunctionCallException(f"No setup found for the {index} index")
-            # use a fresh empty `known` so the running self.known set
+            # use a fresh empty `known` so the running provenance.known set
             # is not polluted by IRIs from the other index sparql
             state = load_index_state(manager, index, set())
             return format_index_state(state, manager)
@@ -564,7 +564,11 @@ and repeat, otherwise stop."""
 
         manager = self.managers[0]
         if self.input["phase"] == "index":
-            self.state = load_index_state(manager, self.input["name"], self.known)
+            self.state = load_index_state(
+                manager,
+                self.input["name"],
+                self.provenance.known,
+            )
             if self.input.get("notes"):
                 return input["notes"]
             else:

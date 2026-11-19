@@ -1,4 +1,5 @@
 from enum import StrEnum
+from typing import Any
 
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
@@ -55,14 +56,21 @@ def get_task(
     task: str,
     managers: list[KgManager],
     config: GraspConfig,
-    known: set[str] | None = None,
+    provenance: dict[str, Any] | None = None,
     example_indices: dict | None = None,
     kg_notes: dict[str, list[str]] | None = None,
     notes: list[str] | None = None,
 ) -> GraspTask:
     if task not in _REGISTRY:
         raise ValueError(f"Unknown task {task}")
-    return _REGISTRY[task](managers, config, known, example_indices, kg_notes, notes)
+    return _REGISTRY[task](
+        managers,
+        config,
+        provenance,
+        example_indices,
+        kg_notes,
+        notes,
+    )
 
 
 def rules(config: GraspConfig) -> list[str]:

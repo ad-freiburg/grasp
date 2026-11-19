@@ -37,6 +37,9 @@ class DummyTask(GraspTask):
     def call_function(self, fn_name, fn_args, known, example_indices) -> str:
         if fn_name == "submit":
             self.submitted = True
+        else:
+            # the result shows an item
+            known.add(f"ex:item{fn_args['step']}")
         return "ok"
 
     def done(self, fn_name: str) -> bool:
@@ -160,3 +163,15 @@ def test_show_limits(show: bool):
     if show:
         assert results[0].endswith("Used 1 of 2 steps (1 left).")
         assert results[-1].endswith("Used 2 of 2 steps (0 left).")
+
+
+def test_provenance_state():
+    _, events = run(max_steps=2)
+    calls = [e for e in events if e["type"] == "tool"]
+    output = events[-1]
+    # each item was shown by the call that made it known
+    assert output["provenance"] == {
+        "known": ["ex:item1", "ex:item2"],
+        "shown": {"ex:item1": calls[0]["id"], "ex:item2": calls[1]["id"]},
+        "used": {},
+    }

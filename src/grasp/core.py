@@ -29,7 +29,6 @@ from grasp.model import (
     ToolCallResult,
     get_model,
 )
-from grasp.provenance.trace import call_provenance
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
@@ -178,7 +177,7 @@ def generate(
     notes: list[str] | None = None,
     example_indices: dict[str, ExampleIndex] | None = None,
     past_messages: list[Message] | None = None,
-    past_known: set[str] | None = None,
+    past_provenance: dict[str, Any] | None = None,
     logger: Logger = get_logger("GRASP"),
     yield_output: bool = False,
     custom_model: Model | None = None,
@@ -204,13 +203,15 @@ def generate(
         task_name,
         managers,
         config,
-        past_known,
+        past_provenance,
         example_indices,
         kg_notes,
         notes,
     )
 
     input = task.setup(input)
+    # items the setup made known were shown by no tool call
+    task.provenance.mark_seen()
 
     # setup functions (after setup so tasks can configure based on input)
     fns = kg_functions(
@@ -271,7 +272,6 @@ def generate(
         # dont do it on follow ups
         and not past_messages
     ):
-        known_before = set(task.known)
         result = find_examples(
             managers,
             example_indices,  # type: ignore
@@ -279,7 +279,7 @@ def generate(
             input,
             config.random_examples,
             config.num_examples,
-            task.known,
+            task.provenance.known,
             config.result_max_rows,
             config.result_max_columns,
         )
@@ -298,7 +298,6 @@ def generate(
             name=name,
             args=args,
             result=result,
-            new_known=sorted(task.known - known_before),
         )
         message = Message.assistant(
             Response(
@@ -307,6 +306,7 @@ def generate(
             )
         )
         messages.append(message)
+        task.provenance.record(managers, tool_call, messages)
 
         # yield to user as tool call
         yield {
@@ -429,14 +429,13 @@ def generate(
         # execute tool calls
         for tool_call in response.tool_calls:
             fn_start = time.monotonic()
-            known_before = set(task.known)
             try:
                 result = call_function(
                     config,
                     managers,
                     tool_call.name,
                     tool_call.args,
-                    task.known,
+                    task.provenance.known,
                     task,
                     example_indices,
                 )
@@ -456,14 +455,8 @@ def generate(
 
             tool_call.result = result
             tool_call.elapsed = time.monotonic() - fn_start
-            tool_call.new_known = sorted(task.known - known_before)
-            tool_call.provenance = call_provenance(
-                managers,
-                messages,
-                tool_call,
-                task.kg_notes,
-                task.notes,
-            )
+            # where the items in its arguments come from, from the trace only
+            provenance = task.provenance.record(managers, tool_call, messages)
             if config.show_limits:
                 # shown in the app, and in the formatted result only for the model
                 tool_call.limits = limits.usage()
@@ -481,7 +474,7 @@ def generate(
                 "result": result.model_dump(),
                 "elapsed": tool_call.elapsed,
                 "limits": tool_call.limits.model_dump() if tool_call.limits else None,
-                "provenance": tool_call.provenance,
+                "provenance": provenance,
             }
 
             if task.done(tool_call.name):
@@ -571,7 +564,7 @@ def generate(
         "elapsed": end - limits.start,
         "error": error,
         "messages": [message.model_dump() for message in messages],
-        "known": list(task.known),
+        "provenance": task.provenance.dump(),
     }
 
     if yield_output:
