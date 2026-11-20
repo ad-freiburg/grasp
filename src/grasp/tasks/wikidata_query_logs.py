@@ -1,6 +1,7 @@
 from typing import Any
 
 from grasp.configs import GraspConfig
+from grasp.function_args import FunctionDefinition
 from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
 from grasp.model import Message, Response
@@ -210,7 +211,7 @@ class WdqlTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return functions()
 
     def call_function(

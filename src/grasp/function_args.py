@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Any, get_args
 
@@ -17,25 +18,32 @@ Term = Annotated[str, ArgKind.TERM]
 Sparql = Annotated[str, ArgKind.SPARQL]
 
 
-def function_definition(
-    name: str,
-    description: str,
-    args: type[BaseModel] | None = None,
-    enums: dict[str, Sequence[str | None]] | None = None,
-) -> dict[str, Any]:
-    # strict definition for the model APIs; enums limit arguments to values
-    # known at runtime, e.g. kg, also nested ones
-    if args is None:
-        # an empty object schema makes some vllm models generate endlessly
-        return {"name": name, "description": description, "parameters": {}}
-    parameters = strict_json_schema(args)
-    add_enums(parameters, enums or {})
-    return {
-        "name": name,
-        "description": description,
-        "parameters": parameters,
-        "strict": True,
-    }
+@dataclass
+class FunctionDefinition:
+    # a function offered to the model; enums limit arguments to values known
+    # at runtime, e.g. kg, also nested ones
+    name: str
+    description: str
+    args: type[BaseModel] | None = None
+    enums: dict[str, Sequence[str | None]] | None = None
+
+    def schema(self) -> dict[str, Any]:
+        # strict definition for the model APIs
+        if self.args is None:
+            # an empty object schema makes some vllm models generate endlessly
+            return {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {},
+            }
+        parameters = strict_json_schema(self.args)
+        add_enums(parameters, self.enums or {})
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": parameters,
+            "strict": True,
+        }
 
 
 def add_enums(schema: dict[str, Any], enums: dict[str, Sequence[str | None]]) -> None:

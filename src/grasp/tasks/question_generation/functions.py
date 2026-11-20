@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import function_definition
+from grasp.function_args import FunctionDefinition
 from grasp.utils import FunctionCallException, clip, format_enumerate
 
 
@@ -23,23 +23,23 @@ class ShowQuestionsArgs(BaseModel):
     )
 
 
-def function_definitions(kgs: list[str]) -> list[dict]:
+def function_definitions(kgs: list[str]) -> list[FunctionDefinition]:
     return [
-        function_definition(
+        FunctionDefinition(
             "submit_question",
             "Submit a generated user question for the given "
             "knowledge graph. The question is added to the pool for the round.",
             SubmitQuestionArgs,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "show_questions",
             "Show previously submitted questions for the given "
             "knowledge graph, most recent first.",
             ShowQuestionsArgs,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "stop",
             "Stop the question generation process.",
         ),

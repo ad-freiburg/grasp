@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from grasp.function_args import Iri, Term, function_definition
+from grasp.function_args import FunctionDefinition, Iri, Term
 from grasp.functions import (
     MAX_RESULTS,
     Page,
@@ -38,8 +38,8 @@ class FindFrequentArgs(BaseModel):
     page: Page = 1
 
 
-def find_frequent_function_definition(kgs: list[str], k: int) -> dict:
-    return function_definition(
+def find_frequent_function_definition(kgs: list[str], k: int) -> FunctionDefinition:
+    return FunctionDefinition(
         "find_frequent",
         f"""\
 List common IRIs or literals at a given position (subject, property, \

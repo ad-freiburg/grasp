@@ -15,7 +15,7 @@ from universal_ml_utils.io import dump_json, load_json, load_jsonl
 from universal_ml_utils.logging import get_logger
 
 from grasp.configs import JudgeConfig
-from grasp.function_args import function_definition
+from grasp.function_args import FunctionDefinition
 from grasp.manager import load_kg_manager
 from grasp.manager.utils import get_common_sparql_prefixes, load_kg_info, merge_prefixes
 from grasp.model import Message, get_model
@@ -268,7 +268,7 @@ def judge_candidates(
     candidate_chars = string.ascii_uppercase[: len(candidates)]
 
     functions = [
-        function_definition(
+        FunctionDefinition(
             "judge",
             "Provide the final judgement for the SPARQL query candidates.",
             JudgeArgs,

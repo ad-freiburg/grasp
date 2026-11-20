@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import ArgKind, Iri, Sparql, arg_kinds, function_definition
+from grasp.function_args import ArgKind, FunctionDefinition, Iri, Sparql, arg_kinds
 from grasp.functions import ExecuteArgs, ListArgs
 from grasp.tasks.sparql_qa import AnswerArgs
 
@@ -16,12 +16,12 @@ def test_arg_kinds():
 
 
 def test_function_definition():
-    definition = function_definition(
+    definition = FunctionDefinition(
         "list",
         "List triples.",
         ListArgs,
         {"kg": ["wd", "fb"]},
-    )
+    ).schema()
     assert definition["name"] == "list"
     assert definition["strict"] is True
     parameters = definition["parameters"]
@@ -60,7 +60,12 @@ def test_nested_args():
         "best_attempt.sparql": ArgKind.SPARQL,
         "items": ArgKind.IRI,
     }
-    definition = function_definition("cancel", "Cancel.", NestedArgs, {"kg": ["wd"]})
+    definition = FunctionDefinition(
+        "cancel",
+        "Cancel.",
+        NestedArgs,
+        {"kg": ["wd"]},
+    ).schema()
     # nested models inline, as in hand-written definitions
     parameters = definition["parameters"]
     assert "$defs" not in parameters

@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field, SerializeAsAny, field_validator
 
 from grasp.configs import ModelConfig
+from grasp.function_args import FunctionDefinition
 
 
 class ToolCallResult(BaseModel):
@@ -206,9 +207,15 @@ class Model:
     def __init__(self, config: ModelConfig) -> None:
         self.config = config
 
-    def __call__(self, *args, **kwargs) -> Response:
+    def __call__(
+        self,
+        messages: list[Message],
+        fns: list[FunctionDefinition],
+        config: ModelConfig | None = None,
+    ) -> Response:
         start = time.monotonic()
-        response = self.call(*args, **kwargs)
+        # the model APIs get the definitions as schemas
+        response = self.call(messages, [fn.schema() for fn in fns], config)
         response.elapsed = time.monotonic() - start
         return response
 

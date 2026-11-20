@@ -3,7 +3,7 @@ from typing import Any
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel, Field
 
-from grasp.function_args import function_definition
+from grasp.function_args import FunctionDefinition
 from grasp.functions import class_shape_function_definition
 from grasp.model import Message
 from grasp.shapes import Shapes
@@ -190,26 +190,26 @@ Reference description:
             "The instance pattern should be single-hop; multi-hop instance-class relations may not yield sensible automatic shape computations.",
         ]
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         manager = self.managers[0]
         kgs = [m.kg for m in self.managers]
-        fns: list[dict] = [
+        fns: list[FunctionDefinition] = [
             find_frequent_function_definition(kgs, self.config.list_k),
-            function_definition(
+            FunctionDefinition(
                 "show_setup",
                 "Show the current patterns and description for the class shapes.",
             ),
-            function_definition(
+            FunctionDefinition(
                 "set_instance_pattern",
                 "Set or clear the instance pattern.",
                 SetInstancePatternArgs,
             ),
-            function_definition(
+            FunctionDefinition(
                 "set_schema_pattern",
                 "Set or clear the schema pattern.",
                 SetSchemaPatternArgs,
             ),
-            function_definition(
+            FunctionDefinition(
                 "set_description",
                 "Set a concise description of what the class shapes cover. "
                 "Typically a single sentence about covered classes and any caveats is sufficient.",

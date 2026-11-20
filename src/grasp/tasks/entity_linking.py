@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
-from grasp.function_args import Iri, function_definition
+from grasp.function_args import FunctionDefinition, Iri
 from grasp.manager import KgManager, find_manager
 from grasp.model import Message
 from grasp.tasks.base import FeedbackTask, GraspTask
@@ -301,10 +301,10 @@ class DeleteAnnotationArgs(BaseModel):
     )
 
 
-def functions(managers: list[KgManager]) -> list[dict]:
+def functions(managers: list[KgManager]) -> list[FunctionDefinition]:
     kgs = [manager.kg for manager in managers]
     return [
-        function_definition(
+        FunctionDefinition(
             "annotate",
             """\
 Annotate a word or a sequence of words with an entity from the specified knowledge \
@@ -317,7 +317,7 @@ This function overwrites any previous annotation of the words.""",
             AnnotateArgs,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "delete_annotation",
             """\
 Delete the annotation of a word or a sequence of words \
@@ -328,12 +328,12 @@ Careful, sometimes an annotation you want to delete can be a substring of anothe
 so always keep that in mind and adjust the occurrence_index accordingly.""",
             DeleteAnnotationArgs,
         ),
-        function_definition(
+        FunctionDefinition(
             "show_annotations",
             "Show the current annotations of the text excerpt, "
             "including information about the annotated entities.",
         ),
-        function_definition(
+        FunctionDefinition(
             "stop",
             "Finalize your annotations and stop the annotation process.",
         ),
@@ -580,7 +580,7 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return functions(self.managers)
 
     def call_function(

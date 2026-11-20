@@ -1,3 +1,4 @@
+from grasp.function_args import FunctionDefinition
 from grasp.model import Message, Response, ToolCallResult
 from grasp.tasks.sparql_qa import SparqlQaTask
 from grasp.tasks.sparql_qa.examples import (
@@ -62,7 +63,7 @@ class GeneralQaTask(SparqlQaTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return sparql_qa_example_functions(self.config, self.example_indices)
 
     def call_function(

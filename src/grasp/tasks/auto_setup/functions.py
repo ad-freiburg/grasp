@@ -3,14 +3,14 @@ from typing import Literal
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel, Field
 
-from grasp.function_args import Sparql, function_definition
+from grasp.function_args import FunctionDefinition, Sparql
 from grasp.sparql.utils import (
     find,
     parse_string,
     parse_to_string_with_whitespace,
 )
 
-STOP_FUNCTION = function_definition("stop", "Stop the setup process.")
+STOP_FUNCTION = FunctionDefinition("stop", "Stop the setup process.")
 
 
 class SetDescriptionArgs(BaseModel):
@@ -46,17 +46,17 @@ class UpdatePrefixArgs(BaseModel):
     namespace: str = Field(description="The new full IRI namespace")
 
 
-def set_description_function(description: str) -> dict:
-    return function_definition("set_description", description, SetDescriptionArgs)
+def set_description_function(description: str) -> FunctionDefinition:
+    return FunctionDefinition("set_description", description, SetDescriptionArgs)
 
 
-def index_functions(others: list[str]) -> list[dict]:
-    fns: list[dict] = [
-        function_definition(
+def index_functions(others: list[str]) -> list[FunctionDefinition]:
+    fns: list[FunctionDefinition] = [
+        FunctionDefinition(
             "show_setup",
             "Show the current index and info SPARQL queries for the knowledge graph.",
         ),
-        function_definition(
+        FunctionDefinition(
             "set_query",
             "Set or clear the index or info SPARQL query for the knowledge graph.",
             SetQueryArgs,
@@ -71,7 +71,7 @@ def index_functions(others: list[str]) -> list[dict]:
     # so that overlaps with them are deliberate
     if others:
         fns.append(
-            function_definition(
+            FunctionDefinition(
                 "show_index_setup",
                 "Show the setup (index SPARQL, info SPARQL, and description) "
                 "of another index of this knowledge graph that is already set up.",
@@ -84,13 +84,13 @@ def index_functions(others: list[str]) -> list[dict]:
     return fns
 
 
-def info_functions() -> list[dict]:
+def info_functions() -> list[FunctionDefinition]:
     return [
-        function_definition(
+        FunctionDefinition(
             "show_setup",
             "Show the current prefixes and description of the knowledge graph.",
         ),
-        function_definition(
+        FunctionDefinition(
             "add_prefix",
             "Add a new prefix for the knowledge graph, mapping a short "
             "prefix name to its full IRI namespace (e.g. 'wd' for "
@@ -99,12 +99,12 @@ def info_functions() -> list[dict]:
             "xsd are available by default.",
             AddPrefixArgs,
         ),
-        function_definition(
+        FunctionDefinition(
             "delete_prefix",
             "Delete an existing knowledge graph prefix.",
             DeletePrefixArgs,
         ),
-        function_definition(
+        FunctionDefinition(
             "update_prefix",
             "Update the namespace of an existing knowledge graph prefix.",
             UpdatePrefixArgs,

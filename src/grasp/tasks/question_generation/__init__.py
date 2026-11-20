@@ -3,6 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from grasp.configs import NotesGenerateQuestionsConfig
+from grasp.function_args import FunctionDefinition
 from grasp.model import Message
 from grasp.tasks.base import GraspTask
 from grasp.tasks.functions import (
@@ -87,7 +88,7 @@ class QuestionGenerationTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         kgs = [m.kg for m in self.managers]
         functions = function_definitions(kgs)
         functions.append(find_frequent_function_definition(kgs, self.config.list_k))

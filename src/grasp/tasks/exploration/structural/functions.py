@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import Iri, function_definition
+from grasp.function_args import FunctionDefinition, Iri
 from grasp.functions import (
     format_bnode_error,
     format_iri_or_literal_error,
@@ -32,19 +32,19 @@ class ShowExploredArgs(BaseModel):
     )
 
 
-def note_function_definitions(managers: list[KgManager]) -> list[dict]:
+def note_function_definitions(managers: list[KgManager]) -> list[FunctionDefinition]:
     kgs = [manager.kg for manager in managers]
     functions = base_note_function_definitions(managers, general=False)
     functions.extend(
         [
-            function_definition(
+            FunctionDefinition(
                 "mark_explored",
                 "Mark an IRI as the seed for this exploration round. "
                 "Exactly one seed must be marked per round.",
                 MarkExploredArgs,
                 {"kg": kgs},
             ),
-            function_definition(
+            FunctionDefinition(
                 "show_explored",
                 "Show previously explored seeds, most recent first.",
                 ShowExploredArgs,

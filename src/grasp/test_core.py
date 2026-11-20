@@ -6,6 +6,7 @@ import pytest
 import grasp.core as core
 from grasp.configs import GraspConfig
 from grasp.core import Limits, generate
+from grasp.function_args import FunctionDefinition
 from grasp.model import Model, Response, ToolCall
 from grasp.model.base import format_duration
 from grasp.tasks.base import GraspTask
@@ -13,12 +14,8 @@ from grasp.tasks.base import GraspTask
 TASK_FNS = {"work", "submit"}
 
 
-def fn(name: str) -> dict:
-    return {
-        "name": name,
-        "description": f"Call {name}.",
-        "parameters": {"type": "object", "properties": {}},
-    }
+def fn(name: str) -> FunctionDefinition:
+    return FunctionDefinition(name, f"Call {name}.")
 
 
 class DummyTask(GraspTask):
@@ -35,7 +32,7 @@ class DummyTask(GraspTask):
     def rules(self) -> list[str]:
         return []
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return [fn("work"), fn("submit")]
 
     def call_function(self, fn_name, fn_args, known, example_indices) -> str:

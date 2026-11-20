@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from universal_ml_utils.logging import get_logger
 
-from grasp.function_args import function_definition
+from grasp.function_args import FunctionDefinition
 from grasp.model import Message, Model
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import format_message, format_response
@@ -20,9 +20,9 @@ class GiveFeedbackArgs(BaseModel):
     feedback: str = Field(description="The feedback message")
 
 
-def functions() -> list[dict]:
+def functions() -> list[FunctionDefinition]:
     return [
-        function_definition(
+        FunctionDefinition(
             "give_feedback",
             """\
 Provide feedback on the output of the system for the \

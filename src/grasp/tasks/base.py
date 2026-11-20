@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from grasp.configs import GraspConfig
+from grasp.function_args import FunctionDefinition
 from grasp.manager import KgManager
 from grasp.model import Message, ToolCallResult
 from grasp.examples import Sample
@@ -45,7 +46,7 @@ class GraspTask(ABC):
     def rules(self) -> list[str]: ...
 
     @abstractmethod
-    def function_definitions(self) -> list[dict]: ...
+    def function_definitions(self) -> list[FunctionDefinition]: ...
 
     @abstractmethod
     def call_function(

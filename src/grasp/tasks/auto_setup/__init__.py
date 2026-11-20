@@ -3,6 +3,7 @@ import os
 from pydantic import BaseModel
 
 from grasp.configs import KgInfo
+from grasp.function_args import FunctionDefinition
 from grasp.functions import check_known, update_known_from_alts
 from grasp.manager import DEFAULT_DESCRIPTIONS, KgManager
 from grasp.manager.utils import (
@@ -360,7 +361,7 @@ and repeat, otherwise stop."""
             "focus on the bigger picture.",
         ]
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         kgs = [m.kg for m in self.managers]
         functions = [find_frequent_function_definition(kgs, self.config.list_k)]
         if self.input["phase"] == "index":

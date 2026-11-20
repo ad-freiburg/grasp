@@ -3,6 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from grasp.configs import GraspConfig, NotesConfig, NotesFromExplorationConfig
+from grasp.function_args import FunctionDefinition
 from grasp.model import Message
 from grasp.tasks.base import GraspTask
 from grasp.tasks.exploration import shared_rules
@@ -104,7 +105,7 @@ class StructuralExplorationTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         kgs = [m.kg for m in self.managers]
         functions = note_function_definitions(self.managers)
         functions.append(find_frequent_function_definition(kgs, self.config.list_k))
