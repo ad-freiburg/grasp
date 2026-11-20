@@ -72,6 +72,11 @@ class GraspTask(ABC):
         assert isinstance(input, str), f"Input for {self.name} must be a string"
         return input
 
+    def reviewer(self, inputs: list[str], output: dict) -> tuple[str, Any] | None:
+        # name and input of the task that reviews the output over several
+        # steps, None for feedback from a single model call
+        return None
+
     @property
     def default_input_field(self) -> str | None:
         return None

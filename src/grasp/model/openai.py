@@ -76,7 +76,7 @@ class OpenAICompletionsModel(Model):
         msgs = []
         for msg in messages:
             if isinstance(msg.content, str):
-                msgs.append(msg.model_dump())
+                msgs.append({"role": msg.role, "content": msg.content})
                 continue
 
             if msg.content.raw is not None:
@@ -234,7 +234,7 @@ class OpenAIResponsesModel(Model):
 
         for msg in messages:
             if isinstance(msg.content, str):
-                msgs.append(msg.model_dump())
+                msgs.append({"role": msg.role, "content": msg.content})
                 continue
 
             if msg.content.raw is not None:
