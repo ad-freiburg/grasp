@@ -1,12 +1,14 @@
 import json
 import math
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field, SerializeAsAny, field_validator
 
 from grasp.configs import ModelConfig
-from grasp.function_args import FunctionDefinition
+from grasp.function_args import add_enums, strict_json_schema
 
 
 class ToolCallResult(BaseModel):
@@ -45,6 +47,34 @@ class LimitUsage(BaseModel):
                 f"({format_duration(math.ceil(self.max_time - used))} left)"
             )
         return f"Used {', '.join(parts)}."
+
+
+@dataclass
+class FunctionDefinition:
+    # a function offered to the model; enums limit arguments to values known
+    # at runtime, e.g. kg, also nested ones
+    name: str
+    description: str
+    args: type[BaseModel] | None = None
+    enums: dict[str, Sequence[str | None]] | None = None
+
+    def schema(self) -> dict[str, Any]:
+        # strict definition for the model APIs
+        if self.args is None:
+            # an empty object schema makes some vllm models generate endlessly
+            return {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {},
+            }
+        parameters = strict_json_schema(self.args)
+        add_enums(parameters, self.enums or {})
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": parameters,
+            "strict": True,
+        }
 
 
 class ToolCall(BaseModel):

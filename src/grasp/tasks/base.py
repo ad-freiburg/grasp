@@ -2,9 +2,8 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from grasp.configs import GraspConfig
-from grasp.function_args import FunctionDefinition
 from grasp.manager import KgManager
-from grasp.model import Message, ToolCallResult
+from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.examples import Sample
 
 

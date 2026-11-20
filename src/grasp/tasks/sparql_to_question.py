@@ -3,10 +3,10 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 from grasp.configs import GraspConfig
-from grasp.function_args import FunctionDefinition, Sparql
+from grasp.function_args import Sparql
 from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
-from grasp.model import Message, Response
+from grasp.model import FunctionDefinition, Message, Response
 from grasp.tasks.base import GraspTask
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import format_list

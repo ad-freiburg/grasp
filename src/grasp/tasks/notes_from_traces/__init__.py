@@ -3,8 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from grasp.configs import NoteTakingConfig
-from grasp.function_args import FunctionDefinition
-from grasp.model import Message, Response
+from grasp.model import FunctionDefinition, Message, Response
 from grasp.tasks.base import GraspTask
 from grasp.tasks.exploration.functions import (
     call_function as call_note_function,

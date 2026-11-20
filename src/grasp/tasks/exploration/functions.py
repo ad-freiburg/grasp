@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import FunctionDefinition
 from grasp.manager import KgManager
+from grasp.model import FunctionDefinition
 from grasp.utils import FunctionCallException, clip, format_notes
 
 

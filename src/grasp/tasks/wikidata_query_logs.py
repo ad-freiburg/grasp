@@ -1,10 +1,9 @@
 from typing import Any
 
 from grasp.configs import GraspConfig
-from grasp.function_args import FunctionDefinition
 from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
-from grasp.model import Message, Response
+from grasp.model import FunctionDefinition, Message, Response
 from grasp.sparql.utils import (
     find,
     find_all,

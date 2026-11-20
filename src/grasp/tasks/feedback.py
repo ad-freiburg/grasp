@@ -4,8 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from universal_ml_utils.logging import get_logger
 
-from grasp.function_args import FunctionDefinition
-from grasp.model import Message, Model
+from grasp.model import FunctionDefinition, Message, Model
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.utils import format_message, format_response
 

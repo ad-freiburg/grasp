@@ -15,10 +15,9 @@ from universal_ml_utils.io import dump_json, load_json, load_jsonl
 from universal_ml_utils.logging import get_logger
 
 from grasp.configs import JudgeConfig
-from grasp.function_args import FunctionDefinition
 from grasp.manager import load_kg_manager
 from grasp.manager.utils import get_common_sparql_prefixes, load_kg_info, merge_prefixes
-from grasp.model import Message, get_model
+from grasp.model import FunctionDefinition, Message, get_model
 from grasp.model.base import Model
 from grasp.sparql.metrics import f1_score
 from grasp.sparql.types import AskResult, SelectResult

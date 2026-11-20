@@ -3,9 +3,8 @@ from typing import Any
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel, Field
 
-from grasp.function_args import FunctionDefinition
 from grasp.functions import class_shape_function_definition
-from grasp.model import Message
+from grasp.model import FunctionDefinition, Message
 from grasp.shapes import Shapes
 from grasp.sparql.utils import find_all, parse_string
 from grasp.tasks.auto_setup.functions import STOP_FUNCTION, SetDescriptionArgs

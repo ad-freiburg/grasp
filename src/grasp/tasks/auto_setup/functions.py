@@ -3,7 +3,8 @@ from typing import Literal
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel, Field
 
-from grasp.function_args import FunctionDefinition, Sparql
+from grasp.function_args import Sparql
+from grasp.model import FunctionDefinition
 from grasp.sparql.utils import (
     find,
     parse_string,

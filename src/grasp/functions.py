@@ -9,11 +9,11 @@ from pydantic import BaseModel, Field
 from search_rdf import EmbeddingIndex
 
 from grasp.configs import GraspConfig, ShapeConfig
-from grasp.function_args import FunctionDefinition, Iri, Sparql, Term
+from grasp.function_args import Iri, Sparql, Term
 from grasp.manager import KgManager, find_manager, split_managers
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
-from grasp.model import ToolCallResult
+from grasp.model import FunctionDefinition, ToolCallResult
 from grasp.shapes import PropertyProfile, Shapes, ShapeView
 from grasp.sparql.term import parse_into_binding
 from grasp.sparql.types import (

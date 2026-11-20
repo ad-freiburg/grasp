@@ -3,7 +3,6 @@ import os
 from pydantic import BaseModel
 
 from grasp.configs import KgInfo
-from grasp.function_args import FunctionDefinition
 from grasp.functions import check_known, update_known_from_alts
 from grasp.manager import DEFAULT_DESCRIPTIONS, KgManager
 from grasp.manager.utils import (
@@ -14,7 +13,7 @@ from grasp.manager.utils import (
     load_kg_info,
     merge_prefixes,
 )
-from grasp.model import Message
+from grasp.model import FunctionDefinition, Message
 from grasp.sparql.term import extract_sparql_terms
 from grasp.sparql.types import IRI_INDEX_NAMES, iri_indices
 from grasp.sparql.utils import (

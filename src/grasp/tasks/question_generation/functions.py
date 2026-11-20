@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import FunctionDefinition
+from grasp.model import FunctionDefinition
 from grasp.utils import FunctionCallException, clip, format_enumerate
 
 

@@ -6,8 +6,7 @@ import pytest
 import grasp.core as core
 from grasp.configs import GraspConfig
 from grasp.core import Limits, generate
-from grasp.function_args import FunctionDefinition
-from grasp.model import Model, Response, ToolCall
+from grasp.model import FunctionDefinition, Model, Response, ToolCall
 from grasp.model.base import format_duration
 from grasp.tasks.base import GraspTask
 

@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from grasp.function_args import FunctionDefinition, Iri, Term
+from grasp.function_args import Iri, Term
 from grasp.functions import (
     MAX_RESULTS,
     Page,
@@ -14,6 +14,7 @@ from grasp.functions import (
     update_known_from_index_iris,
 )
 from grasp.manager import KgManager, find_manager
+from grasp.model import FunctionDefinition
 from grasp.sparql.types import Position, SelectResult
 from grasp.utils import FunctionCallException, format_enumerate
 

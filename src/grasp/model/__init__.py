@@ -1,6 +1,7 @@
 from grasp.configs import ModelConfig
 from grasp.model.anthropic import AnthropicModel
 from grasp.model.base import (
+    FunctionDefinition,
     LimitUsage,
     Message,
     Model,
@@ -26,6 +27,7 @@ def get_model(config: ModelConfig) -> Model:
 
 
 __all__ = [
+    "FunctionDefinition",
     "LimitUsage",
     "ToolCall",
     "ToolCallResult",

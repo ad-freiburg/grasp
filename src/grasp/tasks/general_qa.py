@@ -1,5 +1,4 @@
-from grasp.function_args import FunctionDefinition
-from grasp.model import Message, Response, ToolCallResult
+from grasp.model import FunctionDefinition, Message, Response, ToolCallResult
 from grasp.tasks.sparql_qa import SparqlQaTask
 from grasp.tasks.sparql_qa.examples import (
     call_function as sparql_qa_example_call_function,

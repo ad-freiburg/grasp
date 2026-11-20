@@ -1,12 +1,13 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import FunctionDefinition, Iri
+from grasp.function_args import Iri
 from grasp.functions import (
     format_bnode_error,
     format_iri_or_literal_error,
     parse_iri_or_literal,
 )
 from grasp.manager import KgManager, find_manager
+from grasp.model import FunctionDefinition
 from grasp.sparql.types import iri_indices
 from grasp.sparql.types import format_kg_item
 from grasp.tasks.exploration.functions import (

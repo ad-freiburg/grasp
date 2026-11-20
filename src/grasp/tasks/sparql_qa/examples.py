@@ -5,7 +5,6 @@ from typing import Any
 from pydantic import BaseModel, Field, SerializeAsAny
 
 from grasp.configs import GraspConfig
-from grasp.function_args import FunctionDefinition
 from grasp.functions import (
     SelectionGroup,
     format_page_suffix,
@@ -17,7 +16,7 @@ from grasp.functions import (
     validate_query,
 )
 from grasp.manager import KgManager, find_manager
-from grasp.model import ToolCallResult
+from grasp.model import FunctionDefinition, ToolCallResult
 from grasp.examples import ExampleIndex, Sample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import format_list

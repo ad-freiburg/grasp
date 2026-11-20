@@ -3,8 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from grasp.configs import NotesGenerateQuestionsConfig
-from grasp.function_args import FunctionDefinition
-from grasp.model import Message
+from grasp.model import FunctionDefinition, Message
 from grasp.tasks.base import GraspTask
 from grasp.tasks.functions import (
     FindFrequentArgs,

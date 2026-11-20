@@ -4,14 +4,14 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from grasp.configs import GraspConfig
-from grasp.function_args import FunctionDefinition, Sparql
+from grasp.function_args import Sparql
 from grasp.functions import (
     ExecuteArgs,
     check_known,
     selection_groups,
 )
 from grasp.manager import KgManager, find_manager, format_kgs
-from grasp.model import Message, ToolCallResult
+from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.model.base import ResponseMessage
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (

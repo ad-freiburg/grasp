@@ -1,7 +1,8 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import ArgKind, FunctionDefinition, Iri, Sparql, arg_kinds
+from grasp.function_args import ArgKind, Iri, Sparql, arg_kinds
 from grasp.functions import ExecuteArgs, ListArgs
+from grasp.model import FunctionDefinition
 from grasp.tasks.sparql_qa import AnswerArgs
 
 
