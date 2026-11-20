@@ -1,6 +1,3 @@
-# Function arguments as pydantic models, for definitions independent of model
-# SDKs and validated calls; annotations mark KG terms and SPARQL queries
-
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Annotated, Any, get_args
