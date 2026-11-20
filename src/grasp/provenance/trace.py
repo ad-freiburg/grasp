@@ -39,10 +39,8 @@ def iter_tool_calls(messages: Sequence[Message | dict]) -> Iterator[dict]:
 
 
 def note_iris(manager: KgManager, notes: list[str]) -> dict[str, str]:
-    # IRIs in the notes, mapped to the first note containing them; read like
-    # a query: full IRIs, and prefixed names resolved with the knowledge graph
-    # prefixes and the PREFIX declarations in the notes; common vocabulary is
-    # left out
+    # the first note mentioning each IRI; prefixed names are resolved with the
+    # KG prefixes and PREFIX declarations in the notes, common vocabulary is skipped
     prefixes = {**manager.prefixes}
     terms = []
     for note in notes:
