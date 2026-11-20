@@ -101,6 +101,8 @@ def test_message_dump():
         "trace": [{"role": "system", "content": "sys"}],
     }
     assert Message.model_validate(message.model_dump()) == message
+    # as sent to the model
+    assert message.model_dump(exclude={"trace"}) == {"role": "user", "content": "hi"}
 
 
 def test_single_step_feedback():
