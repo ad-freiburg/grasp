@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from grasp.function_args import Iri, Term, function_definition
 from grasp.functions import (
     MAX_RESULTS,
-    PAGE_DESCRIPTION,
+    Page,
     find_manager,
     format_iri_or_literal_error,
     format_page_suffix,
@@ -36,7 +36,7 @@ class FindFrequentArgs(BaseModel):
         default=None,
         description="IRI or literal constraint for object position (null for unconstrained)",
     )
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
 
 
 def find_frequent_function_definition(kgs: list[str], k: int) -> dict:

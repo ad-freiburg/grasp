@@ -2,7 +2,7 @@ import math
 import time
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, Iterable, Literal
+from typing import TYPE_CHECKING, Annotated, Iterable, Literal
 
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel, Field
@@ -56,9 +56,13 @@ MODALITY_QUERY_TYPES = {
 }
 
 
-PAGE_DESCRIPTION = (
-    "Page number (1-indexed) for paginating results (default should be 1)"
-)
+Page = Annotated[
+    int,
+    Field(
+        description="Page number (1-indexed) for paginating results "
+        "(default should be 1)",
+    ),
+]
 
 
 class ExecuteArgs(BaseModel):
@@ -80,7 +84,7 @@ class ListArgs(BaseModel):
         default=None,
         description="IRI or literal for constraining the object (null for unconstrained)",
     )
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
     unclipped: bool = Field(
         default=False,
         description="Whether to show full unclipped literal values "
@@ -92,14 +96,14 @@ class ListArgs(BaseModel):
 class SearchArgs(BaseModel):
     kg: str = Field(description="The knowledge graph to search")
     query: str = Field(description="The search query")
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
 
 
 class SearchPropertyOfEntityArgs(BaseModel):
     kg: str = Field(description="The knowledge graph to search")
     entity: Iri = Field(description="The entity to search properties for")
     query: str = Field(description="The search query")
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
 
 
 class SearchObjectOfPropertyArgs(BaseModel):
@@ -109,7 +113,7 @@ class SearchObjectOfPropertyArgs(BaseModel):
     index: str = Field(
         description="Which index to search for the property's objects",
     )
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
 
 
 class GetClassShapeArgs(BaseModel):
@@ -141,7 +145,7 @@ class SearchFilterArgs(BaseModel):
         "search",
     )
     query: str = Field(description="The search query")
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
 
 
 QUERY_TYPE_DESCRIPTION = "How to interpret the query string: " + ", ".join(
@@ -183,7 +187,7 @@ class SearchConstraintsArgs(BaseModel):
         default=None,
         description="Constraints for the search (null for unconstrained)",
     )
-    page: int = Field(default=1, description=PAGE_DESCRIPTION)
+    page: Page = 1
 
 
 # offered when more than one modality is known, otherwise the query is text
