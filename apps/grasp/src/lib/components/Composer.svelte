@@ -293,6 +293,20 @@
     submit();
   }
 
+  // copying a rendered paragraph (e.g. the input card) adds line breaks at
+  // its end, drop them from pasted text
+  function onPaste(event) {
+    const text = event.clipboardData?.getData('text/plain');
+    if (!text) return;
+    const stripped = text.replace(/^[\r\n]+|[\r\n]+$/g, '');
+    if (stripped === text) return;
+    event.preventDefault();
+    const el = event.currentTarget;
+    el.setRangeText(stripped, el.selectionStart, el.selectionEnd, 'end');
+    value = el.value;
+    autoResize();
+  }
+
   function onTaskChange(event) {
     dispatch('taskchange', event.detail);
   }
@@ -1261,6 +1275,7 @@
           bind:this={textareaEl}
           rows="1"
           on:keydown={onKeydown}
+          on:paste={onPaste}
           on:input={autoResize}
           on:focus={autoResize}
           on:blur={autoResize}
