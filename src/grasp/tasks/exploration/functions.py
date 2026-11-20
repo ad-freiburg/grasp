@@ -1,5 +1,46 @@
+from pydantic import BaseModel, Field
+
+from grasp.function_args import function_definition
 from grasp.manager import KgManager
 from grasp.utils import FunctionCallException, clip, format_notes
+
+
+class AddNoteArgs(BaseModel):
+    note: str = Field(description="The note to add")
+
+
+class DeleteNoteArgs(BaseModel):
+    num: float = Field(description="The number of the note to delete")
+
+
+class UpdateNoteArgs(BaseModel):
+    num: float = Field(description="The number of the note to update")
+    note: str = Field(description="The new note replacing the old one")
+
+
+class ShowNotesArgs(BaseModel):
+    pass
+
+
+# for knowledge graph specific notes, kg comes first; null for general notes
+class KgNoteArgs(BaseModel):
+    kg: str | None = Field(default=None, description="The knowledge graph of the note")
+
+
+class KgAddNoteArgs(AddNoteArgs, KgNoteArgs):
+    pass
+
+
+class KgDeleteNoteArgs(DeleteNoteArgs, KgNoteArgs):
+    pass
+
+
+class KgUpdateNoteArgs(UpdateNoteArgs, KgNoteArgs):
+    pass
+
+
+class KgShowNotesArgs(ShowNotesArgs, KgNoteArgs):
+    pass
 
 
 def note_function_definitions(
@@ -9,87 +50,51 @@ def note_function_definitions(
 ) -> list[dict]:
     assert general or kg_specific, "at least one of general or kg_specific must be True"
 
-    kgs: list[str | None] = [manager.kg for manager in managers] if kg_specific else []
-    if general and kg_specific:
+    kgs: list[str | None] = [manager.kg for manager in managers]
+    if general:
         kgs.append(None)
-
-    kg_type: str | list[str] = ["string", "null"] if general else "string"
-
-    def kg_property(verb: str) -> dict:
-        desc = f"The knowledge graph for which to {verb} the note"
-        if general:
-            desc += " (null for general notes)"
-        return {"type": kg_type, "enum": kgs, "description": desc}
 
     if general and kg_specific:
         general_or_kg = "general or knowledge graph specific"
+        hint = " (kg null for a general note)"
     elif kg_specific:
         general_or_kg = "knowledge graph specific"
+        hint = ""
     else:
         general_or_kg = "general"
+        hint = ""
 
-    add_props = {"note": {"type": "string", "description": "The note to add"}}
-    add_req = ["note"]
-    del_props = {
-        "num": {"type": "number", "description": "The number of the note to delete"}
-    }
-    del_req = ["num"]
-    upd_props = {
-        "num": {
-            "type": "number",
-            "description": "The number of the note to update",
-        },
-        "note": {
-            "type": "string",
-            "description": "The new note replacing the old one",
-        },
-    }
-    upd_req = ["num", "note"]
-    show_props: dict = {}
-    show_req: list[str] = []
-
-    def build(verb: str, props: dict, required: list[str]) -> dict:
-        if kg_specific:
-            props = {"kg": kg_property(verb), **props}
-            required = ["kg", *required]
-        return {
-            "type": "object",
-            "properties": props,
-            "required": required,
-            "additionalProperties": False,
-        }
-
+    add, delete, update, show = (
+        (KgAddNoteArgs, KgDeleteNoteArgs, KgUpdateNoteArgs, KgShowNotesArgs)
+        if kg_specific
+        else (AddNoteArgs, DeleteNoteArgs, UpdateNoteArgs, ShowNotesArgs)
+    )
     return [
-        {
-            "name": "add_note",
-            "description": f"Add a {general_or_kg} note.",
-            "parameters": build("add", add_props, add_req),
-            "strict": True,
-        },
-        {
-            "name": "delete_note",
-            "description": f"Delete a {general_or_kg} note.",
-            "parameters": build("delete", del_props, del_req),
-            "strict": True,
-        },
-        {
-            "name": "update_note",
-            "description": f"Update a {general_or_kg} note.",
-            "parameters": build("update", upd_props, upd_req),
-            "strict": True,
-        },
-        {
-            "name": "show_notes",
-            "description": f"Show current {general_or_kg} notes.",
-            "parameters": build("show", show_props, show_req),
-            "strict": True,
-        },
-        {
-            "name": "stop",
-            "description": "Stop the note taking process.",
-            # an empty object schema makes some vllm models generate endlessly
-            "parameters": {},
-        },
+        function_definition(
+            "add_note",
+            f"Add a {general_or_kg} note{hint}.",
+            add,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "delete_note",
+            f"Delete a {general_or_kg} note{hint}.",
+            delete,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "update_note",
+            f"Update a {general_or_kg} note{hint}.",
+            update,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "show_notes",
+            f"Show current {general_or_kg} notes{hint}.",
+            show,
+            {"kg": kgs},
+        ),
+        function_definition("stop", "Stop the note taking process."),
     ]
 
 
@@ -163,8 +168,8 @@ def call_function(
     if fn_name == "stop":
         return "Stopped process"
 
-    # kg should be there for every function call
-    kg = fn_args.get("kg", None)
+    # kg is null or missing for general notes
+    kg = KgNoteArgs.model_validate(fn_args).kg
     if kg is None:
         notes_to_use = notes
         name = "general"
@@ -175,23 +180,26 @@ def call_function(
         name = f'"{kg}"'
 
     if fn_name == "add_note":
+        add_args = AddNoteArgs.model_validate(fn_args)
         return add_note(
             name,
             notes_to_use,
-            fn_args["note"],
+            add_args.note,
             max_notes,
             max_note_length,
         )
 
     elif fn_name == "delete_note":
-        return delete_note(name, notes_to_use, fn_args["num"])
+        delete_args = DeleteNoteArgs.model_validate(fn_args)
+        return delete_note(name, notes_to_use, delete_args.num)
 
     elif fn_name == "update_note":
+        update_args = UpdateNoteArgs.model_validate(fn_args)
         return update_note(
             name,
             notes_to_use,
-            fn_args["num"],
-            fn_args["note"],
+            update_args.num,
+            update_args.note,
             max_note_length,
         )
 

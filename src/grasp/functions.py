@@ -2,14 +2,15 @@ import math
 import time
 from dataclasses import dataclass
 from itertools import chain
-from typing import TYPE_CHECKING, Iterable
+from typing import TYPE_CHECKING, Annotated, Iterable, Literal
 
 from grammar_utils.parse import LR1Parser  # type: ignore
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from search_rdf import EmbeddingIndex
 from universal_ml_utils.ops import partition_by
 
 from grasp.configs import GraspConfig, ShapeConfig
+from grasp.function_args import Iri, Sparql, Term, function_definition
 from grasp.manager import KgManager
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
@@ -55,6 +56,148 @@ MODALITY_QUERY_TYPES = {
 }
 
 
+Page = Annotated[
+    int,
+    Field(
+        description="Page number (1-indexed) for paginating results "
+        "(default should be 1)",
+    ),
+]
+
+
+class ExecuteArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to query")
+    sparql: Sparql = Field(description="The SPARQL query to execute")
+
+
+class ListArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to use")
+    subject: Iri | None = Field(
+        default=None,
+        description="IRI for constraining the subject (null for unconstrained)",
+    )
+    property: Iri | None = Field(
+        default=None,
+        description="IRI for constraining the property (null for unconstrained)",
+    )
+    object: Term | None = Field(
+        default=None,
+        description="IRI or literal for constraining the object (null for unconstrained)",
+    )
+    page: Page = 1
+    unclipped: bool = Field(
+        default=False,
+        description="Whether to show full unclipped literal values "
+        "(default should be false, typically only needed to inspect very long string literals)",
+    )
+
+
+# search_entity, search_property, search_literal and search_class
+class SearchArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    query: str = Field(description="The search query")
+    page: Page = 1
+
+
+class SearchPropertyOfEntityArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    entity: Iri = Field(description="The entity to search properties for")
+    query: str = Field(description="The search query")
+    page: Page = 1
+
+
+class SearchObjectOfPropertyArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    property: Iri = Field(description="The property to search objects for")
+    query: str = Field(description="The search query")
+    index: str = Field(
+        description="Which index to search for the property's objects",
+    )
+    page: Page = 1
+
+
+class GetClassShapeArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to look up the class in")
+    iri: Iri = Field(description="The class IRI")
+    direction: Literal["out", "in"] = Field(
+        default="out",
+        description="Whether to show the properties of the class "
+        "instances (out) or the properties pointing to them (in), "
+        'default should be "out"',
+    )
+    query: str | None = Field(
+        default=None,
+        description="Search query for ranking the properties of the "
+        "class (null to show the most common ones)",
+    )
+    page: int = Field(
+        default=1,
+        description="Page number (1-indexed) for paginating the "
+        "properties (default should be 1)",
+    )
+
+
+class SearchFilterArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    index: str = Field(description="The index to search in")
+    sparql: Sparql | None = Field(
+        description="The SPARQL query for filtering or null for an unconstrained "
+        "search",
+    )
+    query: str = Field(description="The search query")
+    page: Page = 1
+
+
+QUERY_TYPE_DESCRIPTION = "How to interpret the query string: " + ", ".join(
+    f'"{query_type}" for {desc}'
+    for query_types in MODALITY_QUERY_TYPES.values()
+    for query_type, desc in query_types
+)
+
+
+# offered when more than one modality is known, otherwise the query is text
+class MultimodalSearchFilterArgs(SearchFilterArgs):
+    query_type: Literal["image", "text"] = Field(
+        default="text",
+        description=QUERY_TYPE_DESCRIPTION,
+    )
+
+
+class SearchConstraints(BaseModel):
+    subject: Iri | None = Field(
+        description="IRI for constraining the subject (null for unconstrained)",
+    )
+    property: Iri | None = Field(
+        description="IRI for constraining the property (null for unconstrained)",
+    )
+    object: Term | None = Field(
+        description="IRI or literal for constraining the object (null for "
+        "unconstrained)",
+    )
+
+
+class SearchConstraintsArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to search")
+    index: str = Field(description="The index to search in")
+    position: Literal["subject", "property", "object"] = Field(
+        description="The position/type of item to look for",
+    )
+    query: str = Field(description="The search query")
+    constraints: SearchConstraints | None = Field(
+        default=None,
+        description="Constraints for the search (null for unconstrained)",
+    )
+    page: Page = 1
+
+
+# offered when more than one modality is known, otherwise the query is text
+class MultimodalSearchConstraintsArgs(SearchConstraintsArgs):
+    query_type: Literal["image", "text"] = Field(
+        default="text",
+        description=QUERY_TYPE_DESCRIPTION,
+    )
+
+
 def kg_functions(
     managers: list[KgManager],
     fn_set: str,
@@ -88,36 +231,21 @@ def kg_functions(
     index_names = sorted(known_indices)
 
     fns = [
-        {
-            "name": "execute",
-            "description": """\
+        function_definition(
+            "execute",
+            """\
 Execute a SPARQL query and retrieve its results as a table if successful, \
 and an error message otherwise.
 
 For example, to execute a SPARQL query over Wikidata to find the jobs of \
 Albert Einstein, do the following:
 execute(kg="wikidata", sparql="SELECT ?job WHERE { wd:Q937 wdt:P106 ?job }")""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to query",
-                    },
-                    "sparql": {
-                        "type": "string",
-                        "description": "The SPARQL query to execute",
-                    },
-                },
-                "required": ["kg", "sparql"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "list",
-            "description": f"""\
+            ExecuteArgs,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "list",
+            f"""\
 List triples from the knowledge graph satisfying the given subject, property, \
 and object constraints. At most {list_k} results are returned per page (use \
 pagintion to see more results).
@@ -129,48 +257,9 @@ list(kg="wikidata", subject="wd:Q937")
 Or to find examples of how the property "place of birth" is used in Wikidata, \
 do the following:
 list(kg="wikidata", property="wdt:P19")""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to use",
-                    },
-                    "subject": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the subject (null for unconstrained)",
-                    },
-                    "property": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the property (null for unconstrained)",
-                    },
-                    "object": {
-                        "type": ["string", "null"],
-                        "description": "IRI or literal for constraining the object (null for unconstrained)",
-                    },
-                    "page": {
-                        "type": "integer",
-                        "description": "Page number (1-indexed) for paginating results (default should be 1)",
-                    },
-                    "unclipped": {
-                        "type": "boolean",
-                        "description": "Whether to show full unclipped literal values "
-                        "(default should be false, typically only needed to inspect very long string literals)",
-                    },
-                },
-                "required": [
-                    "kg",
-                    "page",
-                    "subject",
-                    "property",
-                    "object",
-                    "unclipped",
-                ],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+            ListArgs,
+            {"kg": kgs},
+        ),
     ]
 
     if fn_set == "base":
@@ -185,45 +274,12 @@ list(kg="wikidata", property="wdt:P19")""",
     has_literal_index = "literals" in known_indices
     has_class_index = "classes" in known_indices
 
-    page_prop = {
-        "type": "integer",
-        "description": "Page number (1-indexed) for paginating results (default should be 1)",
-    }
-
     if fn_set in ["search", "search_extended", "all"]:
-        search_entity_props = {
-            "kg": {
-                "type": "string",
-                "enum": kgs,
-                "description": "The knowledge graph to search",
-            },
-            "query": {
-                "type": "string",
-                "description": "The search query",
-            },
-            "page": page_prop,
-        }
-        search_entity_required = ["kg", "query", "page"]
-
-        search_property_props = {
-            "kg": {
-                "type": "string",
-                "enum": kgs,
-                "description": "The knowledge graph to search",
-            },
-            "query": {
-                "type": "string",
-                "description": "The search query",
-            },
-            "page": page_prop,
-        }
-        search_property_required = ["kg", "query", "page"]
-
         if has_entity_index:
             fns.append(
-                {
-                    "name": "search_entity",
-                    "description": f"""\
+                function_definition(
+                    "search_entity",
+                    f"""\
 Search for entities in the knowledge graph with a search query. \
 At most {search_k} results are returned per page (use pagination \
 up to page {search_max_pages} to see more results).
@@ -231,54 +287,32 @@ up to page {search_max_pages} to see more results).
 For example, to search for the entity Albert Einstein in Wikidata, \
 do the following:
 search_entity(kg="wikidata", query="albert einstein", page=1)""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": search_entity_props,
-                        "required": search_entity_required,
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
+                    SearchArgs,
+                    {"kg": kgs},
+                ),
             )
 
         if has_property_index:
             fns.append(
-                {
-                    "name": "search_property",
-                    "description": f"""\
+                function_definition(
+                    "search_property",
+                    f"""\
 Search for properties in the knowledge graph with a search query. \
 At most {search_k} results are returned per page (use pagination \
 up to page {search_max_pages} to see more results).
 
 For example, to search for properties related to birth in Wikidata, do the following:
 search_property(kg="wikidata", query="birth", page=1)""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": search_property_props,
-                        "required": search_property_required,
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
+                    SearchArgs,
+                    {"kg": kgs},
+                ),
             )
 
         if has_literal_index:
-            search_literal_props = {
-                "kg": {
-                    "type": "string",
-                    "enum": kgs,
-                    "description": "The knowledge graph to search",
-                },
-                "query": {
-                    "type": "string",
-                    "description": "The search query",
-                },
-                "page": page_prop,
-            }
             fns.append(
-                {
-                    "name": "search_literal",
-                    "description": f"""\
+                function_definition(
+                    "search_literal",
+                    f"""\
 Search for literal values (e.g. enumerable string values used as objects, \
 not entity labels) in the knowledge graph with a search query. \
 At most {search_k} results are returned per page (use pagination \
@@ -289,21 +323,16 @@ into a SPARQL filter.
 For example, to search for the literal value "restaurant" used as an \
 amenity in OSM, do the following:
 search_literal(kg="osm-planet", query="restaurant", page=1)""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": search_literal_props,
-                        "required": ["kg", "query", "page"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
+                    SearchArgs,
+                    {"kg": kgs},
+                ),
             )
 
         if has_class_index:
             fns.append(
-                {
-                    "name": "search_class",
-                    "description": f"""\
+                function_definition(
+                    "search_class",
+                    f"""\
 Search for classes in the knowledge graph with a search query. \
 At most {search_k} results are returned per page (use pagination \
 up to page {search_max_pages} to see more results). Use get_class_shape \
@@ -312,33 +341,17 @@ to see which properties the instances of a class have.
 For example, to search for the class of humans in Wikidata, \
 do the following:
 search_class(kg="wikidata", query="human", page=1)""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "kg": {
-                                "type": "string",
-                                "enum": kgs,
-                                "description": "The knowledge graph to search",
-                            },
-                            "query": {
-                                "type": "string",
-                                "description": "The search query",
-                            },
-                            "page": page_prop,
-                        },
-                        "required": ["kg", "query", "page"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
+                    SearchArgs,
+                    {"kg": kgs},
+                ),
             )
 
     if fn_set in ["search_extended", "all"]:
         if has_property_index:
             fns.append(
-                {
-                    "name": "search_property_of_entity",
-                    "description": f"""\
+                function_definition(
+                    "search_property_of_entity",
+                    f"""\
 Search for properties of a given entity in the knowledge graph. \
 At most {search_k} results are returned per page (use pagination \
 up to page {search_max_pages} to see more results).
@@ -346,36 +359,16 @@ up to page {search_max_pages} to see more results).
 For example, to search for properties related to birth for Albert Einstein \
 in Wikidata, do the following:
 search_property_of_entity(kg="wikidata", entity="wd:Q937", query="birth", page=1)""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "kg": {
-                                "type": "string",
-                                "enum": kgs,
-                                "description": "The knowledge graph to search",
-                            },
-                            "entity": {
-                                "type": "string",
-                                "description": "The entity to search properties for",
-                            },
-                            "query": {
-                                "type": "string",
-                                "description": "The search query",
-                            },
-                            "page": page_prop,
-                        },
-                        "required": ["kg", "entity", "query", "page"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
+                    SearchPropertyOfEntityArgs,
+                    {"kg": kgs},
+                ),
             )
 
         if index_names:
             fns.append(
-                {
-                    "name": "search_object_of_property",
-                    "description": f"""\
+                function_definition(
+                    "search_object_of_property",
+                    f"""\
 Search one of the indices for items at the object position of a given \
 property in the knowledge graph. At most {search_k} results are returned \
 per page (use pagination up to page {search_max_pages} to see more \
@@ -388,80 +381,26 @@ query="football", index="entities", page=1)
 Or to search for restaurant-related amenities in OSM, do the following:
 search_object_of_property(kg="osm", property="osmkey:amenity", \
 query="restaurant", index="literals", page=1)""",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "kg": {
-                                "type": "string",
-                                "enum": kgs,
-                                "description": "The knowledge graph to search",
-                            },
-                            "property": {
-                                "type": "string",
-                                "description": "The property to search objects for",
-                            },
-                            "query": {
-                                "type": "string",
-                                "description": "The search query",
-                            },
-                            "index": {
-                                "type": "string",
-                                "enum": index_names,
-                                "description": "Which index to search for the property's objects",
-                            },
-                            "page": page_prop,
-                        },
-                        "required": ["kg", "property", "query", "index", "page"],
-                        "additionalProperties": False,
-                    },
-                    "strict": True,
-                },
+                    SearchObjectOfPropertyArgs,
+                    {"kg": kgs, "index": index_names},
+                ),
             )
 
-    # prepare query type arg
-    query_types = [typ for mod in known_modalities for typ in MODALITY_QUERY_TYPES[mod]]
-    query_type_prop = {
-        "type": "string",
-        "enum": sorted(qt for qt, _ in query_types),
-        "description": "How to interpret the query string: "
-        + ", ".join(f'"{qt}" for {desc}' for qt, desc in query_types),
-    }
+    # query types only with more than one modality
+    multimodal = len(known_modalities) > 1
+    filter_model = MultimodalSearchFilterArgs if multimodal else SearchFilterArgs
+    constraints_model = (
+        MultimodalSearchConstraintsArgs if multimodal else SearchConstraintsArgs
+    )
 
     if fn_set in ["search_filter", "all"] and index_names:
-        search_filter_props = {
-            "kg": {
-                "type": "string",
-                "enum": kgs,
-                "description": "The knowledge graph to search",
-            },
-            "index": {
-                "type": "string",
-                "enum": index_names,
-                "description": "The index to search in",
-            },
-            "sparql": {
-                "type": ["string", "null"],
-                "description": "The SPARQL query for filtering or null for an unconstrained search",
-            },
-            "query": {
-                "type": "string",
-                "description": "The search query",
-            },
-            "page": page_prop,
-        }
-        search_filter_required = ["kg", "index", "sparql", "query", "page"]
-
-        if len(query_types) > 1:
-            search_filter_props["query_type"] = query_type_prop
-            search_filter_required.append("query_type")
-
         search_filter_name = (
             "search" if fn_set == "search_filter" else "search_with_filter"
         )
         fns.append(
-            {
-                "name": search_filter_name,
-                "description": f"""\
+            function_definition(
+                search_filter_name,
+                f"""\
 Search for knowledge graph items in a context-sensitive way by specifying a filter \
 SPARQL query together with a search query. The SPARQL query must be a single-column SELECT \
 query returning knowledge graph identifiers (IRIs or literals). The search is then restricted \
@@ -476,79 +415,19 @@ Or to search for properties of Albert Einstein related to his birth in \
 Wikidata, do the following:
 {search_filter_name}(kg="wikidata", index="properties", sparql="SELECT DISTINCT ?p WHERE {{ wd:Q937 ?p ?o }}", \
 query="birth", page=1)""",
-                "parameters": {
-                    "type": "object",
-                    "properties": search_filter_props,
-                    "required": search_filter_required,
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
+                filter_model,
+                {"kg": kgs, "index": index_names},
+            ),
         )
 
     if fn_set == "search_constraints" and index_names:
-        search_constraints_props = {
-            "kg": {
-                "type": "string",
-                "enum": kgs,
-                "description": "The knowledge graph to search",
-            },
-            "index": {
-                "type": "string",
-                "enum": index_names,
-                "description": "The index to search in",
-            },
-            "position": {
-                "type": "string",
-                "enum": ["subject", "property", "object"],
-                "description": "The position/type of item to look for",
-            },
-            "query": {
-                "type": "string",
-                "description": "The search query",
-            },
-            "constraints": {
-                "type": ["object", "null"],
-                "description": "Constraints for the search (null for unconstrained)",
-                "properties": {
-                    "subject": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the subject (null for unconstrained)",
-                    },
-                    "property": {
-                        "type": ["string", "null"],
-                        "description": "IRI for constraining the property (null for unconstrained)",
-                    },
-                    "object": {
-                        "type": ["string", "null"],
-                        "description": "IRI or literal for constraining the object (null for unconstrained)",
-                    },
-                },
-                "required": ["subject", "property", "object"],
-                "additionalProperties": False,
-            },
-            "page": page_prop,
-        }
-        search_constraints_required = [
-            "kg",
-            "index",
-            "position",
-            "query",
-            "constraints",
-            "page",
-        ]
-
-        if len(query_types) > 1:
-            search_constraints_props["query_type"] = query_type_prop
-            search_constraints_required.append("query_type")
-
         search_constraints_name = (
             "search" if fn_set == "search_constraints" else "search_with_constraints"
         )
         fns.append(
-            {
-                "name": search_constraints_name,
-                "description": f"""\
+            function_definition(
+                search_constraints_name,
+                f"""\
 Search for knowledge graph items at a particular position (subject, property, or object) \
 with optional constraints. If constraints are provided, they are used to limit the search \
 space accordingly. At most {search_k} results are returned per page (use pagination \
@@ -561,14 +440,9 @@ Or to search for properties of Albert Einstein related to his birth in Wikidata,
 do the following:
 {search_constraints_name}(kg="wikidata", index="properties", position="property", query="birth", \
 constraints={{"subject": "wd:Q937"}}, page=1)""",
-                "parameters": {
-                    "type": "object",
-                    "properties": search_constraints_props,
-                    "required": search_constraints_required,
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
+                constraints_model,
+                {"kg": kgs, "index": index_names},
+            ),
         )
 
     return fns
@@ -596,10 +470,11 @@ def call_function(
     example_indices: dict | None = None,
 ) -> str | ToolCallResult:
     if fn_name == "execute":
+        execute_args = ExecuteArgs.model_validate(fn_args)
         result = execute_sparql(
             managers,
-            fn_args["kg"],
-            fn_args["sparql"],
+            execute_args.kg,
+            execute_args.sparql,
             config.result_max_rows,
             config.result_max_columns,
             known,
@@ -611,14 +486,15 @@ def call_function(
         return result.tool_result()
 
     elif fn_name == "list":
+        list_args = ListArgs.model_validate(fn_args)
         return list_triples(
             managers,
-            fn_args["kg"],
-            fn_args.get("subject"),
-            fn_args.get("property"),
-            fn_args.get("object"),
-            fn_args.get("page") or 1,
-            fn_args.get("unclipped") or False,
+            list_args.kg,
+            list_args.subject,
+            list_args.property,
+            list_args.object,
+            list_args.page,
+            list_args.unclipped,
             config.list_k,
             known,
             config.sparql_request_timeout,
@@ -626,141 +502,145 @@ def call_function(
         )
 
     elif fn_name == "search_entity":
+        search_args = SearchArgs.model_validate(fn_args)
         return search_entity(
             managers,
-            fn_args["kg"],
-            fn_args["query"],
+            search_args.kg,
+            search_args.query,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
-            page=fn_args.get("page") or 1,
+            page=search_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_property":
+        search_args = SearchArgs.model_validate(fn_args)
         return search_property(
             managers,
-            fn_args["kg"],
-            fn_args["query"],
+            search_args.kg,
+            search_args.query,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
-            page=fn_args.get("page") or 1,
+            page=search_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_class":
+        search_args = SearchArgs.model_validate(fn_args)
         return search_class(
             managers,
-            fn_args["kg"],
-            fn_args["query"],
+            search_args.kg,
+            search_args.query,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
-            page=fn_args.get("page") or 1,
+            page=search_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_literal":
+        search_args = SearchArgs.model_validate(fn_args)
         return search_literal(
             managers,
-            fn_args["kg"],
-            fn_args["query"],
+            search_args.kg,
+            search_args.query,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
-            page=fn_args.get("page") or 1,
+            page=search_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_property_of_entity":
+        entity_args = SearchPropertyOfEntityArgs.model_validate(fn_args)
         return search_with_constraints(
             managers,
-            fn_args["kg"],
+            entity_args.kg,
             "properties",
             "property",
-            fn_args["query"],
-            {"subject": fn_args["entity"]},
+            entity_args.query,
+            {"subject": entity_args.entity},
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
-            config.sparql_request_timeout,
-            config.sparql_read_timeout,
-            page=fn_args.get("page") or 1,
+            request_timeout=config.sparql_request_timeout,
+            read_timeout=config.sparql_read_timeout,
+            page=entity_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_object_of_property":
-        manager, _ = find_manager(managers, fn_args["kg"])
-        if fn_args["index"] not in manager.indices:
+        object_args = SearchObjectOfPropertyArgs.model_validate(fn_args)
+        manager, _ = find_manager(managers, object_args.kg)
+        if object_args.index not in manager.indices:
             raise FunctionCallException(
-                f"Knowledge graph {fn_args['kg']} has no {fn_args['index']} index"
+                f"Knowledge graph {object_args.kg} has no {object_args.index} index"
             )
         return search_with_constraints(
             managers,
-            fn_args["kg"],
-            fn_args["index"],
+            object_args.kg,
+            object_args.index,
             "object",
-            fn_args["query"],
-            {"property": fn_args["property"]},
+            object_args.query,
+            {"property": object_args.property},
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
-            config.sparql_request_timeout,
-            config.sparql_read_timeout,
-            page=fn_args.get("page") or 1,
+            request_timeout=config.sparql_request_timeout,
+            read_timeout=config.sparql_read_timeout,
+            page=object_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_with_constraints" or (
         fn_name == "search" and config.fn_set == "search_constraints"
     ):
+        constraints_args = MultimodalSearchConstraintsArgs.model_validate(fn_args)
+        constraints = constraints_args.constraints
         return search_with_constraints(
             managers,
-            fn_args["kg"],
-            fn_args["index"],
-            fn_args["position"],
-            fn_args["query"],
-            fn_args.get("constraints"),
+            constraints_args.kg,
+            constraints_args.index,
+            constraints_args.position,
+            constraints_args.query,
+            constraints.model_dump() if constraints is not None else None,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            constraints_args.query_type,
             config.sparql_request_timeout,
             config.sparql_read_timeout,
-            page=fn_args.get("page") or 1,
+            page=constraints_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "search_with_filter" or (
         fn_name == "search" and config.fn_set == "search_filter"
     ):
+        filter_args = MultimodalSearchFilterArgs.model_validate(fn_args)
         return search_with_filter(
             managers,
-            fn_args["kg"],
-            fn_args["index"],
-            fn_args["sparql"],
-            fn_args["query"],
+            filter_args.kg,
+            filter_args.index,
+            filter_args.sparql,
+            filter_args.query,
             config.search_k,
             known,
-            fn_args.get("query_type", "text"),
+            filter_args.query_type,
             config.know_before_use,
             config.sparql_request_timeout,
             config.sparql_read_timeout,
-            page=fn_args.get("page") or 1,
+            page=filter_args.page,
             max_pages=config.search_max_pages,
         )
 
     elif fn_name == "get_class_shape":
-        manager, _ = find_manager(managers, fn_args["kg"])
+        shape_args = GetClassShapeArgs.model_validate(fn_args)
+        manager, _ = find_manager(managers, shape_args.kg)
         if manager.shapes is None:
-            return f"No class shapes available for knowledge graph '{fn_args['kg']}'"
+            return f"No class shapes available for knowledge graph '{shape_args.kg}'"
         return get_class_shape(
             manager,
             manager.shapes,
-            fn_args["iri"],
-            fn_args.get("direction") or "out",
-            fn_args.get("query"),
-            fn_args.get("page") or 1,
+            shape_args.iri,
+            shape_args.direction,
+            shape_args.query,
+            shape_args.page,
             config.shape_k,
             known,
         )
@@ -794,9 +674,9 @@ def format_shapes(views: list[ShapeView]) -> str:
 
 
 def class_shape_function_definition(kgs: list[str]) -> dict:
-    return {
-        "name": "get_class_shape",
-        "description": f"""\
+    return function_definition(
+        "get_class_shape",
+        f"""\
 Get the shape of a class in pseudo-ShEx, i.e., either the properties its \
 instances have together with their values (direction "out"), or the properties \
 pointing to its instances together with where they come from (direction "in"). \
@@ -814,41 +694,9 @@ get_class_shape(kg="wikidata", iri="wd:Q5", direction="out", query="birth", page
 
 Or to see which properties point to humans in Wikidata, do the following:
 get_class_shape(kg="wikidata", iri="wd:Q5", direction="in", query=null, page=1)""",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "kg": {
-                    "type": "string",
-                    "enum": kgs,
-                    "description": "The knowledge graph to look up the class in",
-                },
-                "iri": {
-                    "type": "string",
-                    "description": "The class IRI",
-                },
-                "direction": {
-                    "type": "string",
-                    "enum": ["out", "in"],
-                    "description": "Whether to show the properties of the class "
-                    "instances (out) or the properties pointing to them (in), "
-                    'default should be "out"',
-                },
-                "query": {
-                    "type": ["string", "null"],
-                    "description": "Search query for ranking the properties of the "
-                    "class (null to show the most common ones)",
-                },
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (1-indexed) for paginating the "
-                    "properties (default should be 1)",
-                },
-            },
-            "required": ["kg", "iri", "direction", "query", "page"],
-            "additionalProperties": False,
-        },
-        "strict": True,
-    }
+        GetClassShapeArgs,
+        {"kg": kgs},
+    )
 
 
 def rank_class_properties(

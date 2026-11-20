@@ -2,9 +2,10 @@ import math
 import random
 from typing import Any
 
-from pydantic import BaseModel, SerializeAsAny
+from pydantic import BaseModel, Field, SerializeAsAny
 
 from grasp.configs import GraspConfig
+from grasp.function_args import function_definition
 from grasp.functions import (
     SelectionGroup,
     find_manager,
@@ -61,6 +62,23 @@ class SparqlQaExampleIndex(ExampleIndex):
 EXAMPLE_FUNCTIONS = {"search_example", "get_random_examples"}
 
 
+class GetRandomExamplesArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to find examples for")
+    page: int = Field(
+        ge=1,
+        description="The page number to return. Use pagination to see more examples.",
+    )
+
+
+class SearchExampleArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to find examples for")
+    query: str = Field(description="The question to find examples for")
+    page: int = Field(
+        ge=1,
+        description="The page number to return. Use pagination to see more examples.",
+    )
+
+
 def functions(config: GraspConfig, example_indices: dict) -> list[dict]:
     example_kgs = [
         kg.kg
@@ -74,9 +92,9 @@ def functions(config: GraspConfig, example_indices: dict) -> list[dict]:
     example_info = format_list(f'"{kg}"' for kg in example_kgs)
 
     if config.random_examples:
-        fn = {
-            "name": "get_random_examples",
-            "description": f"""\
+        fn = function_definition(
+            "get_random_examples",
+            f"""\
 Find random examples of SPARQL-question-pairs over the specified knowledge graph. \
 At most {config.num_examples} examples are returned per page (use pagination \
 up to page {config.search_max_pages} to see more examples).
@@ -86,32 +104,14 @@ get_random_examples(kg="wikidata", page=1)
 
 Currently, examples are available for the following knowledge graphs:
 {example_info}""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": example_kgs,
-                        "description": "The knowledge graph to find examples for",
-                    },
-                    "page": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": config.search_max_pages,
-                        "description": "The page number to return. Use pagination "
-                        "to see more examples.",
-                    },
-                },
-                "required": ["kg", "page"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        }
+            GetRandomExamplesArgs,
+            {"kg": example_kgs},
+        )
 
     else:
-        fn = {
-            "name": "search_example",
-            "description": f"""\
+        fn = function_definition(
+            "search_example",
+            f"""\
 Find SPARQL-question-pairs over the specified knowledge graph that \
 try to answer a similar question to the one provided (e.g., can be the \
 user question itself, a sub-question or reformulation of it, or \
@@ -125,31 +125,9 @@ search_example(kg="wikidata", query="What is the capital of France?", page=1)
 
 Currently, examples are available for the following knowledge graphs:
 {example_info}""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": example_kgs,
-                        "description": "The knowledge graph to find examples for",
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "The question to find examples for",
-                    },
-                    "page": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": config.search_max_pages,
-                        "description": "The page number to return. Use pagination "
-                        "to see more examples.",
-                    },
-                },
-                "required": ["kg", "query", "page"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        }
+            SearchExampleArgs,
+            {"kg": example_kgs},
+        )
 
     return [fn]
 
@@ -165,30 +143,32 @@ def call_function(
     ei = example_indices or {}
 
     if fn_name == "get_random_examples":
+        random_args = GetRandomExamplesArgs.model_validate(fn_args)
         return get_random_examples(
             managers,
             ei,
-            fn_args["kg"],
+            random_args.kg,
             config.num_examples,
             known,
             config.result_max_rows,
             config.result_max_columns,
-            fn_args.get("page") or 1,
+            random_args.page,
             config.search_max_pages,
             config.seed,
         )
 
     elif fn_name == "search_example":
+        search_args = SearchExampleArgs.model_validate(fn_args)
         return search_example(
             managers,
             ei,
-            fn_args["kg"],
-            fn_args["query"],
+            search_args.kg,
+            search_args.query,
             config.num_examples,
             known,
             config.result_max_rows,
             config.result_max_columns,
-            fn_args.get("page") or 1,
+            search_args.page,
             config.search_max_pages,
         )
 

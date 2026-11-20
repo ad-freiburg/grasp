@@ -1,14 +1,20 @@
 from typing import Any
 
 from grammar_utils.parse import LR1Parser  # type: ignore
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from grasp.function_args import function_definition
 from grasp.functions import class_shape_function_definition
 from grasp.model import Message
 from grasp.shapes import Shapes
 from grasp.sparql.utils import find_all, parse_string
+from grasp.tasks.auto_setup.functions import STOP_FUNCTION, SetDescriptionArgs
 from grasp.tasks.base import GraspTask
-from grasp.tasks.functions import find_frequent, find_frequent_function_definition
+from grasp.tasks.functions import (
+    FindFrequentArgs,
+    find_frequent,
+    find_frequent_function_definition,
+)
 from grasp.utils import FunctionCallException
 
 REFERENCE_SETUP = {
@@ -88,6 +94,20 @@ def validate_schema_pattern_format(pattern: str, parser: LR1Parser) -> None:
             'far side of the property (the target when ?dir is "out", the '
             'source when ?dir is "in").'
         )
+
+
+class SetInstancePatternArgs(BaseModel):
+    pattern: str | None = Field(
+        description="The SPARQL graph pattern binding ?instance for {CLASS}, "
+        "or null to clear it.",
+    )
+
+
+class SetSchemaPatternArgs(BaseModel):
+    pattern: str | None = Field(
+        description="The SPARQL graph pattern binding ?property, ?dir and ?other "
+        "for {CLASS}, or null to clear it.",
+    )
 
 
 class ShapesSetupTask(GraspTask):
@@ -175,66 +195,27 @@ Reference description:
         kgs = [m.kg for m in self.managers]
         fns: list[dict] = [
             find_frequent_function_definition(kgs, self.config.list_k),
-            {
-                "name": "show_setup",
-                "description": "Show the current patterns and description for the class shapes.",
-                # an empty object schema makes some vllm models generate endlessly
-                "parameters": {},
-            },
-            {
-                "name": "set_instance_pattern",
-                "description": "Set or clear the instance pattern.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": ["string", "null"],
-                            "description": "The SPARQL graph pattern binding ?instance for {CLASS}, or null to clear it.",
-                        },
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
-            {
-                "name": "set_schema_pattern",
-                "description": "Set or clear the schema pattern.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": ["string", "null"],
-                            "description": "The SPARQL graph pattern binding ?property, ?dir and ?other for {CLASS}, or null to clear it.",
-                        },
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
-            {
-                "name": "set_description",
-                "description": "Set a concise description of what the class shapes cover. "
+            function_definition(
+                "show_setup",
+                "Show the current patterns and description for the class shapes.",
+            ),
+            function_definition(
+                "set_instance_pattern",
+                "Set or clear the instance pattern.",
+                SetInstancePatternArgs,
+            ),
+            function_definition(
+                "set_schema_pattern",
+                "Set or clear the schema pattern.",
+                SetSchemaPatternArgs,
+            ),
+            function_definition(
+                "set_description",
+                "Set a concise description of what the class shapes cover. "
                 "Typically a single sentence about covered classes and any caveats is sufficient.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "description": {
-                            "type": "string",
-                            "description": "The description",
-                        },
-                    },
-                    "required": ["description"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
-            {
-                "name": "stop",
-                "description": "Stop the setup process.",
-                "parameters": {},
-            },
+                SetDescriptionArgs,
+            ),
+            STOP_FUNCTION,
         ]
 
         # kg_functions already includes get_class_shape once patterns are set
@@ -254,14 +235,15 @@ Reference description:
         manager = self.managers[0]
 
         if fn_name == "find_frequent":
+            find_args = FindFrequentArgs.model_validate(fn_args)
             return find_frequent(
                 self.managers,
-                fn_args["kg"],
-                fn_args["position"],
-                fn_args.get("subject"),
-                fn_args.get("property"),
-                fn_args.get("object"),
-                fn_args.get("page", 1),
+                find_args.kg,
+                find_args.position,
+                find_args.subject,
+                find_args.property,
+                find_args.object,
+                find_args.page,
                 self.config.list_k,
                 known,
                 self.config.sparql_request_timeout,
@@ -272,7 +254,7 @@ Reference description:
             return format_setup(self.state)
 
         elif fn_name == "set_instance_pattern":
-            pattern = fn_args["pattern"]
+            pattern = SetInstancePatternArgs.model_validate(fn_args).pattern
             if pattern is not None:
                 validate_instance_pattern_format(pattern, manager.sparql_parser)
             self.state.instance_pattern = pattern
@@ -284,7 +266,7 @@ Reference description:
             )
 
         elif fn_name == "set_schema_pattern":
-            pattern = fn_args["pattern"]
+            pattern = SetSchemaPatternArgs.model_validate(fn_args).pattern
             if pattern is not None:
                 validate_schema_pattern_format(pattern, manager.sparql_parser)
             self.state.schema_pattern = pattern
@@ -296,7 +278,9 @@ Reference description:
             )
 
         elif fn_name == "set_description":
-            self.state.description = fn_args["description"]
+            self.state.description = SetDescriptionArgs.model_validate(
+                fn_args,
+            ).description
             return "Description updated."
 
         elif fn_name == "stop":

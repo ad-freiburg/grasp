@@ -9,11 +9,13 @@ from collections import Counter
 from logging import Logger
 from pathlib import Path
 
+from pydantic import BaseModel, Field
 from tqdm import tqdm
 from universal_ml_utils.io import dump_json, load_json, load_jsonl
 from universal_ml_utils.logging import get_logger
 
 from grasp.configs import JudgeConfig
+from grasp.function_args import function_definition
 from grasp.manager import load_kg_manager
 from grasp.manager.utils import get_common_sparql_prefixes, load_kg_info, merge_prefixes
 from grasp.model import Message, get_model
@@ -240,6 +242,17 @@ def evaluate_f1(
     logger.info(f"Invalid evaluations: {num_invalid_evaluations:,}")
 
 
+class JudgeArgs(BaseModel):
+    explanation: str = Field(
+        description="An short explanation summarizing the reasoning behind the "
+        "verdict.",
+    )
+    verdict: str | None = Field(
+        description="The verdict of the judgement. One of the candidate letters, "
+        "or null if all candidates are equally good.",
+    )
+
+
 def judge_candidates(
     model: Model,
     question: str,
@@ -253,33 +266,14 @@ def judge_candidates(
         )
 
     candidate_chars = string.ascii_uppercase[: len(candidates)]
-    candidate_str = ", ".join(candidate_chars)
 
     functions = [
-        {
-            "name": "judge",
-            "description": "Provide the final judgement for the SPARQL query candidates.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "explanation": {
-                        "type": "string",
-                        "description": "An short explanation summarizing the reasoning behind the verdict.",
-                    },
-                    "verdict": {
-                        "type": ["string", "null"],
-                        "description": (
-                            f"The verdict of the judgement. One of {candidate_str}, or null if all "
-                            "candidates are equally good."
-                        ),
-                        "enum": list(candidate_chars) + [None],
-                    },
-                },
-                "additionalProperties": False,
-                "required": ["explanation", "verdict"],
-            },
-            "strict": True,
-        }
+        function_definition(
+            "judge",
+            "Provide the final judgement for the SPARQL query candidates.",
+            JudgeArgs,
+            {"verdict": [*candidate_chars, None]},
+        ),
     ]
 
     judge_input = (
@@ -336,8 +330,9 @@ Think before you finalize your answer with the provided judge function.""",
         raise ValueError("Expected exactly one tool call for judgement")
 
     tool_call = response.tool_calls[0]
-    explanation = tool_call.args["explanation"]
-    verdict = tool_call.args["verdict"]
+    judge_args = JudgeArgs.model_validate(tool_call.args)
+    explanation = judge_args.explanation
+    verdict = judge_args.verdict
     logger.debug(f"Verdict: {verdict}\n{explanation}")
     if verdict is None:
         return explanation, None

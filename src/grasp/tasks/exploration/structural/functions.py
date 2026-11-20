@@ -1,3 +1,6 @@
+from pydantic import BaseModel, Field
+
+from grasp.function_args import Iri, function_definition
 from grasp.functions import (
     find_manager,
     format_bnode_error,
@@ -13,54 +16,41 @@ from grasp.tasks.exploration.functions import (
 from grasp.utils import FunctionCallException, format_enumerate
 
 
+class MarkExploredArgs(BaseModel):
+    kg: str = Field(
+        description="The knowledge graph of the seed to mark as explored",
+    )
+    iri: Iri = Field(description="The IRI of the seed to mark as explored")
+
+
+class ShowExploredArgs(BaseModel):
+    kg: str = Field(
+        description="The knowledge graph for which to show explored seeds",
+    )
+    page: int = Field(
+        description="Page number (1-indexed) for paginating results "
+        "(default should be 1)",
+    )
+
+
 def note_function_definitions(managers: list[KgManager]) -> list[dict]:
     kgs = [manager.kg for manager in managers]
     functions = base_note_function_definitions(managers, general=False)
     functions.extend(
         [
-            {
-                "name": "mark_explored",
-                "description": "Mark an IRI as the seed for this exploration round. "
+            function_definition(
+                "mark_explored",
+                "Mark an IRI as the seed for this exploration round. "
                 "Exactly one seed must be marked per round.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "kg": {
-                            "type": "string",
-                            "enum": kgs,
-                            "description": "The knowledge graph of the seed to mark as explored",
-                        },
-                        "iri": {
-                            "type": "string",
-                            "description": "The IRI of the seed to mark as explored",
-                        },
-                    },
-                    "required": ["kg", "iri"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
-            {
-                "name": "show_explored",
-                "description": "Show previously explored seeds, most recent first.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "kg": {
-                            "type": "string",
-                            "enum": kgs,
-                            "description": "The knowledge graph for which to show explored seeds",
-                        },
-                        "page": {
-                            "type": "integer",
-                            "description": "Page number (1-indexed) for paginating results (default should be 1)",
-                        },
-                    },
-                    "required": ["kg", "page"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            },
+                MarkExploredArgs,
+                {"kg": kgs},
+            ),
+            function_definition(
+                "show_explored",
+                "Show previously explored seeds, most recent first.",
+                ShowExploredArgs,
+                {"kg": kgs},
+            ),
         ]
     )
     return functions

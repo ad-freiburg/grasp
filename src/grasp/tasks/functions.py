@@ -1,7 +1,12 @@
 import math
+from typing import Literal
 
+from pydantic import BaseModel, Field
+
+from grasp.function_args import Iri, Term, function_definition
 from grasp.functions import (
     MAX_RESULTS,
+    Page,
     find_manager,
     format_iri_or_literal_error,
     format_page_suffix,
@@ -14,10 +19,30 @@ from grasp.sparql.types import Position, SelectResult
 from grasp.utils import FunctionCallException, format_enumerate
 
 
+class FindFrequentArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to query")
+    position: Literal["subject", "property", "object"] = Field(
+        description="The position to find common values for",
+    )
+    subject: Iri | None = Field(
+        default=None,
+        description="IRI constraint for subject position (null for unconstrained)",
+    )
+    property: Iri | None = Field(
+        default=None,
+        description="IRI constraint for property position (null for unconstrained)",
+    )
+    object: Term | None = Field(
+        default=None,
+        description="IRI or literal constraint for object position (null for unconstrained)",
+    )
+    page: Page = 1
+
+
 def find_frequent_function_definition(kgs: list[str], k: int) -> dict:
-    return {
-        "name": "find_frequent",
-        "description": f"""\
+    return function_definition(
+        "find_frequent",
+        f"""\
 List common IRIs or literals at a given position (subject, property, \
 or object) in the knowledge graph for the given constraints. \
 Results are ordered by descending by frequency, and at most {k} \
@@ -28,41 +53,9 @@ find_frequent(kg="wikidata", position="object", property="rdf:type")
 
 Or to find the most frequently used properties in Wikidata:
 find_frequent(kg="wikidata", position="property")""",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "kg": {
-                    "type": "string",
-                    "enum": kgs,
-                    "description": "The knowledge graph to query",
-                },
-                "position": {
-                    "type": "string",
-                    "enum": ["subject", "property", "object"],
-                    "description": "The position to find common values for",
-                },
-                "subject": {
-                    "type": ["string", "null"],
-                    "description": "IRI constraint for subject position (null for unconstrained)",
-                },
-                "property": {
-                    "type": ["string", "null"],
-                    "description": "IRI constraint for property position (null for unconstrained)",
-                },
-                "object": {
-                    "type": ["string", "null"],
-                    "description": "IRI or literal constraint for object position (null for unconstrained)",
-                },
-                "page": {
-                    "type": "integer",
-                    "description": "Page number (1-indexed) for paginating results (default should be 1)",
-                },
-            },
-            "required": ["kg", "position", "subject", "property", "object", "page"],
-            "additionalProperties": False,
-        },
-        "strict": True,
-    }
+        FindFrequentArgs,
+        {"kg": kgs},
+    )
 
 
 def find_frequent(

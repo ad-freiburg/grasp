@@ -5,8 +5,14 @@ from pydantic import BaseModel
 from grasp.configs import NotesGenerateQuestionsConfig
 from grasp.model import Message
 from grasp.tasks.base import GraspTask
-from grasp.tasks.functions import find_frequent, find_frequent_function_definition
+from grasp.tasks.functions import (
+    FindFrequentArgs,
+    find_frequent,
+    find_frequent_function_definition,
+)
 from grasp.tasks.question_generation.functions import (
+    ShowQuestionsArgs,
+    SubmitQuestionArgs,
     function_definitions,
     show_questions,
     submit_question,
@@ -103,29 +109,32 @@ class QuestionGenerationTask(GraspTask):
             return "Stopping"
 
         elif fn_name == "submit_question":
+            submit_args = SubmitQuestionArgs.model_validate(fn_args)
             return submit_question(
                 self.state.questions,
-                fn_args["kg"],
-                fn_args["question"],
+                submit_args.kg,
+                submit_args.question,
             )
 
         elif fn_name == "show_questions":
+            show_args = ShowQuestionsArgs.model_validate(fn_args)
             return show_questions(
                 self.state.questions,
-                fn_args["kg"],
-                fn_args["page"],
+                show_args.kg,
+                show_args.page,
                 self.config.list_k,
             )
 
         elif fn_name == "find_frequent":
+            find_args = FindFrequentArgs.model_validate(fn_args)
             return find_frequent(
                 self.managers,
-                fn_args["kg"],
-                fn_args["position"],
-                fn_args.get("subject"),
-                fn_args.get("property"),
-                fn_args.get("object"),
-                fn_args.get("page", 1),
+                find_args.kg,
+                find_args.position,
+                find_args.subject,
+                find_args.property,
+                find_args.object,
+                find_args.page,
                 self.config.list_k,
                 known,
                 self.config.sparql_request_timeout,

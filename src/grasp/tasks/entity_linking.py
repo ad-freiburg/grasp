@@ -1,10 +1,11 @@
 import re
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
+from grasp.function_args import Iri, function_definition
 from grasp.functions import find_manager
 from grasp.manager import KgManager
 from grasp.model import Message
@@ -276,12 +277,37 @@ You need to **exactly follow these step-by-step instructions** to annotate the t
 5. When you are certain that the annotation of the current excerpt is correct and complete use the stop function."""
 
 
+class AnnotateArgs(BaseModel):
+    kg: str = Field(description="The knowledge graph to use for the annotation.")
+    words_to_be_annotated: str = Field(
+        description="The exact words to be annotated written exactly like in the "
+        "original text.",
+    )
+    occurrence_index: int = Field(
+        description="Index of the occurrence of the words in the text.",
+    )
+    entity: Iri | None = Field(
+        description="The IRI of the entity to annotate the words with, or null if "
+        "unknown.",
+    )
+
+
+class DeleteAnnotationArgs(BaseModel):
+    words_to_be_annotated: str = Field(
+        description="The exact words whose annotation should be deleted, written "
+        "exactly like in the original text.",
+    )
+    occurrence_index: int = Field(
+        description="Index of the occurrence of the words in the text.",
+    )
+
+
 def functions(managers: list[KgManager]) -> list[dict]:
     kgs = [manager.kg for manager in managers]
-    fns = [
-        {
-            "name": "annotate",
-            "description": """\
+    return [
+        function_definition(
+            "annotate",
+            """\
 Annotate a word or a sequence of words with an entity from the specified knowledge \
 graph by writing the exact words to be annotated as 'words_to_be_annotated'.
 Specify the words further by the occurrence_index, if the words only occur once, set it to 0,
@@ -289,77 +315,30 @@ if you only want to annotate the second occurence, just set it to 1.
 Careful, sometimes a word you want to annotate can be a substring of another word earlier in the text excerpt, \
 so always keep that in mind and adjust the occurrence_index accordingly.
 This function overwrites any previous annotation of the words.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph to use for the annotation.",
-                    },
-                    "words_to_be_annotated": {
-                        "type": "string",
-                        "description": "The exact words to be annotated written exactly like in the original text.",
-                    },
-                    "occurrence_index": {
-                        "type": "integer",
-                        "description": "Index of the occurrence of the words in the text.",
-                    },
-                    "entity": {
-                        "type": ["string", "null"],
-                        "description": "The IRI of the entity to annotate the words with, or null if unknown.",
-                    },
-                },
-                "required": [
-                    "kg",
-                    "words_to_be_annotated",
-                    "occurrence_index",
-                    "entity",
-                ],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "delete_annotation",
-            "description": """\
+            AnnotateArgs,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "delete_annotation",
+            """\
 Delete the annotation of a word or a sequence of words \
 by writing the exact words whose annotation should be deleted as 'words_to_be_annotated'.
 Specify the words further by the occurrence_index, if the words only occur once, set it to 0,
 if you only want to delete the annotation of the second occurence, just set it to 1.
 Careful, sometimes an annotation you want to delete can be a substring of another word earlier in the text excerpt, \
 so always keep that in mind and adjust the occurrence_index accordingly.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "words_to_be_annotated": {
-                        "type": "string",
-                        "description": "The exact words whose annotation should be deleted, written exactly like in the original text.",
-                    },
-                    "occurrence_index": {
-                        "type": "integer",
-                        "description": "Index of the occurrence of the words in the text.",
-                    },
-                },
-                "required": ["words_to_be_annotated", "occurrence_index"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "show_annotations",
-            "description": "Show the current annotations of the text excerpt, "
+            DeleteAnnotationArgs,
+        ),
+        function_definition(
+            "show_annotations",
+            "Show the current annotations of the text excerpt, "
             "including information about the annotated entities.",
-            # an empty object schema makes some vllm models generate endlessly
-            "parameters": {},
-        },
-        {
-            "name": "stop",
-            "description": "Finalize your annotations and stop the annotation process.",
-            "parameters": {},
-        },
+        ),
+        function_definition(
+            "stop",
+            "Finalize your annotations and stop the annotation process.",
+        ),
     ]
-    return fns
 
 
 def find_matches(
@@ -561,12 +540,13 @@ def call_function(
     show_state_after_annotate = el_kwargs.get("show_state_after_annotate", True)
 
     if fn_name == "annotate":
+        annotate_args = AnnotateArgs.model_validate(fn_args)
         return annotate(
             managers,
-            fn_args["kg"],
-            fn_args["words_to_be_annotated"],
-            fn_args["occurrence_index"],
-            fn_args["entity"],
+            annotate_args.kg,
+            annotate_args.words_to_be_annotated,
+            annotate_args.occurrence_index,
+            annotate_args.entity,
             state,
             known,
             know_before_annotate,
@@ -574,9 +554,10 @@ def call_function(
         )
 
     elif fn_name == "delete_annotation":
+        delete_args = DeleteAnnotationArgs.model_validate(fn_args)
         return delete_annotation(
-            fn_args["words_to_be_annotated"],
-            fn_args["occurrence_index"],
+            delete_args.words_to_be_annotated,
+            delete_args.occurrence_index,
             state,
             show_state_after_annotate,
         )

@@ -1,13 +1,18 @@
 import re
 from typing import Any
-from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from grasp.configs import GraspConfig
-from grasp.functions import check_known, find_manager, selection_groups
+from grasp.function_args import Sparql, function_definition
+from grasp.functions import (
+    ExecuteArgs,
+    check_known,
+    find_manager,
+    selection_groups,
+)
 from grasp.manager import KgManager, format_kgs
-from grasp.model import Message, ToolCall, ToolCallResult
+from grasp.model import Message, ToolCallResult
 from grasp.model.base import ResponseMessage
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (
@@ -65,6 +70,37 @@ should be an ASK query.',
     ]
 
 
+class AnswerArgs(BaseModel):
+    kg: str = Field(
+        description="The knowledge graph on which the final SPARQL query needs "
+        "to be executed",
+    )
+    sparql: Sparql = Field(description="The final SPARQL query")
+    answer: str = Field(
+        description="The answer to the question based on the SPARQL query results",
+    )
+
+
+class BestAttempt(BaseModel):
+    sparql: Sparql = Field(description="The best SPARQL query so far")
+    kg: str = Field(
+        description="The knowledge graph on which the SPARQL query needs to be "
+        "executed",
+    )
+
+
+class CancelArgs(BaseModel):
+    explanation: str = Field(
+        description="A detailed explanation of why you could not find a "
+        "satisfactory SPARQL query",
+    )
+    best_attempt: BestAttempt | None = Field(
+        default=None,
+        description="Your best attempt at a SPARQL query so far, can be omitted "
+        "if there is none",
+    )
+
+
 def functions(
     managers: list[KgManager],
     config: GraspConfig,
@@ -72,75 +108,24 @@ def functions(
 ) -> list[dict]:
     kgs = [manager.kg for manager in managers]
     fns = [
-        {
-            "name": "answer",
-            "description": """\
+        function_definition(
+            "answer",
+            """\
 Provide your final SPARQL query and a concise answer to the user question \
 based on the query results. Only include the direct answer, no reasoning \
 or step summaries. This function will stop the generation process.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kg": {
-                        "type": "string",
-                        "enum": kgs,
-                        "description": "The knowledge graph on which the final SPARQL query \
-needs to be executed",
-                    },
-                    "sparql": {
-                        "type": "string",
-                        "description": "The final SPARQL query",
-                    },
-                    "answer": {
-                        "type": "string",
-                        "description": "The answer to the question based \
-on the SPARQL query results",
-                    },
-                },
-                "required": ["kg", "sparql", "answer"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "cancel",
-            "description": """\
+            AnswerArgs,
+            {"kg": kgs},
+        ),
+        function_definition(
+            "cancel",
+            """\
 If you are unable to find a SPARQL query that answers the question well, \
 you can call this function instead of the answer function. This function will \
 stop the generation process.""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "explanation": {
-                        "type": "string",
-                        "description": "A detailed explanation of why you \
-could not find a satisfactory SPARQL query",
-                    },
-                    "best_attempt": {
-                        "type": ["object", "null"],
-                        "description": "Your best attempt at a SPARQL query so far, \
-can be omitted if there is none",
-                        "properties": {
-                            "sparql": {
-                                "type": "string",
-                                "description": "The best SPARQL query so far",
-                            },
-                            "kg": {
-                                "type": "string",
-                                "enum": kgs,
-                                "description": "The knowledge graph on which \
-the SPARQL query needs to be executed",
-                            },
-                        },
-                        "required": ["sparql", "kg"],
-                        "additionalProperties": False,
-                    },
-                },
-                "required": ["explanation", "best_attempt"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+            CancelArgs,
+            {"kg": kgs},
+        ),
     ]
 
     fns.extend(example_functions(config, example_indices))
@@ -148,36 +133,17 @@ the SPARQL query needs to be executed",
     return fns
 
 
-class AnswerModel(BaseModel):
-    kg: str
-    sparql: str
-    answer: str
+def validate_args[T: BaseModel](args: type[T], data: dict | str) -> T | None:
+    # None if the data are no valid arguments, e.g. of a failed call
+    try:
+        if isinstance(data, str):
+            return args.model_validate_json(data)
+        return args.model_validate(data)
+    except ValidationError:
+        return None
 
 
-class AnswerCallModel(BaseModel):
-    name: str
-    arguments: AnswerModel
-
-
-class BestAttemptModel(BaseModel):
-    sparql: str
-    kg: str
-
-
-class CancelModel(BaseModel):
-    explanation: str
-    best_attempt: BestAttemptModel | str | None = None
-
-
-class CancelCallModel(BaseModel):
-    name: str
-    arguments: CancelModel
-
-
-def get_raw_json_from_message(message: str | ResponseMessage) -> str | None:
-    if isinstance(message, ResponseMessage):
-        message = message.content
-
+def get_raw_json_from_message(message: str) -> str | None:
     stripped = message.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
         return stripped
@@ -193,66 +159,27 @@ def get_raw_json_from_message(message: str | ResponseMessage) -> str | None:
     return None
 
 
-def get_answer_from_message(message: str | ResponseMessage | None) -> ToolCall | None:
-    if message is None:
-        return None
-
-    tool_call = get_raw_json_from_message(message)
-    if tool_call is None:
-        return None
-
-    try:
-        args = AnswerModel.model_validate_json(tool_call).model_dump()
-        return ToolCall(id=uuid4().hex, name="answer", args=args)
-    except ValidationError:
-        return None
-
-
-def get_cancel_from_message(message: str | ResponseMessage | None) -> ToolCall | None:
-    if message is None:
-        return None
-
-    tool_call = get_raw_json_from_message(message)
-    if tool_call is None:
-        return None
-
-    try:
-        args = CancelModel.model_validate_json(tool_call).model_dump()
-        return ToolCall(id=uuid4().hex, name="cancel", args=args)
-    except ValidationError:
-        return None
-
-
-def get_sparql_from_message(message: str | ResponseMessage | None) -> ToolCall | None:
-    if message is None:
-        return None
-    elif isinstance(message, ResponseMessage):
-        message = message.content
-
+def get_sparql_from_message(message: str) -> str | None:
     # Check for SPARQL code blocks
     sparql_match = re.search(
         r"```sparql\s*(.*?)\s*```",
         message,
         re.IGNORECASE | re.DOTALL,
     )
-    if sparql_match:
-        sparql_query = sparql_match.group(1).strip()
-        return ToolCall(
-            id=uuid4().hex,
-            name="answer",
-            args={"kg": None, "sparql": sparql_query, "answer": message},
-        )
-
-    return None
+    if sparql_match is None:
+        return None
+    return sparql_match.group(1).strip()
 
 
 def get_answer_or_cancel(
     messages: list[Message],
-) -> tuple[ToolCall | None, ToolCall | None]:
+    default_kg: str,
+) -> AnswerArgs | CancelArgs | None:
+    # the last answer or cancel call, otherwise parsed from the last message or
+    # from the last execute call; queries without kg are for the default one
     last_message: str | None = None
-    last_answer: ToolCall | None = None
-    last_cancel: ToolCall | None = None
-    last_execute: ToolCall | None = None
+    last: AnswerArgs | CancelArgs | None = None
+    last_execute: ExecuteArgs | None = None
     assert messages[0].role == "system", "First message should be system"
     assert messages[1].role == "user", "Second message should be user"
     for message in messages[2:]:
@@ -262,8 +189,7 @@ def get_answer_or_cancel(
         is_user_message = message.role == "user"
         if is_intermediate_feedback or is_user_message:
             # reset stuff after intermediate feedback or user message
-            last_answer = None
-            last_cancel = None
+            last = None
             last_message = None
             last_execute = None
 
@@ -278,39 +204,39 @@ def get_answer_or_cancel(
 
         for tool_call in message.content.tool_calls:
             if tool_call.name == "answer":
-                last_answer = tool_call
-                # reset last cancel
-                last_cancel = None
+                last = validate_args(AnswerArgs, tool_call.args) or last
 
             elif tool_call.name == "cancel":
-                last_cancel = tool_call
-                # reset last answer
-                last_answer = None
+                last = validate_args(CancelArgs, tool_call.args) or last
 
             elif tool_call.name == "execute":
-                last_execute = tool_call
+                last_execute = (
+                    validate_args(ExecuteArgs, tool_call.args) or last_execute
+                )
 
-    # try to parse answer from last message if neither are set
-    if last_answer is None and last_cancel is None:
-        last_answer = get_answer_from_message(last_message)
+    if last is not None:
+        return last
 
-    # try to parse cancel from last message if both are still None
-    if last_answer is None and last_cancel is None:
-        last_cancel = get_cancel_from_message(last_message)  # type: ignore
+    if last_message is not None:
+        raw_json = get_raw_json_from_message(last_message)
+        if raw_json is not None:
+            answer = validate_args(AnswerArgs, raw_json)
+            last = answer or validate_args(CancelArgs, raw_json)
 
-    # try to parse SPARQL from last message if both are still None
-    if last_answer is None and last_cancel is None:
-        last_answer = get_sparql_from_message(last_message)
+    if last is None and last_message is not None:
+        sparql = get_sparql_from_message(last_message)
+        if sparql is not None:
+            last = AnswerArgs(kg=default_kg, sparql=sparql, answer=last_message)
 
     # try last execute function call for SPARQL QA
-    if last_answer is None and last_cancel is None and last_execute is not None:
-        last_answer = ToolCall(
-            id="dummy",
-            name="answer",
-            args={**last_execute.args, "answer": last_message or "No answer provided"},
+    if last is None and last_execute is not None:
+        last = AnswerArgs(
+            kg=last_execute.kg,
+            sparql=last_execute.sparql,
+            answer=last_message or "No answer provided",
         )
 
-    return last_answer, last_cancel  # type: ignore
+    return last
 
 
 def prepare_formatted_output(
@@ -356,8 +282,8 @@ def output(
     request_timeout: tuple[float, float],
     read_timeout: float,
 ) -> dict | None:
-    answer, cancel = get_answer_or_cancel(messages)
-    if answer is None and cancel is None:
+    final = get_answer_or_cancel(messages, managers[0].kg)
+    if final is None:
         return None
 
     output: dict[str, Any] = {
@@ -368,22 +294,20 @@ def output(
         "endpoint": None,
     }
 
-    if answer is not None:
+    if isinstance(final, AnswerArgs):
         output["type"] = "answer"
-        output["answer"] = answer.args["answer"].strip()
-        output["sparql"] = answer.args["sparql"]
-        output["kg"] = answer.args["kg"]
+        output["answer"] = final.answer.strip()
+        output["sparql"] = final.sparql
+        output["kg"] = final.kg
         formatted = output["answer"]
 
     else:
-        assert cancel is not None
         output["type"] = "cancel"
-        output["explanation"] = cancel.args["explanation"].strip()
+        output["explanation"] = final.explanation.strip()
 
-        best_attempt = cancel.args.get("best_attempt")
-        if best_attempt:
-            output["sparql"] = best_attempt.get("sparql")
-            output["kg"] = best_attempt.get("kg")
+        if final.best_attempt is not None:
+            output["sparql"] = final.best_attempt.sparql
+            output["kg"] = final.best_attempt.kg
 
         formatted = output["explanation"]
 
@@ -529,16 +453,16 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         # locate the final query to verify: the answer's query, or a
         # cancel's best attempt (a concrete {sparql, kg} object)
         if fn_name == "answer":
-            kg = fn_args.get("kg")
-            sparql = fn_args.get("sparql")
+            answer_args = AnswerArgs.model_validate(fn_args)
+            kg = answer_args.kg
+            sparql = answer_args.sparql
         else:
-            best_attempt = fn_args.get("best_attempt")
-            if not best_attempt:
+            best_attempt = CancelArgs.model_validate(fn_args).best_attempt
+            if best_attempt is None:
                 return result
 
-            assert isinstance(best_attempt, dict)
-            kg = best_attempt.get("kg")
-            sparql = best_attempt.get("sparql")
+            kg = best_attempt.kg
+            sparql = best_attempt.sparql
 
         assert kg is not None and sparql is not None, "kg and sparql must be provided"
 

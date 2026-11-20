@@ -1,66 +1,66 @@
-from grammar_utils.parse import LR1Parser  # type: ignore
+from typing import Literal
 
+from grammar_utils.parse import LR1Parser  # type: ignore
+from pydantic import BaseModel, Field
+
+from grasp.function_args import Sparql, function_definition
 from grasp.sparql.utils import (
     find,
     parse_string,
     parse_to_string_with_whitespace,
 )
 
-STOP_FUNCTION = {
-    "name": "stop",
-    "description": "Stop the setup process.",
-    # an empty object schema makes some vllm models generate endlessly
-    "parameters": {},
-}
+STOP_FUNCTION = function_definition("stop", "Stop the setup process.")
+
+
+class SetDescriptionArgs(BaseModel):
+    description: str = Field(description="The description")
+
+
+class SetQueryArgs(BaseModel):
+    type: Literal["index", "info"] = Field(
+        description="Whether this is an index query or an info query",
+    )
+    sparql: Sparql | None = Field(
+        description="The SPARQL query, or null to clear / unset the current query.",
+    )
+
+
+class ShowIndexSetupArgs(BaseModel):
+    index: str = Field(description="The index to show the setup for")
+
+
+class AddPrefixArgs(BaseModel):
+    short: str = Field(description="The short prefix name (e.g. 'wd')")
+    namespace: str = Field(
+        description="The full IRI namespace (e.g. 'http://www.wikidata.org/entity/')",
+    )
+
+
+class DeletePrefixArgs(BaseModel):
+    short: str = Field(description="The short prefix name to delete")
+
+
+class UpdatePrefixArgs(BaseModel):
+    short: str = Field(description="The short prefix name to update")
+    namespace: str = Field(description="The new full IRI namespace")
 
 
 def set_description_function(description: str) -> dict:
-    return {
-        "name": "set_description",
-        "description": description,
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string",
-                    "description": "The description",
-                },
-            },
-            "required": ["description"],
-            "additionalProperties": False,
-        },
-        "strict": True,
-    }
+    return function_definition("set_description", description, SetDescriptionArgs)
 
 
 def index_functions(others: list[str]) -> list[dict]:
     fns: list[dict] = [
-        {
-            "name": "show_setup",
-            "description": "Show the current index and info SPARQL queries for the knowledge graph.",
-            "parameters": {},
-        },
-        {
-            "name": "set_query",
-            "description": "Set or clear the index or info SPARQL query for the knowledge graph.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "type": {
-                        "type": "string",
-                        "enum": ["index", "info"],
-                        "description": "Whether this is an index query or an info query",
-                    },
-                    "sparql": {
-                        "type": ["string", "null"],
-                        "description": "The SPARQL query, or null to clear / unset the current query.",
-                    },
-                },
-                "required": ["type", "sparql"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+        function_definition(
+            "show_setup",
+            "Show the current index and info SPARQL queries for the knowledge graph.",
+        ),
+        function_definition(
+            "set_query",
+            "Set or clear the index or info SPARQL query for the knowledge graph.",
+            SetQueryArgs,
+        ),
         set_description_function(
             "Set a concise description of what this index contains and how it is built. "
             "Typically a single sentence is sufficient."
@@ -71,24 +71,13 @@ def index_functions(others: list[str]) -> list[dict]:
     # so that overlaps with them are deliberate
     if others:
         fns.append(
-            {
-                "name": "show_index_setup",
-                "description": "Show the setup (index SPARQL, info SPARQL, and description) "
+            function_definition(
+                "show_index_setup",
+                "Show the setup (index SPARQL, info SPARQL, and description) "
                 "of another index of this knowledge graph that is already set up.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "index": {
-                            "type": "string",
-                            "enum": others,
-                            "description": "The index to show the setup for",
-                        },
-                    },
-                    "required": ["index"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
+                ShowIndexSetupArgs,
+                {"index": others},
+            )
         )
 
     fns.append(STOP_FUNCTION)
@@ -97,71 +86,29 @@ def index_functions(others: list[str]) -> list[dict]:
 
 def info_functions() -> list[dict]:
     return [
-        {
-            "name": "show_setup",
-            "description": "Show the current prefixes and description of the knowledge graph.",
-            "parameters": {},
-        },
-        {
-            "name": "add_prefix",
-            "description": "Add a new prefix for the knowledge graph, mapping a short "
+        function_definition(
+            "show_setup",
+            "Show the current prefixes and description of the knowledge graph.",
+        ),
+        function_definition(
+            "add_prefix",
+            "Add a new prefix for the knowledge graph, mapping a short "
             "prefix name to its full IRI namespace (e.g. 'wd' for "
             "'http://www.wikidata.org/entity/'). Only knowledge graph specific "
             "prefixes need to be added - common prefixes like rdf, rdfs, and "
             "xsd are available by default.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "short": {
-                        "type": "string",
-                        "description": "The short prefix name (e.g. 'wd')",
-                    },
-                    "namespace": {
-                        "type": "string",
-                        "description": "The full IRI namespace (e.g. 'http://www.wikidata.org/entity/')",
-                    },
-                },
-                "required": ["short", "namespace"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "delete_prefix",
-            "description": "Delete an existing knowledge graph prefix.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "short": {
-                        "type": "string",
-                        "description": "The short prefix name to delete",
-                    },
-                },
-                "required": ["short"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
-        {
-            "name": "update_prefix",
-            "description": "Update the namespace of an existing knowledge graph prefix.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "short": {
-                        "type": "string",
-                        "description": "The short prefix name to update",
-                    },
-                    "namespace": {
-                        "type": "string",
-                        "description": "The new full IRI namespace",
-                    },
-                },
-                "required": ["short", "namespace"],
-                "additionalProperties": False,
-            },
-            "strict": True,
-        },
+            AddPrefixArgs,
+        ),
+        function_definition(
+            "delete_prefix",
+            "Delete an existing knowledge graph prefix.",
+            DeletePrefixArgs,
+        ),
+        function_definition(
+            "update_prefix",
+            "Update the namespace of an existing knowledge graph prefix.",
+            UpdatePrefixArgs,
+        ),
         set_description_function(
             "Set a concise description of what the knowledge graph contains. "
             "Typically a single sentence about the domain and scope of the "
