@@ -3,8 +3,8 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel, field_serializer
 
-from grasp.functions import find_manager, identifiers, iri_spans
-from grasp.manager import KgManager
+from grasp.functions import identifiers, iri_spans
+from grasp.manager import KgManager, UnknownKgError, find_manager
 from grasp.model import Message, ToolCall
 from grasp.provenance.trace import (
     STOPPING,
@@ -14,7 +14,6 @@ from grasp.provenance.trace import (
     iter_tool_calls,
     note_iris,
 )
-from grasp.utils import FunctionCallException
 
 
 class ProvenanceState(BaseModel):
@@ -76,8 +75,8 @@ class Provenance:
         # or items, and for stopping calls, whose query is the output
         new = self.state.known - self.attributed
         try:
-            manager, _ = find_manager(managers, tool_call.args.get("kg", ""))
-        except FunctionCallException:
+            manager = find_manager(managers, tool_call.args.get("kg", ""))
+        except UnknownKgError:
             # calls without or with an unknown knowledge graph
             manager = None
         items = None
