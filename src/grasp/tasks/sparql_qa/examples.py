@@ -5,7 +5,6 @@ from typing import Any
 from pydantic import BaseModel, Field, SerializeAsAny
 
 from grasp.configs import GraspConfig
-from grasp.function_args import function_definition
 from grasp.functions import (
     SelectionGroup,
     format_page_suffix,
@@ -17,7 +16,7 @@ from grasp.functions import (
     validate_query,
 )
 from grasp.manager import KgManager, find_manager
-from grasp.model import ToolCallResult
+from grasp.model import FunctionDefinition, ToolCallResult
 from grasp.examples import ExampleIndex, Sample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import format_list
@@ -78,7 +77,7 @@ class SearchExampleArgs(BaseModel):
     )
 
 
-def functions(config: GraspConfig, example_indices: dict) -> list[dict]:
+def functions(config: GraspConfig, example_indices: dict) -> list[FunctionDefinition]:
     example_kgs = [
         kg.kg
         for kg in config.knowledge_graphs
@@ -91,7 +90,7 @@ def functions(config: GraspConfig, example_indices: dict) -> list[dict]:
     example_info = format_list(f'"{kg}"' for kg in example_kgs)
 
     if config.random_examples:
-        fn = function_definition(
+        fn = FunctionDefinition(
             "get_random_examples",
             f"""\
 Find random examples of SPARQL-question-pairs over the specified knowledge graph. \
@@ -108,7 +107,7 @@ Currently, examples are available for the following knowledge graphs:
         )
 
     else:
-        fn = function_definition(
+        fn = FunctionDefinition(
             "search_example",
             f"""\
 Find SPARQL-question-pairs over the specified knowledge graph that \

@@ -17,27 +17,6 @@ Term = Annotated[str, ArgKind.TERM]
 Sparql = Annotated[str, ArgKind.SPARQL]
 
 
-def function_definition(
-    name: str,
-    description: str,
-    args: type[BaseModel] | None = None,
-    enums: dict[str, Sequence[str | None]] | None = None,
-) -> dict[str, Any]:
-    # strict definition for the model APIs; enums limit arguments to values
-    # known at runtime, e.g. kg, also nested ones
-    if args is None:
-        # an empty object schema makes some vllm models generate endlessly
-        return {"name": name, "description": description, "parameters": {}}
-    parameters = strict_json_schema(args)
-    add_enums(parameters, enums or {})
-    return {
-        "name": name,
-        "description": description,
-        "parameters": parameters,
-        "strict": True,
-    }
-
-
 def add_enums(schema: dict[str, Any], enums: dict[str, Sequence[str | None]]) -> None:
     for name, prop in schema.get("properties", {}).items():
         if name in enums:

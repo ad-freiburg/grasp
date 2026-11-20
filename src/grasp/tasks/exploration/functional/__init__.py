@@ -3,7 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from grasp.configs import GraspConfig, NotesConfig, NotesFromExplorationConfig
-from grasp.model import Message
+from grasp.model import FunctionDefinition, Message
 from grasp.tasks.base import GraspTask
 from grasp.tasks.exploration import shared_rules
 from grasp.tasks.exploration.functions import call_function as call_note_function
@@ -89,7 +89,7 @@ class FunctionalExplorationTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return [
             *note_function_definitions(self.managers, kg_specific=False),
             *example_function_definitions(self.config, self.example_indices),

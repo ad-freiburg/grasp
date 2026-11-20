@@ -3,7 +3,7 @@ from typing import Any
 from grasp.configs import GraspConfig
 from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
-from grasp.model import Message, Response
+from grasp.model import FunctionDefinition, Message, Response
 from grasp.sparql.utils import (
     find,
     find_all,
@@ -210,7 +210,7 @@ class WdqlTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return functions()
 
     def call_function(

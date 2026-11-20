@@ -3,7 +3,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from grasp.configs import NoteTakingConfig
-from grasp.model import Message, Response
+from grasp.model import FunctionDefinition, Message, Response
 from grasp.tasks.base import GraspTask
 from grasp.tasks.exploration.functions import (
     call_function as call_note_function,
@@ -231,7 +231,7 @@ class NotesFromTracesTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         # note-taking functions plus the example functions the agent had access
         # to, so the note-taker can retrace and verify example retrievals
         fns = note_function_definitions(self.managers)

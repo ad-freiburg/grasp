@@ -13,7 +13,7 @@ from grasp.manager.utils import (
     load_kg_info,
     merge_prefixes,
 )
-from grasp.model import Message
+from grasp.model import FunctionDefinition, Message
 from grasp.sparql.term import extract_sparql_terms
 from grasp.sparql.types import IRI_INDEX_NAMES, iri_indices
 from grasp.sparql.utils import (
@@ -360,7 +360,7 @@ and repeat, otherwise stop."""
             "focus on the bigger picture.",
         ]
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         kgs = [m.kg for m in self.managers]
         functions = [find_frequent_function_definition(kgs, self.config.list_k)]
         if self.input["phase"] == "index":

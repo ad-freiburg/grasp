@@ -3,10 +3,10 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 from grasp.configs import GraspConfig
-from grasp.function_args import Sparql, function_definition
+from grasp.function_args import Sparql
 from grasp.functions import ExecutionResult, selection_groups
 from grasp.manager import KgManager
-from grasp.model import Message, Response
+from grasp.model import FunctionDefinition, Message, Response
 from grasp.tasks.base import GraspTask
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import format_list
@@ -26,14 +26,14 @@ class CancelArgs(BaseModel):
     reason: str = Field(description="The reason for cancelling the task")
 
 
-def functions() -> list[dict]:
+def functions() -> list[FunctionDefinition]:
     return [
-        function_definition(
+        FunctionDefinition(
             "answer",
             "Finalize your output and stop.",
             AnswerArgs,
         ),
-        function_definition(
+        FunctionDefinition(
             "cancel",
             "Stop the task without producing an output.",
             CancelArgs,
@@ -177,7 +177,7 @@ class SparqlToQuestionTask(GraspTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return functions()
 
     def call_function(

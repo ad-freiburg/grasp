@@ -227,7 +227,7 @@ def generate(
     yield {
         "type": "system",
         "config": config.model_dump(),
-        "functions": fns,
+        "functions": [fn.schema() for fn in fns],
         "system_message": system_instruction,
     }
 
@@ -237,7 +237,7 @@ def generate(
 
     fn_msg = Message(
         role="functions",
-        content=json.dumps([fn["name"] for fn in fns], indent=2),
+        content=json.dumps([fn.name for fn in fns], indent=2),
     )
     logger.debug(format_message(fn_msg))
 
@@ -342,7 +342,7 @@ def generate(
             # the last step only offers the task's limit functions, if any
             limit_fns = task.limit_functions()
             if limit_fns is not None:
-                fns = [fn for fn in fns if fn["name"] in limit_fns]
+                fns = [fn for fn in fns if fn.name in limit_fns]
 
         try:
             response = model(messages, fns)

@@ -4,14 +4,14 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from grasp.configs import GraspConfig
-from grasp.function_args import Sparql, function_definition
+from grasp.function_args import Sparql
 from grasp.functions import (
     ExecuteArgs,
     check_known,
     selection_groups,
 )
 from grasp.manager import KgManager, find_manager, format_kgs
-from grasp.model import Message, ToolCallResult
+from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.model.base import ResponseMessage
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (
@@ -104,10 +104,10 @@ def functions(
     managers: list[KgManager],
     config: GraspConfig,
     example_indices: dict,
-) -> list[dict]:
+) -> list[FunctionDefinition]:
     kgs = [manager.kg for manager in managers]
     fns = [
-        function_definition(
+        FunctionDefinition(
             "answer",
             """\
 Provide your final SPARQL query and a concise answer to the user question \
@@ -116,7 +116,7 @@ or step summaries. This function will stop the generation process.""",
             AnswerArgs,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "cancel",
             """\
 If you are unable to find a SPARQL query that answers the question well, \
@@ -418,7 +418,7 @@ class SparqlQaTask(GraspTask, FeedbackTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def function_definitions(self) -> list[dict]:
+    def function_definitions(self) -> list[FunctionDefinition]:
         return functions(self.managers, self.config, self.example_indices)
 
     def call_function(

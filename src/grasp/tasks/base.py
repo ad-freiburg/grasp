@@ -3,7 +3,7 @@ from typing import Any
 
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
-from grasp.model import Message, ToolCallResult
+from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.examples import Sample
 
 
@@ -45,7 +45,7 @@ class GraspTask(ABC):
     def rules(self) -> list[str]: ...
 
     @abstractmethod
-    def function_definitions(self) -> list[dict]: ...
+    def function_definitions(self) -> list[FunctionDefinition]: ...
 
     @abstractmethod
     def call_function(

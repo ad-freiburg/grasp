@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
-from grasp.function_args import function_definition
 from grasp.manager import KgManager
+from grasp.model import FunctionDefinition
 from grasp.utils import FunctionCallException, clip, format_notes
 
 
@@ -47,7 +47,7 @@ def note_function_definitions(
     managers: list[KgManager],
     general: bool = True,
     kg_specific: bool = True,
-) -> list[dict]:
+) -> list[FunctionDefinition]:
     assert general or kg_specific, "at least one of general or kg_specific must be True"
 
     kgs: list[str | None] = [manager.kg for manager in managers]
@@ -70,31 +70,31 @@ def note_function_definitions(
         else (AddNoteArgs, DeleteNoteArgs, UpdateNoteArgs, ShowNotesArgs)
     )
     return [
-        function_definition(
+        FunctionDefinition(
             "add_note",
             f"Add a {general_or_kg} note{hint}.",
             add,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "delete_note",
             f"Delete a {general_or_kg} note{hint}.",
             delete,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "update_note",
             f"Update a {general_or_kg} note{hint}.",
             update,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "show_notes",
             f"Show current {general_or_kg} notes{hint}.",
             show,
             {"kg": kgs},
         ),
-        function_definition("stop", "Stop the note taking process."),
+        FunctionDefinition("stop", "Stop the note taking process."),
     ]
 
 

@@ -9,11 +9,11 @@ from pydantic import BaseModel, Field
 from search_rdf import EmbeddingIndex
 
 from grasp.configs import GraspConfig, ShapeConfig
-from grasp.function_args import Iri, Sparql, Term, function_definition
+from grasp.function_args import Iri, Sparql, Term
 from grasp.manager import KgManager, find_manager, split_managers
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
-from grasp.model import ToolCallResult
+from grasp.model import FunctionDefinition, ToolCallResult
 from grasp.shapes import PropertyProfile, Shapes, ShapeView
 from grasp.sparql.term import parse_into_binding
 from grasp.sparql.types import (
@@ -203,7 +203,7 @@ def kg_functions(
     list_k: int,
     search_k: int,
     search_max_pages: int,
-) -> list[dict]:
+) -> list[FunctionDefinition]:
     assert fn_set in [
         "base",
         "search",
@@ -230,7 +230,7 @@ def kg_functions(
     index_names = sorted(known_indices)
 
     fns = [
-        function_definition(
+        FunctionDefinition(
             "execute",
             """\
 Execute a SPARQL query and retrieve its results as a table if successful, \
@@ -242,7 +242,7 @@ execute(kg="wikidata", sparql="SELECT ?job WHERE { wd:Q937 wdt:P106 ?job }")""",
             ExecuteArgs,
             {"kg": kgs},
         ),
-        function_definition(
+        FunctionDefinition(
             "list",
             f"""\
 List triples from the knowledge graph satisfying the given subject, property, \
@@ -276,7 +276,7 @@ list(kg="wikidata", property="wdt:P19")""",
     if fn_set in ["search", "search_extended", "all"]:
         if has_entity_index:
             fns.append(
-                function_definition(
+                FunctionDefinition(
                     "search_entity",
                     f"""\
 Search for entities in the knowledge graph with a search query. \
@@ -293,7 +293,7 @@ search_entity(kg="wikidata", query="albert einstein", page=1)""",
 
         if has_property_index:
             fns.append(
-                function_definition(
+                FunctionDefinition(
                     "search_property",
                     f"""\
 Search for properties in the knowledge graph with a search query. \
@@ -309,7 +309,7 @@ search_property(kg="wikidata", query="birth", page=1)""",
 
         if has_literal_index:
             fns.append(
-                function_definition(
+                FunctionDefinition(
                     "search_literal",
                     f"""\
 Search for literal values (e.g. enumerable string values used as objects, \
@@ -329,7 +329,7 @@ search_literal(kg="osm-planet", query="restaurant", page=1)""",
 
         if has_class_index:
             fns.append(
-                function_definition(
+                FunctionDefinition(
                     "search_class",
                     f"""\
 Search for classes in the knowledge graph with a search query. \
@@ -348,7 +348,7 @@ search_class(kg="wikidata", query="human", page=1)""",
     if fn_set in ["search_extended", "all"]:
         if has_property_index:
             fns.append(
-                function_definition(
+                FunctionDefinition(
                     "search_property_of_entity",
                     f"""\
 Search for properties of a given entity in the knowledge graph. \
@@ -365,7 +365,7 @@ search_property_of_entity(kg="wikidata", entity="wd:Q937", query="birth", page=1
 
         if index_names:
             fns.append(
-                function_definition(
+                FunctionDefinition(
                     "search_object_of_property",
                     f"""\
 Search one of the indices for items at the object position of a given \
@@ -397,7 +397,7 @@ query="restaurant", index="literals", page=1)""",
             "search" if fn_set == "search_filter" else "search_with_filter"
         )
         fns.append(
-            function_definition(
+            FunctionDefinition(
                 search_filter_name,
                 f"""\
 Search for knowledge graph items in a context-sensitive way by specifying a filter \
@@ -424,7 +424,7 @@ query="birth", page=1)""",
             "search" if fn_set == "search_constraints" else "search_with_constraints"
         )
         fns.append(
-            function_definition(
+            FunctionDefinition(
                 search_constraints_name,
                 f"""\
 Search for knowledge graph items at a particular position (subject, property, or object) \
@@ -660,8 +660,8 @@ def format_shapes(views: list[ShapeView]) -> str:
     return format_enumerate(format_shape_view(view) for view in views)
 
 
-def class_shape_function_definition(kgs: list[str]) -> dict:
-    return function_definition(
+def class_shape_function_definition(kgs: list[str]) -> FunctionDefinition:
+    return FunctionDefinition(
         "get_class_shape",
         f"""\
 Get the shape of a class in pseudo-ShEx, i.e., either the properties its \
