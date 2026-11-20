@@ -14,6 +14,7 @@ from search_rdf.model import (
     SentenceTransformerModel,
 )
 from universal_ml_utils.logging import get_logger
+from universal_ml_utils.ops import partition_by
 from universal_ml_utils.table import generate_table
 
 from grasp.configs import KgConfig, ShapeConfig, TypedIndexConfig
@@ -996,6 +997,27 @@ def load_kg_manager(cfg: KgConfig, skip_indices: bool = False) -> KgManager:
             cfg.shapes.cache_size,
         )
     return manager
+
+
+class UnknownKgError(ValueError):
+    pass
+
+
+def split_managers(
+    managers: list[KgManager],
+    kg: str,
+) -> tuple[KgManager, list[KgManager]]:
+    # the manager of the knowledge graph and the others
+    found, others = partition_by(managers, lambda m: m.kg == kg)
+    if not found:
+        raise UnknownKgError(f"Unknown knowledge graph {kg}")
+    elif len(found) > 1:
+        raise ValueError(f"Multiple managers found for knowledge graph {kg}")
+    return found[0], others
+
+
+def find_manager(managers: list[KgManager], kg: str) -> KgManager:
+    return split_managers(managers, kg)[0]
 
 
 def format_shapes(shapes: Shapes) -> str:

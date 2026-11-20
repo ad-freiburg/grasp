@@ -6,8 +6,7 @@ from pydantic import BaseModel, Field
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
 from grasp.function_args import Iri, function_definition
-from grasp.functions import find_manager
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager
 from grasp.model import Message
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.entities import (
@@ -389,7 +388,7 @@ def annotate(
     # A function for the llm to call to annotate the words_to_be_annotated in the text
     # with the entity and knowledge graph. The occurrence_index helps to distinguish
     # between different occurrences of the words in the text excerpt.
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
     sequence = state.text.data[state.annotation_window]
 
     start_idx, end_idx = find_matches(words_to_be_annotated, sequence, occurrence_index)

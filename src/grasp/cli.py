@@ -38,7 +38,7 @@ from grasp.configs import (
 from grasp.core import generate, load_notes, setup
 from grasp.evaluate import evaluate_f1, evaluate_with_expert, evaluate_with_judge
 from grasp.examples import load_example_indices, task_to_index
-from grasp.functions import find_manager
+from grasp.manager import find_manager
 from grasp.notes import (
     generate_questions,
     take_notes_from_exploration,
@@ -1088,7 +1088,7 @@ def setup_grasp(args: argparse.Namespace) -> None:
     elif len(managers) == 1:
         manager = managers[0]
     else:
-        manager, _ = find_manager(managers, args.knowledge_graph)
+        manager = find_manager(managers, args.knowledge_graph)
 
     notes, kg_notes = load_notes(config)
     kg_dir = get_index_dir(manager.kg)
@@ -1208,7 +1208,7 @@ def shapes_setup_grasp(args: argparse.Namespace) -> None:
     elif len(managers) == 1:
         manager = managers[0]
     else:
-        manager, _ = find_manager(managers, args.knowledge_graph)
+        manager = find_manager(managers, args.knowledge_graph)
 
     notes, kg_notes = load_notes(config)
     kg_dir = get_index_dir(manager.kg)
@@ -1285,7 +1285,7 @@ def shapes_build_grasp(args: argparse.Namespace) -> None:
         logger.error("No KG managers available")
         return
 
-    manager, _ = find_manager(managers, args.knowledge_graph)
+    manager = find_manager(managers, args.knowledge_graph)
 
     kg_dir = get_index_dir(manager.kg)
     setup_path = os.path.join(kg_dir, "shapes", "setup.json")

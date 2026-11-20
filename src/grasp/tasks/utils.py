@@ -2,11 +2,10 @@ from grasp.functions import (
     ExecutionResult,
     SelectionGroup,
     execute_sparql,
-    find_manager,
     format_selection_groups,
     update_known_from_selections,
 )
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager
 from grasp.sparql.term import selections_from_sparql
 from grasp.sparql.types import Selection
 from grasp.sparql.utils import READ_TIMEOUT, REQUEST_TIMEOUT
@@ -23,7 +22,7 @@ def prepare_sparql_result(
     read_timeout: float | None = READ_TIMEOUT,
     sparql_result_max_rows: int | None = None,
 ) -> tuple[ExecutionResult, list[Selection]]:
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     # selections are parse-derived (no execution needed), so compute them first
     # and return them even when execution fails. This way callers still see the

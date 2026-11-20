@@ -8,10 +8,9 @@ from grasp.function_args import Sparql, function_definition
 from grasp.functions import (
     ExecuteArgs,
     check_known,
-    find_manager,
     selection_groups,
 )
-from grasp.manager import KgManager, format_kgs
+from grasp.manager import KgManager, find_manager, format_kgs
 from grasp.model import Message, ToolCallResult
 from grasp.model.base import ResponseMessage
 from grasp.tasks.base import FeedbackTask, GraspTask
@@ -262,7 +261,7 @@ def prepare_formatted_output(
         read_timeout=read_timeout,
         sparql_result_max_rows=sparql_result_max_rows,
     )
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     groups = selection_groups(selections, manager, result.sparql)
     return {
@@ -466,7 +465,7 @@ class SparqlQaTask(GraspTask, FeedbackTask):
 
         assert kg is not None and sparql is not None, "kg and sparql must be provided"
 
-        manager, _ = find_manager(self.managers, kg)
+        manager = find_manager(self.managers, kg)
         try:
             # all non-common-prefix IRIs must be known from the trace
             check_known(manager, sparql, known)

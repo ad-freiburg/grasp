@@ -7,8 +7,7 @@ from universal_ml_utils.table import generate_table
 from grasp.configs import GraspConfig
 from grasp.examples import Sample
 from grasp.function_args import Iri, function_definition
-from grasp.functions import find_manager
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager
 from grasp.model import Message
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.entities import (
@@ -331,7 +330,7 @@ def annotate(
     know_before_annotate: bool = True,
     show_state_after_annotation: bool = False,
 ) -> str | CeaAnnotationsResult:
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     try:
         annotation = prepare_annotation(manager, entity, known, know_before_annotate)
