@@ -77,10 +77,8 @@ class Provenance:
         tool_call: ToolCall,
         messages: Sequence[Message | dict],
     ) -> dict[str, Any] | None:
-        # the provenance of the items in the arguments of a finished tool call,
-        # compared with the calls before; afterwards the items it showed and
-        # used are part of the state. None for calls without a knowledge graph
-        # or items, and for stopping calls, whose query is the output
+        # the provenance of the items a finished call uses, then adds the items it
+        # showed and used to the state; None without items or for stopping calls
         new = self.state.known - self.attributed
         try:
             manager = find_manager(managers, tool_call.args.get("kg", ""))

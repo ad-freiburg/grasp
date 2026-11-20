@@ -1,6 +1,8 @@
 from functools import cache
 from types import SimpleNamespace
+from typing import cast
 
+from grasp.manager import KgManager
 from grasp.manager.utils import find_longest_prefix, get_common_sparql_prefixes
 from grasp.provenance.trace import note_iris
 from grasp.sparql.utils import load_iri_and_literal_parser, load_sparql_parser
@@ -12,9 +14,9 @@ REMOTE = "http://example.org/remote/"
 # a knowledge graph manager with the ex prefix and no indices, also used by
 # the tests of the provenance state
 @cache
-def example_manager() -> SimpleNamespace:
+def example_manager() -> KgManager:
     prefixes = {**get_common_sparql_prefixes(), "ex": EX}
-    return SimpleNamespace(
+    manager = SimpleNamespace(
         kg="example",
         prefixes=prefixes,
         sparql_parser=load_sparql_parser(),
@@ -24,6 +26,7 @@ def example_manager() -> SimpleNamespace:
         get_iri_label=lambda iri: None,
         format_iri=lambda iri: iri,
     )
+    return cast(KgManager, manager)
 
 
 SERVICE_QUERY = f"""PREFIX remote: <{REMOTE}>
