@@ -3,14 +3,13 @@ from typing import Iterable
 from pydantic import BaseModel
 
 from grasp.functions import parse_iri_or_literal
-from grasp.manager import KgManager, format_kgs
+from grasp.manager import KgManager
 from grasp.model import ToolCallResult
 from grasp.sparql.types import KgItem, TermKind, format_kg_item
+from grasp.tasks.feedback import FeedbackTask
 from grasp.utils import (
     FunctionCallException,
-    format_enumerate,
     format_list,
-    format_notes,
     format_section,
 )
 
@@ -130,34 +129,6 @@ def format_annotated_entities(entities: list[KgItem]) -> str:
     )
 
 
-def annotation_feedback_system_message(
-    managers: list[KgManager],
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
-    rules: list[str],
-    kind: str,
-) -> str:
-    return "\n\n".join(
-        [
-            f"You are a {kind} annotation assistant providing feedback on the "
-            f"output of a {kind} annotation system for a given input {kind}.",
-            format_section(
-                "Available knowledge graphs",
-                format_kgs(managers, kg_notes),
-            ),
-            format_section(
-                "General notes across knowledge graphs",
-                format_notes(notes, enumerated=True),
-            ),
-            format_section(
-                "Rules to follow",
-                format_enumerate(rules) if rules else "None",
-            ),
-            "Provide your feedback with the give_feedback function.",
-        ]
-    )
-
-
 def annotation_feedback_instructions(inputs: list[str], output: dict) -> str:
     assert inputs, "At least one input is required for feedback"
 
@@ -173,3 +144,18 @@ def annotation_feedback_instructions(inputs: list[str], output: dict) -> str:
     sections.append(format_section("Input", inputs[-1].strip()))
     sections.append(format_section("Annotations", output["formatted"]))
     return "\n\n".join(sections)
+
+
+class AnnotationFeedbackTask(FeedbackTask):
+    # what is annotated, e.g. table or text
+    kind: str
+
+    def system_information(self) -> str:
+        return (
+            f"You are a {self.kind} annotation assistant providing feedback on the "
+            f"output of a {self.kind} annotation system for a given input {self.kind}."
+            "\n\nProvide your feedback with the give_feedback function."
+        )
+
+    def instructions(self, inputs: list[str], output: dict) -> str:
+        return annotation_feedback_instructions(inputs, output)

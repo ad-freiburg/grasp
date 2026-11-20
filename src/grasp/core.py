@@ -33,7 +33,7 @@ from grasp.provenance.state import ProvenanceState
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
-from grasp.tasks.feedback import Feedback, format_feedback, generate_feedback
+from grasp.tasks.feedback import Feedback, format_feedback
 from grasp.tasks.sparql_qa.examples import find_examples
 from grasp.utils import (
     format_enumerate,
@@ -169,25 +169,31 @@ def load_notes(config: GraspConfig) -> tuple[list[str], dict[str, list[str]]]:
     return general_notes, kg_notes  # type: ignore
 
 
-def review(
+def generate_feedback(
     task_name: str,
-    input: Any,
+    inputs: list[str],
+    output: dict,
     config: GraspConfig,
     managers: list[KgManager],
     kg_notes: dict[str, list[str]],
     notes: list[str],
     example_indices: dict[str, ExampleIndex] | None,
     logger: Logger,
-    model: Model,
+    custom_model: Model | None,
 ) -> Feedback:
-    # the reviewer is a run of its own, with the notes and without feedback
+    # the feedback task is a run of its own, with the notes, its own number
+    # of steps and without feedback
     config = config.model_copy(deep=True)
     config.feedback = False
     config.notes_only_for_feedback = False
+    config.max_steps = config.feedback_max_steps
+    if config.max_steps == 1:
+        # a single step has to give the feedback
+        config.tool_choice = "required"
 
     *_, run = generate(
         task_name,
-        input,
+        {"inputs": inputs, "output": output},
         config,
         managers,
         kg_notes,
@@ -195,18 +201,18 @@ def review(
         example_indices,
         logger=logger,
         yield_output=True,
-        custom_model=model,
+        custom_model=custom_model,
     )
 
-    output = run["output"]
-    if output is None:
+    feedback = run["output"]
+    if feedback is None:
         error = run["error"]
         reason = error["content"] if error else "no feedback given"
-        raise RuntimeError(f"Reviewer {task_name} failed: {reason}")
+        raise RuntimeError(f"Feedback task {task_name} failed: {reason}")
 
     return Feedback(
-        status=output["status"],
-        feedback=output["feedback"],
+        status=feedback["status"],
+        feedback=feedback["feedback"],
         trace=run["messages"],
     )
 
@@ -257,13 +263,15 @@ def generate(
     task.provenance.attribute_known()
 
     # setup functions (after setup so tasks can configure based on input)
-    fns = kg_functions(
-        managers,
-        config.fn_set,
-        config.list_k,
-        config.search_k,
-        config.search_max_pages,
-    )
+    fns = []
+    if task.kg_functions:
+        fns = kg_functions(
+            managers,
+            config.fn_set,
+            config.list_k,
+            config.search_k,
+            config.search_max_pages,
+        )
     fns.extend(task.function_definitions())
     task.provenance.add_functions(fns)
     yield {"type": "input", "input": input}
@@ -544,7 +552,7 @@ def generate(
 
         # get latest output
         output = task.output(messages)
-        if output is None:
+        if output is None or task.feedback_task is None:
             break
 
         # provide feedback
@@ -554,38 +562,24 @@ def generate(
                 for message in messages
                 if isinstance(message.content, str) and message.role == "user"
             ]
-            reviewer = task.reviewer(inputs, output)  # type: ignore
-            if reviewer is None:
-                feedback = generate_feedback(
-                    model,
-                    task,
-                    feedback_kg_notes or kg_notes or {},
-                    feedback_notes or notes or [],
-                    inputs,  # type: ignore
-                    output,
-                    logger,
-                )
-            else:
-                feedback = review(
-                    *reviewer,
-                    config,
-                    managers,
-                    feedback_kg_notes or kg_notes or {},
-                    feedback_notes or notes or [],
-                    example_indices,
-                    logger,
-                    model,
-                )
+            feedback = generate_feedback(
+                task.feedback_task,
+                inputs,
+                output,
+                config,
+                managers,
+                feedback_kg_notes or kg_notes or {},
+                feedback_notes or notes or [],
+                example_indices,
+                logger,
+                custom_model,
+            )
         except Exception as e:
             error = {
                 "content": f"Failed to generate feedback:\n{e}",
                 "reason": "feedback",
             }
             logger.error(format_error(**error))
-            break
-
-        if feedback is None:
-            # no feedback
             break
 
         # the trace behind the feedback is kept with its message
