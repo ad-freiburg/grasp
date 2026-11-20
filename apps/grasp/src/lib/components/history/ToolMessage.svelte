@@ -1,4 +1,5 @@
 <script>
+  import { getContext } from 'svelte';
   import MessageCard from './MessageCard.svelte';
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
@@ -64,6 +65,17 @@
   function jumpToShown(chip) {
     const ref = chipItems.get(chip.key)?.shown_by;
     if (ref) provenanceJump.set({ ref, prefer: 'result' });
+  }
+
+  // the items this call showed first that later calls or answers use,
+  // clicking a use jumps to it
+  const laterUses = getContext('laterUses');
+  $: later = [...($laterUses?.get(message?.id)?.values() ?? [])];
+
+  function jumpToUse(use) {
+    provenanceJump.set(
+      use.ref ? { ref: use.ref, prefer: 'args' } : { answer: use.answer, spans: use.spans }
+    );
   }
 
   // step and time limits after this call, only set with show_limits
@@ -180,6 +192,24 @@
   {/if}
   </div>
 
+  {#if later.length}
+    <ul class="later">
+      {#each later as { item, uses } (item.identifier)}
+        <li>
+          <span class="later__item" title={item.identifier}>
+            {item.label ? `${item.label} (${item.written})` : item.written}
+          </span>
+          used later by
+          {#each uses as use, index}
+            <button type="button" class="later__use" on:click={() => jumpToUse(use)}>
+              {use.text}</button
+            >{index < uses.length - 1 ? ', ' : ''}
+          {/each}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
   {#if limitParts.length}
     <footer class="limits" class:limits--reached={limitReached}>
       {limitParts.join(' · ')}{limitReached ? ' · limit reached' : ''}
@@ -281,6 +311,29 @@
 
   .arg-chip__value--truncated::after {
     display: block;
+  }
+
+  .later {
+    list-style: none;
+    margin: var(--spacing-sm) 0 0;
+    padding: 0;
+    font-size: 0.75rem;
+    color: var(--text-subtle);
+  }
+
+  .later__item {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .later__use {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: var(--color-uni-blue);
+    text-decoration: underline;
+    cursor: pointer;
   }
 
   .limits {

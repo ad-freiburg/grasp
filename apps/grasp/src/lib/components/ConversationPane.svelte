@@ -81,8 +81,52 @@
     new Map(histories.flat().filter((message) => message?.type === 'tool').map((message) => [message.id, message]))
   );
 
+  // calls that are no steps, as on the server
+  const STOPPING = new Set(['answer', 'cancel']);
+
+  // the later calls and answers using the items a call showed first, by the
+  // id of that call and the item, from the provenance of the later ones
+  const laterUses = writable(new Map());
+  setContext('laterUses', laterUses);
+  $: laterUses.set(collectLaterUses(histories));
+
+  function collectLaterUses(histories) {
+    const byCall = new Map();
+    const add = (item, use) => {
+      const id = item.shown_by?.id;
+      if (!id) return;
+      if (!byCall.has(id)) byCall.set(id, new Map());
+      const items = byCall.get(id);
+      if (!items.has(item.identifier)) items.set(item.identifier, { item, uses: [] });
+      items.get(item.identifier).uses.push(use);
+    };
+    let step = 0;
+    histories.forEach((history, h) => {
+      for (const message of history) {
+        if (message?.type === 'tool' && !STOPPING.has(message.name)) {
+          step += 1;
+          for (const item of message.provenance?.items ?? []) {
+            const ref = {
+              id: message.id,
+              used_args: [...(item.args ?? []), ...(item.spans.length ? ['sparql'] : [])],
+              sparql_spans: item.spans
+            };
+            add(item, { text: `step ${step}`, ref });
+          }
+        } else if (message?.type === 'output') {
+          for (const item of message.output?.provenance?.trace?.items ?? []) {
+            const text = histories.length > 1 ? `answer ${h + 1}` : 'answer';
+            add(item, { text, answer: h, spans: item.spans });
+          }
+        }
+      }
+    });
+    return byCall;
+  }
+
   const unsubscribeJump = provenanceJump.subscribe((jump) => {
-    if (jump) jumpToToolCall(jump);
+    if (jump?.ref) jumpToToolCall(jump);
+    else if (jump) jumpToAnswer(jump);
   });
   onDestroy(unsubscribeJump);
 
@@ -128,14 +172,25 @@
       return [range];
     });
 
+    const first = prefer === 'result' ? result[0] ?? args[0] : args[0] ?? result[0];
+    highlightAndScroll(element, [...args, ...result], first);
+  }
+
+  // answer: the index of the history with the answer, spans: where the item
+  // is in its query
+  function jumpToAnswer({ answer, spans }) {
+    const element = listEl?.querySelector(`[data-output="${answer}"]`);
+    if (!element) return;
+    const ranges = spanRanges(element.querySelector('.sparql-block__code code'), spans);
+    highlightAndScroll(element, ranges, ranges[0]);
+  }
+
+  function highlightAndScroll(element, ranges, first) {
     const highlights = typeof CSS !== 'undefined' ? CSS.highlights : null;
     if (highlights) {
       highlights.delete('provenance');
-      const all = [...args, ...result];
-      if (all.length > 0) highlights.set('provenance', new Highlight(...all));
+      if (ranges.length > 0) highlights.set('provenance', new Highlight(...ranges));
     }
-
-    const first = prefer === 'result' ? result[0] ?? args[0] : args[0] ?? result[0];
     const anchor = first?.startContainer?.parentElement ?? element;
     anchor.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
@@ -440,7 +495,7 @@
         {#if hasOutput}
           {#each history.slice(1) as message, idx (idx)}
             {#if message?.type === 'output'}
-              <li class="history-item">
+              <li class="history-item" data-output={historyIndex}>
                 <OutputMessage
                   {message}
                   {shareConversation}
