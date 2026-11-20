@@ -8,7 +8,6 @@ from grasp.configs import GraspConfig
 from grasp.function_args import function_definition
 from grasp.functions import (
     SelectionGroup,
-    find_manager,
     format_page_suffix,
     paginate_results,
     query_iris,
@@ -17,7 +16,7 @@ from grasp.functions import (
     validate_page,
     validate_query,
 )
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager
 from grasp.model import ToolCallResult
 from grasp.examples import ExampleIndex, Sample
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
@@ -188,7 +187,7 @@ def format_examples(
     more: bool,
     start_index: int = 0,
 ) -> str | SparqlQaExamplesResult:
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
     exs = []
     items = []
 

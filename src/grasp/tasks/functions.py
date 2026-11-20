@@ -7,14 +7,13 @@ from grasp.function_args import Iri, Term, function_definition
 from grasp.functions import (
     MAX_RESULTS,
     Page,
-    find_manager,
     format_iri_or_literal_error,
     format_page_suffix,
     parse_iri_or_literal,
     row_iris,
     update_known_from_index_iris,
 )
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager
 from grasp.sparql.types import Position, SelectResult
 from grasp.utils import FunctionCallException, format_enumerate
 
@@ -74,7 +73,7 @@ def find_frequent(
     if page < 1:
         raise FunctionCallException("Page number must be at least 1")
 
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     constraints = {"subject": subj, "property": prop, "object": obj}
 

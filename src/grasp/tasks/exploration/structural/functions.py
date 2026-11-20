@@ -2,12 +2,11 @@ from pydantic import BaseModel, Field
 
 from grasp.function_args import Iri, function_definition
 from grasp.functions import (
-    find_manager,
     format_bnode_error,
     format_iri_or_literal_error,
     parse_iri_or_literal,
 )
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager
 from grasp.sparql.types import iri_indices
 from grasp.sparql.types import format_kg_item
 from grasp.tasks.exploration.functions import (
@@ -66,7 +65,7 @@ def mark_explored(
     if explored_this_round:
         raise FunctionCallException("A seed was already marked as explored this round")
 
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
     ver_iri = parse_iri_or_literal(iri, manager.iri_literal_parser, manager.prefixes)
     if ver_iri is not None and ver_iri.typ == "bnode":
         raise FunctionCallException(format_bnode_error(iri))
@@ -110,7 +109,7 @@ def show_explored(
 
     header = f"Most recently explored seeds (page {page} of {total_pages}):\n"
 
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     # group seeds by the first index containing them (entities otherwise)
     # to batch-fetch their infos

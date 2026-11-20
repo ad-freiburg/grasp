@@ -20,8 +20,8 @@ from grasp.configs import (
 )
 from grasp.core import generate, load_notes, setup
 from grasp.examples import Sample, load_example_indices
-from grasp.functions import find_manager, selection_groups
-from grasp.manager import KgManager
+from grasp.functions import selection_groups
+from grasp.manager import KgManager, find_manager
 from grasp.model import get_model
 from grasp.tasks import get_task
 from grasp.tasks.cea import AnnotationState, CeaSample
@@ -199,7 +199,7 @@ def take_notes_from_samples(
             for kg, sample in tqdm(
                 samples, desc="Running GRASP on samples", leave=False
             ):
-                manager, _ = find_manager(managers, kg)
+                manager = find_manager(managers, kg)
 
                 output = consume_generator(
                     generate(
@@ -539,7 +539,7 @@ def prepare_ground_truth(
         return format_sparql_result(kg, result, selection_groups(selections))
 
     elif isinstance(sample, CeaSample):
-        manager, _ = find_manager(managers, kg)
+        manager = find_manager(managers, kg)
 
         annots = AnnotationState(sample.table)
         for annot in sample.annotations:
@@ -549,7 +549,7 @@ def prepare_ground_truth(
         return annots.format()
 
     elif isinstance(sample, EntityLinkingSample):
-        manager, _ = find_manager(managers, kg)
+        manager = find_manager(managers, kg)
 
         annots = TextAnnotationState(sample.text)
         for annot in sample.annotations:

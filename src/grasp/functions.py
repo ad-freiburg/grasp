@@ -7,11 +7,10 @@ from typing import TYPE_CHECKING, Annotated, Iterable, Literal
 from grammar_utils.parse import LR1Parser  # type: ignore
 from pydantic import BaseModel, Field
 from search_rdf import EmbeddingIndex
-from universal_ml_utils.ops import partition_by
 
 from grasp.configs import GraspConfig, ShapeConfig
 from grasp.function_args import Iri, Sparql, Term, function_definition
-from grasp.manager import KgManager
+from grasp.manager import KgManager, find_manager, split_managers
 from grasp.manager.normalizer import Normalizer
 from grasp.manager.utils import get_common_sparql_prefixes
 from grasp.model import ToolCallResult
@@ -448,18 +447,6 @@ constraints={{"subject": "wd:Q937"}}, page=1)""",
     return fns
 
 
-def find_manager(
-    managers: list[KgManager],
-    kg: str,
-) -> tuple[KgManager, list[KgManager]]:
-    managers, others = partition_by(managers, lambda m: m.kg == kg)
-    if not managers:
-        raise FunctionCallException(f"Unknown knowledge graph {kg}")
-    elif len(managers) > 1:
-        raise FunctionCallException(f"Multiple managers found for knowledge graph {kg}")
-    return managers[0], others
-
-
 def call_function(
     config: GraspConfig,
     managers: list[KgManager],
@@ -568,7 +555,7 @@ def call_function(
 
     elif fn_name == "search_object_of_property":
         object_args = SearchObjectOfPropertyArgs.model_validate(fn_args)
-        manager, _ = find_manager(managers, object_args.kg)
+        manager = find_manager(managers, object_args.kg)
         if object_args.index not in manager.indices:
             raise FunctionCallException(
                 f"Knowledge graph {object_args.kg} has no {object_args.index} index"
@@ -631,7 +618,7 @@ def call_function(
 
     elif fn_name == "get_class_shape":
         shape_args = GetClassShapeArgs.model_validate(fn_args)
-        manager, _ = find_manager(managers, shape_args.kg)
+        manager = find_manager(managers, shape_args.kg)
         if manager.shapes is None:
             return f"No class shapes available for knowledge graph '{shape_args.kg}'"
         return get_class_shape(
@@ -830,7 +817,7 @@ def search_single_index(
 ) -> SearchResult:
     validate_query(query)
     validate_page(page, max_pages)
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     alts = manager.search_index(
         index_name,
@@ -1168,7 +1155,7 @@ def execute_sparql(
     read_timeout: float | None = READ_TIMEOUT,
     sparql_result_max_rows: int | None = None,
 ) -> ExecutionResult:
-    manager, others = find_manager(managers, kg)
+    manager, others = split_managers(managers, kg)
 
     # fix prefixes with managers
     sparql = manager.fix_prefixes(sparql)
@@ -1274,7 +1261,7 @@ def list_triples(
 ) -> str | ToolCallResult:
     validate_page(page)
 
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     triple = []
     bindings = []
@@ -1424,7 +1411,7 @@ def search_with_constraints(
 ) -> SearchResult:
     validate_query(query)
     validate_page(page, max_pages)
-    manager, _ = find_manager(managers, kg)
+    manager = find_manager(managers, kg)
 
     if constraints is None:
         constraints = {}
@@ -1694,7 +1681,7 @@ def search_with_filter(
 ) -> SearchResult:
     validate_query(query)
     validate_page(page, max_pages)
-    manager, others = find_manager(managers, kg)
+    manager, others = split_managers(managers, kg)
 
     identifier_map = None
     info = ""
