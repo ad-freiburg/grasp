@@ -1,7 +1,3 @@
-# Trace provenance helpers: the items tool call arguments use, where results
-# show items, and the items in the notes; the state of a run is in
-# grasp.provenance.state
-
 import re
 from typing import Any, Iterator, Sequence
 

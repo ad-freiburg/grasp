@@ -1,10 +1,3 @@
-# Provenance state of a run, one per generate call and continued in
-# follow-ups: the known items, i.e. the items tool call results showed and
-# later calls may use, the tool calls that first showed and first used each
-# item, and the items in the notes shown to the model. Only the known items
-# and the ids of the calls are stored, references to the parts of the calls
-# are built from the messages when an item is used.
-
 from dataclasses import dataclass
 from typing import Any, Sequence
 

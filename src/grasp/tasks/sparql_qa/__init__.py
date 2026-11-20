@@ -332,7 +332,7 @@ def output(
 
     # where the query's items come from in the trace and notes, no extra
     # queries
-    manager, _ = find_manager(managers, output["kg"] or managers[0].kg)
+    manager, _ = find_manager(managers, output["kg"])
     trace = provenance.query(manager, output["sparql"], messages)
     output["provenance"] = {"trace": trace}
     return output
