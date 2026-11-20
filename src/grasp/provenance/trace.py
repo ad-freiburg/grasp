@@ -1,6 +1,7 @@
 import re
 from typing import Any, Iterator, Sequence
 
+from grasp.function_args import ArgKind
 from grasp.functions import identifiers, iri_spans
 from grasp.manager import KgManager
 from grasp.manager.utils import get_common_sparql_prefixes
@@ -98,18 +99,24 @@ def flatten_args(args: dict, prefix: str = "") -> Iterator[tuple[str, Any]]:
             yield name, value
 
 
-def arg_usage(manager: KgManager, args: dict) -> Usage:
-    # arguments that are no IRIs or SPARQL queries, e.g. search queries, use
-    # no IRIs
+def arg_usage(
+    manager: KgManager,
+    args: dict,
+    kinds: dict[str, ArgKind],
+) -> Usage:
+    # the IRIs of the arguments marked as items or queries
     used: dict[str, set[str]] = {}
     sparql_spans = []
     for key, value in flatten_args(args):
-        if key == "sparql" and isinstance(value, str):
+        kind = kinds.get(key)
+        if kind == ArgKind.SPARQL and isinstance(value, str):
             try:
                 sparql_spans = iri_spans(manager, value)
             except Exception:
                 pass
             used[key] = {iri for iri, *_ in sparql_spans}
+            continue
+        elif kind is None:
             continue
 
         used[key] = set()

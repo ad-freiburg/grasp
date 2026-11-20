@@ -1,4 +1,5 @@
-from grasp.model import ToolCall
+from grasp.functions import ExecuteArgs, ListArgs, SearchFilterArgs
+from grasp.model import FunctionDefinition, ToolCall
 from grasp.provenance.state import Provenance, ProvenanceState
 from grasp.provenance.test_trace import (
     EX,
@@ -7,6 +8,16 @@ from grasp.provenance.test_trace import (
     SERVICE_QUERY,
     example_manager,
 )
+from grasp.tasks.sparql_qa import AnswerArgs
+from grasp.tasks.sparql_qa.examples import SearchExampleArgs
+
+FUNCTIONS = [
+    FunctionDefinition("execute", "", ExecuteArgs),
+    FunctionDefinition("list", "", ListArgs),
+    FunctionDefinition("search", "", SearchFilterArgs),
+    FunctionDefinition("search_example", "", SearchExampleArgs),
+    FunctionDefinition("answer", "", AnswerArgs),
+]
 
 
 def table_call(id: str, sparql: str, shown: list[str]) -> dict:
@@ -27,6 +38,7 @@ def run(
     calls: list[tuple[dict, list[str]]],
 ) -> tuple[list[dict], list[dict | None]]:
     # each call with the items its result made known, as the functions would
+    provenance.add_functions(FUNCTIONS)
     messages = []
     recorded = []
     for call, shown in calls:
@@ -137,7 +149,12 @@ def test_record_without_items():
         "name": "answer",
         "args": {"kg": "example", "sparql": "SELECT ?v WHERE { ex:place_1 ex:x ?v }"},
     }
-    search = {"id": "c2", "name": "search", "args": {"kg": "example", "query": "x"}}
+    # a search query is no item, also when it looks like one
+    search = {
+        "id": "c2",
+        "name": "search",
+        "args": {"kg": "example", "query": "ex:place_1"},
+    }
     _, recorded = run(manager, provenance, [(answer, []), (search, [])])
     assert recorded == [None, None]
     # the query of a stopping call is the output, it uses no items

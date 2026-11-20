@@ -3,9 +3,10 @@ from typing import Any, Sequence
 
 from pydantic import BaseModel, field_serializer
 
+from grasp.function_args import ArgKind, arg_kinds
 from grasp.functions import identifiers, iri_spans
 from grasp.manager import KgManager, UnknownKgError, find_manager
-from grasp.model import Message, ToolCall
+from grasp.model import FunctionDefinition, Message, ToolCall
 from grasp.provenance.trace import (
     STOPPING,
     Usage,
@@ -53,11 +54,18 @@ class Provenance:
         self.kg_notes = kg_notes
         self.notes = notes
         self.noted_by_kg: dict[str, dict[str, str]] = {}
+        # marked arguments by function, the items and queries calls use
+        self.kinds: dict[str, dict[str, ArgKind]] = {}
 
     @property
     def known(self) -> set[str]:
         # passed to the functions, which add the items their results show
         return self.state.known
+
+    def add_functions(self, fns: list[FunctionDefinition]) -> None:
+        for fn in fns:
+            if fn.args is not None:
+                self.kinds[fn.name] = arg_kinds(fn.args)
 
     def attribute_known(self) -> None:
         # items known so far without a tool call, e.g. from the task setup
@@ -81,9 +89,10 @@ class Provenance:
             manager = None
         items = None
         if manager is not None and tool_call.name not in STOPPING:
-            usage = arg_usage(manager, tool_call.args)
+            kinds = self.kinds.get(tool_call.name, {})
+            usage = arg_usage(manager, tool_call.args, kinds)
             try:
-                items = self.arg_items(manager, usage, messages)
+                items = self.arg_items(manager, usage, kinds, messages)
             except Exception:
                 pass
             used, _ = usage
@@ -120,6 +129,7 @@ class Provenance:
         self,
         manager: KgManager,
         usage: Usage,
+        kinds: dict[str, ArgKind],
         messages: Sequence[Message | dict],
     ) -> dict[str, Any] | None:
         calls = tool_calls(messages)
@@ -132,7 +142,7 @@ class Provenance:
 
         # other arguments that are IRIs, e.g. the subject of a list call
         for key, iris in sorted(used.items()):
-            if key == "sparql":
+            if kinds[key] == ArgKind.SPARQL:
                 continue
             for iri in sorted(iris):
                 if iri not in items:
@@ -166,9 +176,9 @@ class Provenance:
             "spans": [],
         }
         if shown is not None:
-            item["shown_by"] = ref(manager, iri, shown, calls)
+            item["shown_by"] = self.ref(manager, iri, shown, calls)
         if used is not None:
-            item["first_used_by"] = ref(manager, iri, used, calls)
+            item["first_used_by"] = self.ref(manager, iri, used, calls)
 
         noted = self.noted(manager)
         note = next((noted[i] for i in ids if i in noted), None)
@@ -186,6 +196,18 @@ class Provenance:
             item["status"] = "verified"
         return item
 
+    def ref(
+        self,
+        manager: KgManager,
+        iri: str,
+        id: str,
+        calls: Calls,
+    ) -> dict[str, Any]:
+        traced = calls[id]
+        kinds = self.kinds.get(traced.call["name"], {})
+        usage = arg_usage(manager, traced.call.get("args") or {}, kinds)
+        return call_ref(manager, iri, traced.call, traced.step, usage)
+
 
 def tool_calls(messages: Sequence[Message | dict]) -> Calls:
     return {
@@ -198,9 +220,3 @@ def first_call(ids: set[str], sources: dict[str, str], calls: Calls) -> str | No
     # the earliest call of the messages among the sources of the identifiers
     found = [sources[i] for i in ids if sources.get(i) in calls]
     return min(found, key=lambda id: calls[id].step, default=None)
-
-
-def ref(manager: KgManager, iri: str, id: str, calls: Calls) -> dict[str, Any]:
-    traced = calls[id]
-    usage = arg_usage(manager, traced.call.get("args") or {})
-    return call_ref(manager, iri, traced.call, traced.step, usage)

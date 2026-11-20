@@ -223,6 +223,7 @@ def generate(
         config.search_max_pages,
     )
     fns.extend(task.function_definitions())
+    task.provenance.add_functions(fns)
     yield {"type": "input", "input": input}
 
     model = custom_model or get_model(config)
