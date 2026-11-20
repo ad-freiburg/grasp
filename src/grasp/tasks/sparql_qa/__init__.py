@@ -13,6 +13,7 @@ from grasp.functions import (
 from grasp.manager import KgManager, find_manager, format_kgs
 from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.model.base import ResponseMessage
+from grasp.provenance.state import Provenance
 from grasp.tasks.base import FeedbackTask, GraspTask
 from grasp.tasks.sparql_qa.examples import (
     SparqlQaSample,
@@ -264,18 +265,20 @@ def prepare_formatted_output(
     manager = find_manager(managers, kg)
 
     groups = selection_groups(selections, manager, result.sparql)
-    return {
+    output = {
         "sparql": result.sparql,
         "selections": [group.model_dump() for group in groups],
         "result": result.tool_result().model_dump(),
         "endpoint": manager.endpoint,
         "formatted": format_sparql_result(kg, result, groups),
     }
+    return output
 
 
 def output(
     messages: list[Message],
     managers: list[KgManager],
+    provenance: Provenance,
     max_rows: int,
     max_cols: int,
     request_timeout: tuple[float, float],
@@ -326,6 +329,12 @@ def output(
     # prepend answer or explanation to formatted output
     formatted_output["formatted"] = formatted + "\n\n" + formatted_output["formatted"]
     output.update(formatted_output)
+
+    # where the query's items come from in the trace and notes, no extra
+    # queries
+    manager = find_manager(managers, output["kg"])
+    trace = provenance.query(manager, output["sparql"], messages)
+    output["provenance"] = {"trace": trace}
     return output
 
 
@@ -487,6 +496,7 @@ class SparqlQaTask(GraspTask, FeedbackTask):
         return output(
             messages,
             self.managers,
+            self.provenance,
             self.config.result_max_rows,
             self.config.result_max_columns,
             self.config.sparql_request_timeout,

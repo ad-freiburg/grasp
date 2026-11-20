@@ -33,13 +33,15 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from grasp.configs import ServerConfig
 from grasp.core import generate, load_notes, setup
 from grasp.model import Message
+from grasp.provenance.state import ProvenanceState
 from grasp.tasks import Task
 from grasp.examples import load_example_indices
 
 
 class Past(BaseModel):
     messages: conlist(Message, min_length=1)  # type: ignore
-    known: set[str]
+    # provenance state of the past conversation
+    provenance: ProvenanceState
 
 
 class Request(BaseModel):
@@ -273,7 +275,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
             sel_managers, _ = partition_by(managers, lambda m: m.kg in sel)
 
             past_messages = request.past.messages if request.past else None
-            past_known = request.past.known if request.past else None
+            past_provenance = request.past.provenance if request.past else None
 
             def run_generate() -> dict:
                 generator = generate(
@@ -285,7 +287,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                     notes[request.task],
                     example_indices[request.task],
                     past_messages,
-                    past_known,
+                    past_provenance,
                     logger,
                     yield_output=True,
                 )
@@ -431,11 +433,11 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                 sel_managers, _ = partition_by(managers, lambda m: m.kg in sel)
 
                 past_messages = None
-                past_known = None
+                past_provenance = None
                 if request.past is not None:
                     # set past
                     past_messages = request.past.messages
-                    past_known = request.past.known
+                    past_provenance = request.past.provenance
 
                 loop = asyncio.get_running_loop()
                 queue = asyncio.Queue()
@@ -452,7 +454,7 @@ def serve(config: ServerConfig, log_level: int | str | None = None) -> None:
                             notes[request.task],
                             example_indices[request.task],
                             past_messages,
-                            past_known,
+                            past_provenance,
                             logger,
                             yield_output=True,
                         )

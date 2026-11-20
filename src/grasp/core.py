@@ -29,6 +29,7 @@ from grasp.model import (
     ToolCallResult,
     get_model,
 )
+from grasp.provenance.state import ProvenanceState
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
@@ -177,7 +178,7 @@ def generate(
     notes: list[str] | None = None,
     example_indices: dict[str, ExampleIndex] | None = None,
     past_messages: list[Message] | None = None,
-    past_known: set[str] | None = None,
+    past_provenance: ProvenanceState | None = None,
     logger: Logger = get_logger("GRASP"),
     yield_output: bool = False,
     custom_model: Model | None = None,
@@ -193,9 +194,25 @@ def generate(
         config.tool_choice = "auto"
         logger.debug("Setting tool choice to auto for general-qa task")
 
-    task = get_task(task_name, managers, config, past_known, example_indices)
+    feedback_notes = notes
+    feedback_kg_notes = kg_notes
+    if config.notes_only_for_feedback:
+        notes = None
+        kg_notes = None
+
+    task = get_task(
+        task_name,
+        managers,
+        config,
+        past_provenance,
+        example_indices,
+        kg_notes,
+        notes,
+    )
 
     input = task.setup(input)
+    # items the setup made known were shown by no tool call
+    task.provenance.attribute_known()
 
     # setup functions (after setup so tasks can configure based on input)
     fns = kg_functions(
@@ -206,15 +223,10 @@ def generate(
         config.search_max_pages,
     )
     fns.extend(task.function_definitions())
+    task.provenance.add_functions(fns)
     yield {"type": "input", "input": input}
 
     model = custom_model or get_model(config)
-
-    feedback_notes = notes
-    feedback_kg_notes = kg_notes
-    if config.notes_only_for_feedback:
-        notes = None
-        kg_notes = None
 
     # setup messages
     system_instruction = system_instructions(
@@ -269,7 +281,7 @@ def generate(
             input,
             config.random_examples,
             config.num_examples,
-            task.known,
+            task.provenance.known,
             config.result_max_rows,
             config.result_max_columns,
         )
@@ -296,10 +308,12 @@ def generate(
             )
         )
         messages.append(message)
+        task.provenance.record(managers, tool_call, messages)
 
         # yield to user as tool call
         yield {
             "type": "tool",
+            "id": tool_call.id,
             "name": name,
             "args": args,
             "result": tool_call.result.model_dump(),
@@ -423,7 +437,7 @@ def generate(
                     managers,
                     tool_call.name,
                     tool_call.args,
-                    task.known,
+                    task.provenance.known,
                     task,
                     example_indices,
                 )
@@ -443,6 +457,8 @@ def generate(
 
             tool_call.result = result
             tool_call.elapsed = time.monotonic() - fn_start
+            # where the items in its arguments come from, from the trace only
+            provenance = task.provenance.record(managers, tool_call, messages)
             if config.show_limits:
                 # shown in the app, and in the formatted result only for the model
                 tool_call.limits = limits.usage()
@@ -454,11 +470,13 @@ def generate(
 
             yield {
                 "type": "tool",
+                "id": tool_call.id,
                 "name": tool_call.name,
                 "args": tool_call.args,
                 "result": result.model_dump(),
                 "elapsed": tool_call.elapsed,
                 "limits": tool_call.limits.model_dump() if tool_call.limits else None,
+                "provenance": provenance,
             }
 
             if task.done(tool_call.name):
@@ -548,7 +566,7 @@ def generate(
         "elapsed": end - limits.start,
         "error": error,
         "messages": [message.model_dump() for message in messages],
-        "known": list(task.known),
+        "provenance": task.provenance.state.model_dump(),
     }
 
     if yield_output:

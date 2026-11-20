@@ -2,6 +2,7 @@ from enum import StrEnum
 
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
+from grasp.provenance.state import ProvenanceState
 from grasp.tasks.auto_setup import AutoSetupTask
 from grasp.tasks.base import GraspTask
 from grasp.tasks.cea import CeaTask
@@ -55,12 +56,21 @@ def get_task(
     task: str,
     managers: list[KgManager],
     config: GraspConfig,
-    known: set[str] | None = None,
+    provenance: ProvenanceState | None = None,
     example_indices: dict | None = None,
+    kg_notes: dict[str, list[str]] | None = None,
+    notes: list[str] | None = None,
 ) -> GraspTask:
     if task not in _REGISTRY:
         raise ValueError(f"Unknown task {task}")
-    return _REGISTRY[task](managers, config, known, example_indices)
+    return _REGISTRY[task](
+        managers,
+        config,
+        provenance,
+        example_indices,
+        kg_notes,
+        notes,
+    )
 
 
 def rules(config: GraspConfig) -> list[str]:

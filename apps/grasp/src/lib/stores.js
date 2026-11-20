@@ -15,3 +15,7 @@ export const selectedKgs = derived(knowledgeGraphs, ($kgs) =>
     .filter(([, selected]) => selected)
     .map(([name]) => name)
 );
+
+// set by trace provenance to scroll the history to the tool call that showed
+// a query item: { historyIndex, tool, args, text }
+export const provenanceJump = writable(null);

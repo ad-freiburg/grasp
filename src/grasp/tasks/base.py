@@ -4,6 +4,7 @@ from typing import Any
 from grasp.configs import GraspConfig
 from grasp.manager import KgManager
 from grasp.model import FunctionDefinition, Message, ToolCallResult
+from grasp.provenance.state import Provenance, ProvenanceState
 from grasp.examples import Sample
 
 
@@ -21,19 +22,23 @@ class FeedbackTask(ABC):
 
 class GraspTask(ABC):
     name: str
-    known: set[str]
+    provenance: Provenance
 
     def __init__(
         self,
         managers: list[KgManager],
         config: GraspConfig,
-        known: set[str] | None = None,
+        provenance: ProvenanceState | None = None,
         example_indices: dict | None = None,
+        kg_notes: dict[str, list[str]] | None = None,
+        notes: list[str] | None = None,
     ) -> None:
         self.managers = managers
         self.config = config
         self.state: Any = None
-        self.known = known or set()
+        # continues the provenance state of a past conversation, with the
+        # notes shown to the model
+        self.provenance = Provenance(kg_notes or {}, notes or [], provenance)
         self.example_indices = example_indices or {}
         # set for the last step after a limit, to relax checks on stopping
         self.last_step = False

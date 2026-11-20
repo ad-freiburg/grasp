@@ -8,6 +8,8 @@
   import ShapesResult from './ShapesResult.svelte';
   import BooleanResult from './BooleanResult.svelte';
   import TableResult from './TableResult.svelte';
+  import ProvenancePanel, { STATUS } from './ProvenancePanel.svelte';
+  import { provenanceJump } from '../../stores.js';
   import {
     flattenFunctionArgs,
     nestBulletsUnderEnumeration
@@ -39,6 +41,30 @@
   }
 
   const qleverLink = null;
+
+  // where the items in the arguments come from, compared with the calls
+  // before; chips are marked by the status of their first item
+  const provenance = message?.provenance ?? null;
+  const sparqlItems = (provenance?.items ?? []).some((item) => item.spans.length > 0);
+  const chipItems = new Map();
+  for (const item of provenance?.items ?? []) {
+    for (const key of item.args ?? []) {
+      if (!chipItems.has(key)) chipItems.set(key, item);
+    }
+  }
+
+  function chipTitle(chip) {
+    const item = chipItems.get(chip.key);
+    const title = `${chip.key}: ${chip.value}`;
+    if (!item) return title;
+    const status = STATUS[item.status]?.title ?? item.status;
+    return `${title}\n${status}${item.shown_by ? `, click to see step ${item.shown_by.step}` : ''}`;
+  }
+
+  function jumpToShown(chip) {
+    const ref = chipItems.get(chip.key)?.shown_by;
+    if (ref) provenanceJump.set({ ref, prefer: 'result' });
+  }
 
   // step and time limits after this call, only set with show_limits
   const limits = message?.limits ?? null;
@@ -88,25 +114,55 @@
         </span>
       {/if}
       {#each argChips as chip (chip.key)}
-        <span class="arg-chip" title={`${chip.key}: ${chip.value}`}>
-          <span class="arg-chip__key">{chip.key}</span>
-          <span
-            class="arg-chip__value"
-            class:arg-chip__value--truncated={chip.truncated}
-            data-full={chip.value}
+        {@const item = chipItems.get(chip.key)}
+        {@const chipClass = `arg-chip${item ? ` arg-chip--${item.status}` : ''}`}
+        <!-- chips of items a call before showed jump to that call -->
+        {#if item?.shown_by}
+          <button
+            type="button"
+            class={chipClass}
+            title={chipTitle(chip)}
+            data-arg={chip.key}
+            on:click={() => jumpToShown(chip)}
           >
-            {chip.value}
+            <span class="arg-chip__key">{chip.key}</span>
+            <span
+              class="arg-chip__value"
+              class:arg-chip__value--truncated={chip.truncated}
+              data-full={chip.value}
+            >
+              {chip.value}
+            </span>
+          </button>
+        {:else}
+          <span class={chipClass} title={chipTitle(chip)} data-arg={chip.key}>
+            <span class="arg-chip__key">{chip.key}</span>
+            <span
+              class="arg-chip__value"
+              class:arg-chip__value--truncated={chip.truncated}
+              data-full={chip.value}
+            >
+              {chip.value}
+            </span>
           </span>
-        </span>
+        {/if}
       {/each}
     </div>
 
   </svelte:fragment>
 
+  <!-- data attributes mark where provenance highlights items -->
   {#if sparql}
-    <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
+    <div data-arg="sparql">
+      {#if sparqlItems}
+        <ProvenancePanel {sparql} {qleverLink} trace={provenance} legend={false} />
+      {:else}
+        <SparqlBlock code={sparql} qleverLink={qleverLink} label="SPARQL" />
+      {/if}
+    </div>
   {/if}
 
+  <div data-part="result">
   {#if result?.type === 'search'}
     <SearchResults {result} />
   {:else if result?.type === 'boolean'}
@@ -122,6 +178,7 @@
   {:else if result?.formatted}
     <MarkdownContent content={nestBulletsUnderEnumeration(result.formatted)} />
   {/if}
+  </div>
 
   {#if limitParts.length}
     <footer class="limits" class:limits--reached={limitReached}>
@@ -165,6 +222,35 @@
     font-size: 0.75rem;
     max-width: clamp(240px, 40vw, 560px);
     position: relative;
+  }
+
+  button.arg-chip {
+    font: inherit;
+    font-size: 0.75rem;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  /* chips with an item, colored like the items of a query */
+  .arg-chip--retrieved {
+    border-color: rgb(0, 190, 155);
+    background: rgba(0, 166, 135, 0.08);
+  }
+
+  .arg-chip--verified {
+    border-color: rgb(230, 200, 40);
+    background: rgba(230, 200, 40, 0.1);
+  }
+
+  .arg-chip--noted {
+    border-color: rgb(110, 140, 235);
+    background: rgba(110, 140, 235, 0.1);
+  }
+
+  .arg-chip--unverified {
+    border-color: rgb(245, 90, 90);
+    background: rgba(235, 70, 70, 0.08);
   }
 
   .arg-chip__key {
