@@ -16,7 +16,8 @@ PN_LOCAL_ESC '\' ( '_' | '~' | '.' | '-' | '!' | '$' | '&' | "'" | '(' | ')' | '
 %%
 
 PREFIX [Pp] [Rr] [Ee] [Ff] [Ii] [Xx]
-IRIREF '<' ([[^<>"{}|^`\\]--[\x00-\x20]])* '>'
+// absolute IRIs only, so e.g. HTML tags are no IRIs
+IRIREF '<' [A-Za-z] [A-Za-z0-9+.\-]* ':' ([[^<>"{}|^`\\]--[\x00-\x20]])* '>'
 PNAME_NS {PN_PREFIX}? ':'
 PNAME_LN {PNAME_NS} {PN_LOCAL}
 

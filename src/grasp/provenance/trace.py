@@ -1,4 +1,3 @@
-import re
 from typing import Any, Iterator, Sequence
 
 from grasp.function_args import ArgKind
@@ -10,11 +9,10 @@ from grasp.sparql.utils import load_iri_text_parser, parse_into_binding
 
 COMMON_PREFIXES = get_common_sparql_prefixes()
 
-# tool calls that end the trace, their query is the output
+# calls that end the trace, their query is the output
 STOPPING = {"answer", "cancel"}
 
 TEXT_PARSER = load_iri_text_parser()
-SCHEME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 # IRIs per argument, and the IRI spans of a SPARQL argument
 Usage = tuple[dict[str, set[str]], list[tuple[str, str, int, int]]]
@@ -27,6 +25,7 @@ def message_dict(message: Message | dict) -> dict:
 
 
 def iter_tool_calls(messages: Sequence[Message | dict]) -> Iterator[dict]:
+    # the tool calls of the messages as dicts, without stopping calls
     for message in map(message_dict, messages):
         content = message.get("content")
         if not isinstance(content, dict):
@@ -72,11 +71,7 @@ def note_iris(manager: KgManager, notes: list[str]) -> dict[str, str]:
             continue
 
         binding = parse_into_binding(value, manager.iri_literal_parser, prefixes)
-        if (
-            binding is None
-            or binding.typ != "uri"
-            or not SCHEME_PATTERN.match(binding.value)
-        ):
+        if binding is None or binding.typ != "uri":
             continue
 
         longest = manager.find_longest_prefix(binding.value)
@@ -132,10 +127,8 @@ def arg_usage(
 
 
 def result_paths(value: Any, ids: set[str], path: str = "") -> Iterator[str]:
-    # dotted paths to the parts of a structured result showing one of the
-    # identifiers, e.g. items.0 for a search result or rows.2.city for a
-    # table value; parts show an item with an identifier or iri field, or
-    # are an IRI value of a table row
+    # dotted paths to the parts of a result that show one of the identifiers,
+    # e.g. items.0 of a search result or rows.2.city of a table
     if isinstance(value, dict):
         if (
             value.get("identifier") in ids
@@ -154,8 +147,8 @@ def result_paths(value: Any, ids: set[str], path: str = "") -> Iterator[str]:
 
 
 def shown_part(result: dict, path: str) -> dict[str, Any] | None:
-    # the part of a structured result at a path, for showing it: a search
-    # item, a table row with the variable of the value, or a shown value
+    # the part of a result at a path as the website shows it: a search item,
+    # a table row with the variable of the value, or the value as text
     keys = path.split(".")
     parents = []
     node: Any = result
@@ -191,21 +184,20 @@ def call_ref(
     step: int,
     usage: Usage,
 ) -> dict[str, Any]:
-    # the website looks up the arguments of the call by its id
+    # where an item is in the arguments and the result of a call; the website
+    # looks up the arguments by the call id
     ids = identifiers(manager, iri)
     used, sparql_spans = usage
     ref: dict[str, Any] = {
         "id": call.get("id"),
         "step": step,
         "tool": call["name"],
-        # where the item is in the arguments: argument names, and spans in the
-        # SPARQL argument
+        # the arguments containing the item, and its spans in the SPARQL one
         "used_args": sorted(key for key, iris in used.items() if ids & iris),
         "sparql_spans": [[start, end] for i, _, start, end in sparql_spans if i in ids],
     }
 
-    # where the item is in the structured result, for showing and
-    # highlighting it
+    # where the result shows the item, for showing and highlighting it
     paths = list(result_paths(call.get("result") or {}, ids))
     if paths:
         ref["result_paths"] = paths
@@ -222,8 +214,8 @@ def shown_example(
     result: dict,
     ids: set[str],
 ) -> tuple[list[str], dict[str, Any]] | None:
-    # the first example whose query shows the item, with the query line
-    # containing it, for items no selection covers, e.g. in SERVICE clauses
+    # the first example whose query contains the item, with that query line;
+    # for items no other part of the result shows, e.g. in SERVICE clauses
     for i, example in enumerate(result.get("examples") or []):
         sparql = example.get("sparql") or ""
         try:
