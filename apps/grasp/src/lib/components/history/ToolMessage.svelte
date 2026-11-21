@@ -1,5 +1,5 @@
 <script>
-  import { getContext } from 'svelte';
+  import { getContext, tick } from 'svelte';
   import MessageCard from './MessageCard.svelte';
   import MarkdownContent from '../common/MarkdownContent.svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
@@ -67,12 +67,80 @@
     if (ref) provenanceJump.set({ ref, prefer: 'result' });
   }
 
-  // the items this call showed first that later calls or answers use,
-  // clicking a use jumps to it
+  // the items this call showed first that later calls or answers use; the
+  // result marks where it shows them, a chip lists those it shows nowhere
   const laterUses = getContext('laterUses');
   $: later = [...($laterUses?.get(message?.id)?.values() ?? [])];
+  let resultEl;
+  let wrapEl;
+  let unmarked = [];
+  let tip = null;
+  // entries of the marked parts, read when opening a tip
+  const laterParts = new WeakMap();
+  $: if (resultEl) markLater(later);
+
+  async function markLater(later) {
+    await tick();
+    const marked = new Map();
+    unmarked = [];
+    for (const entry of later) {
+      const parts = (entry.item.shown_by?.result_paths ?? []).flatMap((path) => [
+        ...resultEl.querySelectorAll(`[data-path="${CSS.escape(path)}"]`)
+      ]);
+      if (parts.length === 0) unmarked.push(entry);
+      for (const part of parts) {
+        if (!marked.has(part)) marked.set(part, []);
+        marked.get(part).push(entry);
+      }
+    }
+    for (const part of resultEl.querySelectorAll('[data-later]')) {
+      if (marked.has(part)) continue;
+      delete part.dataset.later;
+      part.removeAttribute('tabindex');
+    }
+    for (const [part, entries] of marked) {
+      const uses = entries.flatMap((entry) => entry.uses);
+      part.dataset.later = [...new Set(uses.map((use) => use.short))].join(', ');
+      part.tabIndex = 0;
+      laterParts.set(part, entries);
+    }
+  }
+
+  function openTip(target, entries) {
+    const wrap = wrapEl.getBoundingClientRect();
+    const rect = target.getBoundingClientRect();
+    const width = Math.min(360, wrap.width);
+    tip = {
+      entries,
+      target,
+      width,
+      left: Math.max(0, Math.min(rect.left - wrap.left, wrap.width - width)),
+      top: rect.bottom - wrap.top + 4
+    };
+  }
+
+  // clicks on links in a marked part follow the link
+  function handleResultEvent(event) {
+    if (event.type === 'keydown' && event.key !== 'Enter') return;
+    if (event.target.closest('a')) return;
+    const part = event.target.closest('[data-later]');
+    if (!part || !resultEl.contains(part)) return;
+    event.preventDefault();
+    if (tip?.target === part) tip = null;
+    else openTip(part, laterParts.get(part) ?? []);
+  }
+
+  function handleWindowClick(event) {
+    if (!tip || wrapEl?.contains(event.target) || tip.target.contains(event.target)) return;
+    tip = null;
+  }
+
+  function handleWindowKeydown(event) {
+    if (tip && event.key === 'Escape') tip = null;
+  }
 
   function jumpToUse(use) {
+    tip = null;
     provenanceJump.set(
       use.ref ? { ref: use.ref, prefer: 'args' } : { answer: use.answer, spans: use.spans }
     );
@@ -115,6 +183,8 @@
     return text.replace(/\s+/g, ' ').trim();
   }
 </script>
+
+<svelte:window on:click={handleWindowClick} on:keydown={handleWindowKeydown} />
 
 <MessageCard title="Function Call" accent="var(--color-uni-yellow)">
   <svelte:fragment slot="meta">
@@ -159,6 +229,19 @@
           </span>
         {/if}
       {/each}
+      {#if unmarked.length}
+        <button
+          type="button"
+          class="later-chip"
+          title="Items this call showed first that later calls or answers use"
+          on:click={(event) => {
+            if (tip?.target === event.currentTarget) tip = null;
+            else openTip(event.currentTarget, unmarked);
+          }}
+        >
+          {unmarked.length} used later
+        </button>
+      {/if}
     </div>
 
   </svelte:fragment>
@@ -174,7 +257,16 @@
     </div>
   {/if}
 
-  <div data-part="result">
+  <!-- data-later on result parts marks the items later calls use -->
+  <div class="later-wrap" bind:this={wrapEl}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div
+    data-part="result"
+    class="result"
+    bind:this={resultEl}
+    on:click={handleResultEvent}
+    on:keydown={handleResultEvent}
+  >
   {#if result?.type === 'search'}
     <SearchResults {result} />
   {:else if result?.type === 'boolean'}
@@ -192,23 +284,31 @@
   {/if}
   </div>
 
-  {#if later.length}
-    <ul class="later">
-      {#each later as { item, uses } (item.identifier)}
-        <li>
-          <span class="later__item" title={item.identifier}>
+  {#if tip}
+    <div
+      class="tip"
+      role="dialog"
+      style={`left:${tip.left}px;top:${tip.top}px;width:${tip.width}px;`}
+    >
+      {#each tip.entries as { item, uses } (item.identifier)}
+        <div class="tip__item">
+          <strong title={item.identifier}>
             {item.label ? `${item.label} (${item.written})` : item.written}
-          </span>
-          used later by
-          {#each uses as use, index}
-            <button type="button" class="later__use" on:click={() => jumpToUse(use)}>
-              {use.text}</button
-            >{index < uses.length - 1 ? ', ' : ''}
+          </strong>
+          <span class="tip__note">used later by</span>
+          {#each uses as use}
+            <button type="button" class="use" on:click={() => jumpToUse(use)}>
+              <span class="use__what">{use.text}</span>
+              {#if use.tool}
+                <span class="use__fn">{use.tool}</span>
+              {/if}
+            </button>
           {/each}
-        </li>
+        </div>
       {/each}
-    </ul>
+    </div>
   {/if}
+  </div>
 
   {#if limitParts.length}
     <footer class="limits" class:limits--reached={limitReached}>
@@ -313,27 +413,108 @@
     display: block;
   }
 
-  .later {
-    list-style: none;
-    margin: var(--spacing-sm) 0 0;
-    padding: 0;
+  .later-chip {
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(52, 74, 154, 0.35);
+    background: rgba(52, 74, 154, 0.06);
+    font: inherit;
+    font-size: 0.75rem;
+    color: var(--color-uni-blue);
+    cursor: pointer;
+  }
+
+  .later-wrap {
+    position: relative;
+  }
+
+  .result :global([data-later]) {
+    cursor: pointer;
+    border-radius: 3px;
+    background: rgba(52, 74, 154, 0.07);
+  }
+
+  .result :global([data-later]:hover),
+  .result :global([data-later]:focus-visible) {
+    background: rgba(52, 74, 154, 0.14);
+    outline: none;
+  }
+
+  /* the steps and answers using the item */
+  .result :global([data-later]::after) {
+    content: '→ ' attr(data-later);
+    margin-left: 0.35rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: rgba(52, 74, 154, 0.12);
+    color: var(--color-uni-blue);
+    font-size: 0.7rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .tip {
+    position: absolute;
+    z-index: 20;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem;
+    background: #fff;
+    border: 1px solid rgba(52, 74, 154, 0.3);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 12px 28px rgba(15, 15, 47, 0.18);
+    font-size: 0.85rem;
+  }
+
+  .tip__item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    overflow-wrap: anywhere;
+    color: var(--color-uni-dark-blue);
+  }
+
+  .tip__note {
     font-size: 0.75rem;
     color: var(--text-subtle);
   }
 
-  .later__item {
-    color: var(--text-primary);
-    font-weight: 600;
+  .use {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.35rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    text-align: left;
+    font: inherit;
+    font-size: 0.75rem;
+    color: var(--text-subtle);
+    cursor: pointer;
   }
 
-  .later__use {
-    padding: 0;
-    border: none;
-    background: none;
-    font: inherit;
+  .use:hover,
+  .use:focus-visible {
+    background: rgba(52, 74, 154, 0.08);
+    outline: none;
+  }
+
+  .use__what {
+    font-weight: 600;
     color: var(--color-uni-blue);
-    text-decoration: underline;
-    cursor: pointer;
+  }
+
+  .use__what::after {
+    content: ' →';
+  }
+
+  .use__fn {
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    background: rgba(52, 74, 154, 0.08);
   }
 
   .limits {

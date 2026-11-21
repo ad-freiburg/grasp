@@ -111,12 +111,12 @@
               used_args: [...(item.args ?? []), ...(item.spans.length ? ['sparql'] : [])],
               sparql_spans: item.spans
             };
-            add(item, { text: `step ${step}`, ref });
+            add(item, { text: `step ${step}`, short: String(step), tool: message.name, ref });
           }
         } else if (message?.type === 'output') {
           for (const item of message.output?.provenance?.trace?.items ?? []) {
             const text = histories.length > 1 ? `answer ${h + 1}` : 'answer';
-            add(item, { text, answer: h, spans: item.spans });
+            add(item, { text, short: text, answer: h, spans: item.spans });
           }
         }
       }
