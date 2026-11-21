@@ -46,10 +46,6 @@ class FeedbackTask(GraspTask):
     # one step (config.feedback_max_steps) only give_feedback is offered, with
     # more also the knowledge graph functions
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.given = False
-
     @abstractmethod
     def instructions(self, inputs: list[str], output: dict) -> str: ...
 
@@ -74,11 +70,11 @@ class FeedbackTask(GraspTask):
             raise ValueError(f"Unknown function {fn_name}")
 
         GiveFeedbackArgs.model_validate(fn_args)
-        self.given = True
         return "Stopping"
 
     def done(self, fn_name: str) -> bool:
-        return fn_name == "give_feedback" and self.given
+        # also with invalid arguments, the run then ends without feedback
+        return fn_name == "give_feedback"
 
     def limit_message(self) -> str:
         return (
@@ -90,7 +86,7 @@ class FeedbackTask(GraspTask):
         return ["give_feedback"]
 
     def output(self, messages: list[Message]) -> dict | None:
-        # the last valid feedback given
+        # the feedback given, if its arguments were valid
         for message in reversed(messages):
             if not isinstance(message.content, Response):
                 continue

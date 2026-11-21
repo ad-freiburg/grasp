@@ -189,7 +189,7 @@ def test_feedback_at_limit():
             return "execute", {"step": len(messages)}
         return "give_feedback", {"status": "done", "feedback": "Out of steps."}
 
-    model, events, _ = run(script, feedback_max_steps=2)
+    model, events, _ = run(script, feedback_max_steps=2, show_limits=True)
     # the last step of the feedback run only offers give_feedback
     assert [names for _, names in model.calls[1:]] == [
         ["execute", "give_feedback"],
@@ -200,24 +200,38 @@ def test_feedback_at_limit():
     assert output["error"] is None
     [message] = feedback_messages(output)
     assert message["content"] == "Feedback (status=done):\nOut of steps."
+    # the feedback run shows its own limits
+    results = [
+        m["content"]["tool_calls"][0]["result"]["formatted"]
+        for m in message["trace"]
+        if m["role"] == "assistant"
+    ]
+    assert [r.splitlines()[-1] for r in results] == [
+        "Used 1 of 2 steps (1 left).",
+        "Used 2 of 2 steps (0 left).",
+        "Used 2 of 2 steps (0 left).",
+    ]
 
 
-def test_invalid_feedback_is_retried():
+@pytest.mark.parametrize("max_steps", [1, 5])
+def test_invalid_feedback_ends_run(max_steps: int):
     attempts = []
 
     def script(messages, names):
         if not is_feedback(messages):
             return "submit", {}
         attempts.append(names)
-        status = "done" if len(attempts) > 1 else "good"
-        return "give_feedback", {"status": status, "feedback": "Fine."}
+        return "give_feedback", {"status": "good", "feedback": "Fine."}
 
-    _, events, _ = run(script, feedback_max_steps=5)
-    assert len(attempts) == 2
+    _, events, _ = run(script, feedback_max_steps=max_steps)
+    # no further step for the feedback task
+    assert len(attempts) == 1
+    assert not [e for e in events if e["type"] == "feedback"]
     output = events[-1]
-    assert output["error"] is None
-    [message] = feedback_messages(output)
-    assert message["content"] == "Feedback (status=done):\nFine."
+    assert output["output"] == {"submitted": True}
+    assert output["error"]["reason"] == "feedback"
+    assert "no valid feedback given" in output["error"]["content"]
+    assert not feedback_messages(output)
 
 
 def test_no_feedback_given():
@@ -232,7 +246,7 @@ def test_no_feedback_given():
     # the output of the task is kept
     assert output["output"] == {"submitted": True}
     assert output["error"]["reason"] == "feedback"
-    assert "no feedback given" in output["error"]["content"]
+    assert "no valid feedback given" in output["error"]["content"]
     assert not feedback_messages(output)
 
 

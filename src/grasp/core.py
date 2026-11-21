@@ -207,7 +207,7 @@ def generate_feedback(
     feedback = run["output"]
     if feedback is None:
         error = run["error"]
-        reason = error["content"] if error else "no feedback given"
+        reason = error["content"] if error else "no valid feedback given"
         raise RuntimeError(f"Feedback task {task_name} failed: {reason}")
 
     return Feedback(
