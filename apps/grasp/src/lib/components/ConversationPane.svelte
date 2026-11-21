@@ -13,6 +13,7 @@
   import UnknownMessage from './history/UnknownMessage.svelte';
   import { provenanceJump } from '../stores.js';
   import { spanRanges } from '../utils/ranges.js';
+  import { callArgs, queryLine } from '../utils/provenance.js';
 
   export let histories = [];
   export let running = false;
@@ -111,12 +112,17 @@
               used_args: [...(item.args ?? []), ...(item.spans.length ? ['sparql'] : [])],
               sparql_spans: item.spans
             };
-            add(item, { text: `step ${step}`, short: String(step), tool: message.name, ref });
+            const args = callArgs(message.args);
+            add(item, { text: `step ${step}`, short: String(step), tool: message.name, args, ref });
           }
         } else if (message?.type === 'output') {
-          for (const item of message.output?.provenance?.trace?.items ?? []) {
+          // as a call of answer with the line of the query containing the item
+          const sparql = message.output.sparql ?? '';
+          for (const item of message.output.provenance?.trace?.items ?? []) {
             const text = histories.length > 1 ? `answer ${h + 1}` : 'answer';
-            add(item, { text, short: text, answer: h, spans: item.spans });
+            const line = item.spans.length ? queryLine(sparql, item.spans[0][0]) : '';
+            const args = line ? callArgs({ sparql: line }) : [];
+            add(item, { text, short: text, tool: 'answer', args, answer: h, spans: item.spans });
           }
         }
       }

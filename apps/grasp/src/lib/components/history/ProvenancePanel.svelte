@@ -1,21 +1,13 @@
-<script context="module">
-  // statuses of items, for the query of the output and the arguments of tool
-  // calls
-  export const STATUS = {
-    retrieved: { text: 'surfaced before use', title: 'A tool result showed this item before it was used' },
-    verified: { text: 'surfaced after use', title: 'This item was used before a tool result showed it' },
-    noted: { text: 'from notes', title: 'No tool result showed this item, but the notes contain it' },
-    unverified: { text: 'never surfaced', title: 'No tool result showed this item, it may be made up' }
-  };
-</script>
-
 <script>
   import { getContext, tick } from 'svelte';
   import SparqlBlock from '../common/SparqlBlock.svelte';
+  import CallRow from './CallRow.svelte';
+  import ItemHead from './ItemHead.svelte';
   import ExecutionResult from './ExecutionResult.svelte';
   import KgItem from './KgItem.svelte';
   import { provenanceJump } from '../../stores.js';
   import { displayValue as display } from '../../utils/tables.js';
+  import { STATUS, callArgs } from '../../utils/provenance.js';
 
   export let sparql = null;
   export let qleverLink = null;
@@ -117,20 +109,6 @@
     tip = null;
   }
 
-  function itemName(item) {
-    return item.label ? `${item.label} (${item.written})` : item.written;
-  }
-
-  function callArgs(ref) {
-    return Object.entries($toolCalls?.get(ref.id)?.args ?? {})
-      .filter(([key]) => key !== 'kg')
-      .map(([key, value]) => {
-        let text = typeof value === 'string' ? value : JSON.stringify(value);
-        text = String(text).replace(/\s+/g, ' ').trim();
-        return [key, text.length > 60 ? `${text.slice(0, 60)}…` : text];
-      });
-  }
-
   // the calls that showed and first used an item, ordered by step; one call
   // if it did both
   function itemCalls(item) {
@@ -185,10 +163,7 @@
         on:mouseenter={cancelHide}
         on:mouseleave={leaveItem}
       >
-        <div class="tip__head">
-          <strong>{itemName(tip.item)}</strong>
-          <span class={`badge badge--${tip.item.status}`}>{STATUS[tip.item.status]?.text ?? tip.item.status}</span>
-        </div>
+        <ItemHead item={tip.item} />
 
         <!-- the part of the tool result that showed the item -->
         {#if tip.item.shown_by?.shown}
@@ -225,13 +200,12 @@
         {#if itemCalls(tip.item).length > 0}
           <div class="tip__calls">
             {#each itemCalls(tip.item) as call (call.which)}
-              <button type="button" class="call" on:click={() => jumpTo(tip.item, call.which)}>
-                <span class="call__what">{call.text} step {call.ref.step}</span>
-                <span class="call__fn">{call.ref.tool}</span>
-                {#each callArgs(call.ref) as [key, value]}
-                  <span class="call__arg"><span class="call__key">{key}</span> {value}</span>
-                {/each}
-              </button>
+              <CallRow
+                what={`${call.text} step ${call.ref.step}`}
+                tool={call.ref.tool}
+                args={callArgs($toolCalls?.get(call.ref.id)?.args)}
+                on:click={() => jumpTo(tip.item, call.which)}
+              />
             {/each}
           </div>
         {/if}
@@ -284,15 +258,6 @@
 
   .tip--above {
     transform: translateY(-100%);
-  }
-
-  .tip__head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.4rem;
-    overflow-wrap: anywhere;
-    color: var(--color-uni-dark-blue);
   }
 
   .tip__note {
@@ -361,84 +326,6 @@
     gap: 0.2rem;
     padding-top: 0.35rem;
     border-top: 1px solid rgba(52, 74, 154, 0.12);
-  }
-
-  .call {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.3rem;
-    width: 100%;
-    padding: 0.25rem 0.35rem;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: none;
-    text-align: left;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--text-subtle);
-    cursor: pointer;
-  }
-
-  .call:hover,
-  .call:focus-visible {
-    background: rgba(52, 74, 154, 0.08);
-    outline: none;
-  }
-
-  .call__what {
-    font-weight: 600;
-    color: var(--color-uni-blue);
-  }
-
-  .call__what::after {
-    content: ' →';
-  }
-
-  .call__fn,
-  .call__arg {
-    padding: 0.05rem 0.4rem;
-    border-radius: 999px;
-    border: 1px solid rgba(190, 170, 60, 0.45);
-    background: #fff;
-    overflow-wrap: anywhere;
-  }
-
-  .call__fn {
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .call__key {
-    font-weight: 700;
-    color: var(--color-uni-yellow);
-  }
-
-  .badge {
-    border-radius: 999px;
-    padding: 0.05rem 0.5rem;
-    font-size: 0.72rem;
-    font-weight: 600;
-  }
-
-  .badge--retrieved {
-    background: color-mix(in srgb, var(--color-uni-green) 16%, transparent);
-    color: #006b57;
-  }
-
-  .badge--verified {
-    background: color-mix(in srgb, var(--color-uni-yellow) 22%, transparent);
-    color: #6b5d12;
-  }
-
-  .badge--noted {
-    background: color-mix(in srgb, var(--color-uni-blue) 14%, transparent);
-    color: var(--color-uni-blue);
-  }
-
-  .badge--unverified {
-    background: color-mix(in srgb, var(--color-uni-red) 14%, transparent);
-    color: var(--color-uni-red);
   }
 
   .legend {

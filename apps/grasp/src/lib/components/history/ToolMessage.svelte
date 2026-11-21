@@ -9,8 +9,11 @@
   import ShapesResult from './ShapesResult.svelte';
   import BooleanResult from './BooleanResult.svelte';
   import TableResult from './TableResult.svelte';
-  import ProvenancePanel, { STATUS } from './ProvenancePanel.svelte';
+  import ProvenancePanel from './ProvenancePanel.svelte';
+  import CallRow from './CallRow.svelte';
+  import ItemHead from './ItemHead.svelte';
   import { provenanceJump } from '../../stores.js';
+  import { STATUS } from '../../utils/provenance.js';
   import {
     flattenFunctionArgs,
     nestBulletsUnderEnumeration
@@ -291,18 +294,15 @@
       style={`left:${tip.left}px;top:${tip.top}px;width:${tip.width}px;`}
     >
       {#each tip.entries as { item, uses } (item.identifier)}
-        <div class="tip__item">
-          <strong title={item.identifier}>
-            {item.label ? `${item.label} (${item.written})` : item.written}
-          </strong>
-          <span class="tip__note">used later by</span>
+        <ItemHead {item} />
+        <div class="tip__calls">
           {#each uses as use}
-            <button type="button" class="use" on:click={() => jumpToUse(use)}>
-              <span class="use__what">{use.text}</span>
-              {#if use.tool}
-                <span class="use__fn">{use.tool}</span>
-              {/if}
-            </button>
+            <CallRow
+              what={`Used by ${use.text}`}
+              tool={use.tool}
+              args={use.args}
+              on:click={() => jumpToUse(use)}
+            />
           {/each}
         </div>
       {/each}
@@ -468,53 +468,12 @@
     font-size: 0.85rem;
   }
 
-  .tip__item {
+  .tip__calls {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
-    overflow-wrap: anywhere;
-    color: var(--color-uni-dark-blue);
-  }
-
-  .tip__note {
-    font-size: 0.75rem;
-    color: var(--text-subtle);
-  }
-
-  .use {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.2rem 0.35rem;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: none;
-    text-align: left;
-    font: inherit;
-    font-size: 0.75rem;
-    color: var(--text-subtle);
-    cursor: pointer;
-  }
-
-  .use:hover,
-  .use:focus-visible {
-    background: rgba(52, 74, 154, 0.08);
-    outline: none;
-  }
-
-  .use__what {
-    font-weight: 600;
-    color: var(--color-uni-blue);
-  }
-
-  .use__what::after {
-    content: ' →';
-  }
-
-  .use__fn {
-    padding: 0.05rem 0.4rem;
-    border-radius: 999px;
-    background: rgba(52, 74, 154, 0.08);
+    gap: 0.2rem;
+    padding-top: 0.35rem;
+    border-top: 1px solid rgba(52, 74, 154, 0.12);
   }
 
   .limits {
