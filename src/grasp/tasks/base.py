@@ -8,21 +8,11 @@ from grasp.provenance.state import Provenance, ProvenanceState
 from grasp.examples import Sample
 
 
-class FeedbackTask(ABC):
-    @abstractmethod
-    def feedback_system_message(
-        self,
-        kg_notes: dict[str, list[str]],
-        notes: list[str],
-    ) -> str: ...
-
-    @abstractmethod
-    def feedback_instructions(self, inputs: list[str], output: dict) -> str: ...
-
-
 class GraspTask(ABC):
     name: str
     provenance: Provenance
+    # name of the task that gives feedback on the output, if any
+    feedback_task: str | None = None
 
     def __init__(
         self,
@@ -75,6 +65,11 @@ class GraspTask(ABC):
     @property
     def default_input_field(self) -> str | None:
         return None
+
+    @property
+    def kg_functions(self) -> bool:
+        # whether the functions on the knowledge graphs are offered
+        return True
 
     def limit_message(self) -> str:
         # shown once the step or time limit is reached, before the last step

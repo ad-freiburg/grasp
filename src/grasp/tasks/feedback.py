@@ -1,22 +1,23 @@
-from logging import Logger
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
-from universal_ml_utils.logging import get_logger
 
-from grasp.model import FunctionDefinition, Message, Model
-from grasp.tasks.base import FeedbackTask, GraspTask
-from grasp.utils import format_message, format_response
-
-
-def format_feedback(feedback: dict) -> str:
-    status = feedback["status"]
-    return f"Feedback (status={status}):\n{feedback['feedback']}"
+from grasp.model import FunctionDefinition, Message, Response
+from grasp.tasks.base import GraspTask
 
 
 class GiveFeedbackArgs(BaseModel):
     status: Literal["done", "refine", "retry"] = Field(description="The feedback type")
     feedback: str = Field(description="The feedback message")
+
+
+class Feedback(GiveFeedbackArgs):
+    # messages of the feedback task that gave the feedback
+    trace: list[Message] = []
+
+
+def format_feedback(feedback: Feedback) -> str:
+    return f"Feedback (status={feedback.status}):\n{feedback.feedback}"
 
 
 def functions() -> list[FunctionDefinition]:
@@ -39,41 +40,50 @@ and provide suggestions for improving the output if applicable.""",
     ]
 
 
-def generate_feedback(
-    model: Model,
-    task: GraspTask,
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
-    inputs: list[str],
-    output: Any,
-    logger: Logger = get_logger("GRASP FEEDBACK"),
-) -> dict | None:
-    if not isinstance(task, FeedbackTask):
-        return None
+class FeedbackTask(GraspTask):
+    # feedback on another task's output, with KG functions for more than one step
 
-    messages: list[Message] = [
-        Message.system(content=task.feedback_system_message(kg_notes, notes)),
-        Message.user(content=task.feedback_instructions(inputs, output)),
-    ]
+    @property
+    def kg_functions(self) -> bool:
+        return self.config.max_steps > 1
 
-    for msg in messages:
-        logger.debug(format_message(msg))
+    def function_definitions(self) -> list[FunctionDefinition]:
+        return functions()
 
-    config = task.config.model_copy(deep=True)
-    tool_choice = config.tool_choice
-    if tool_choice != "required":
-        config.tool_choice = "required"
-        logger.debug(
-            f"Setting tool choice to 'required' for feedback generation (original: '{tool_choice}')"
+    def call_function(
+        self,
+        fn_name: str,
+        fn_args: dict,
+        known: set[str],
+        example_indices: dict | None,
+    ) -> str:
+        if fn_name != "give_feedback":
+            raise ValueError(f"Unknown function {fn_name}")
+
+        GiveFeedbackArgs.model_validate(fn_args)
+        return "Stopping"
+
+    def done(self, fn_name: str) -> bool:
+        # also with invalid arguments, the run then ends without feedback
+        return fn_name == "give_feedback"
+
+    def limit_message(self) -> str:
+        return (
+            "The step or time limit is reached. You have one last step, "
+            "give your feedback now."
         )
 
-    # dont catch errors here, if feedback gen fails
-    # we want to know and handle it outside for potential retries
-    response = model(messages, functions(), config)
-    logger.debug(format_response(response))
+    def limit_functions(self) -> list[str] | None:
+        return ["give_feedback"]
 
-    # model failing to follow protocol is a model issue,, no retry
-    assert len(response.tool_calls) == 1, "No tool call found"  # type: ignore
-    tool_call = response.tool_calls[0]  # type: ignore
-    assert tool_call.name == "give_feedback", "Feedback function not called"
-    return GiveFeedbackArgs.model_validate(tool_call.args).model_dump()
+    def output(self, messages: list[Message]) -> dict | None:
+        # the feedback given, if its arguments were valid
+        for message in reversed(messages):
+            if not isinstance(message.content, Response):
+                continue
+
+            for tool_call in reversed(message.content.tool_calls):
+                if tool_call.name == "give_feedback" and tool_call.error is None:
+                    return GiveFeedbackArgs.model_validate(tool_call.args).model_dump()
+
+        return None

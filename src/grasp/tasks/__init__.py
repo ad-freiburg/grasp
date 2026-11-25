@@ -5,18 +5,18 @@ from grasp.manager import KgManager
 from grasp.provenance.state import ProvenanceState
 from grasp.tasks.auto_setup import AutoSetupTask
 from grasp.tasks.base import GraspTask
-from grasp.tasks.cea import CeaTask
+from grasp.tasks.cea import CeaFeedbackTask, CeaTask
 from grasp.tasks.exploration import (
     FunctionalExplorationTask,
     StructuralExplorationTask,
 )
-from grasp.tasks.entity_linking import EntityLinkingTask
+from grasp.tasks.entity_linking import EntityLinkingFeedbackTask, EntityLinkingTask
 from grasp.tasks.general_qa import GeneralQaTask
 from grasp.tasks.notes_from_samples import NotesFromSamplesTask
 from grasp.tasks.notes_from_traces import NotesFromTracesTask
 from grasp.tasks.question_generation import QuestionGenerationTask
 from grasp.tasks.shapes_setup import ShapesSetupTask
-from grasp.tasks.sparql_qa import SparqlQaTask
+from grasp.tasks.sparql_qa import SparqlQaFeedbackTask, SparqlQaTask
 from grasp.tasks.sparql_to_question import SparqlToQuestionTask
 from grasp.tasks.wikidata_query_logs import WdqlTask
 
@@ -48,6 +48,9 @@ _REGISTRY: dict[str, type[GraspTask]] = {
         NotesFromSamplesTask,
         AutoSetupTask,
         ShapesSetupTask,
+        SparqlQaFeedbackTask,
+        CeaFeedbackTask,
+        EntityLinkingFeedbackTask,
     ]
 }
 

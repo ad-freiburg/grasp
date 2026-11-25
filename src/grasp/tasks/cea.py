@@ -9,13 +9,12 @@ from grasp.examples import Sample
 from grasp.function_args import Iri
 from grasp.manager import KgManager, find_manager
 from grasp.model import FunctionDefinition, Message
-from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.tasks.base import GraspTask
 from grasp.tasks.entities import (
+    AnnotationFeedbackTask,
     AnnotationsResult,
     Entity,
     annotated_entities,
-    annotation_feedback_instructions,
-    annotation_feedback_system_message,
     format_annotated_entities,
     prepare_annotation,
 )
@@ -496,8 +495,17 @@ def call_function(
         raise ValueError(f"Unknown function {fn_name}")
 
 
-class CeaTask(GraspTask, FeedbackTask):
+class CeaFeedbackTask(AnnotationFeedbackTask):
+    name = "cea-feedback"
+    kind = "table"
+
+    def rules(self) -> list[str]:
+        return rules()
+
+
+class CeaTask(GraspTask):
     name = "cea"
+    feedback_task = CeaFeedbackTask.name
 
     def system_information(self) -> str:
         return system_information()
@@ -542,19 +550,3 @@ class CeaTask(GraspTask, FeedbackTask):
     @classmethod
     def sample_cls(cls) -> type[CeaSample] | None:
         return CeaSample
-
-    def feedback_system_message(
-        self,
-        kg_notes: dict[str, list[str]],
-        notes: list[str],
-    ) -> str:
-        return annotation_feedback_system_message(
-            self.managers,
-            kg_notes,
-            notes,
-            rules(),
-            "table",
-        )
-
-    def feedback_instructions(self, inputs: list[str], output: dict) -> str:
-        return annotation_feedback_instructions(inputs, output)

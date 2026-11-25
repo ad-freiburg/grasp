@@ -190,6 +190,9 @@ class GraspConfig(ModelConfig):
     # enable feedback loop
     feedback: bool = False
     max_feedbacks: int = 2
+    # steps of the feedback task, with one it only gives its feedback,
+    # with more it can also use the knowledge graph functions before
+    feedback_max_steps: int = 1
     notes_only_for_feedback: bool = False
 
     @property

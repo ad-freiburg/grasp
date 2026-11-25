@@ -5,7 +5,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, Field, SerializeAsAny, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SerializeAsAny,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from grasp.configs import ModelConfig
 from grasp.function_args import add_enums, strict_json_schema
@@ -219,6 +226,15 @@ class Message(BaseModel):
     name: str | None = Field(default=None, exclude=True)
     role: str
     content: str | Response
+    # messages behind a feedback message, never sent to the model
+    trace: list["Message"] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.trace is None:
+            data.pop("trace", None)
+        return data
 
     @staticmethod
     def system(content: str, name: str | None = None) -> "Message":

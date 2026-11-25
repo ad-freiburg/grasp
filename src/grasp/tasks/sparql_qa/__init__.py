@@ -10,11 +10,12 @@ from grasp.functions import (
     check_known,
     selection_groups,
 )
-from grasp.manager import KgManager, find_manager, format_kgs
+from grasp.manager import KgManager, find_manager
 from grasp.model import FunctionDefinition, Message, ToolCallResult
 from grasp.model.base import ResponseMessage
 from grasp.provenance.state import Provenance
-from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.tasks.base import GraspTask
+from grasp.tasks.feedback import FeedbackTask
 from grasp.tasks.sparql_qa.examples import (
     SparqlQaSample,
 )
@@ -27,8 +28,6 @@ from grasp.tasks.sparql_qa.examples import (
 from grasp.tasks.utils import format_sparql_result, prepare_sparql_result
 from grasp.utils import (
     FunctionCallException,
-    format_enumerate,
-    format_notes,
     format_section,
 )
 
@@ -338,12 +337,12 @@ def output(
     return output
 
 
-def feedback_system_message(
-    managers: list[KgManager],
-    kg_notes: dict[str, list[str]],
-    notes: list[str],
-) -> str:
-    cases = """\
+def feedback_system_information() -> str:
+    return """\
+You are a question answering assistant providing feedback on the \
+output of a SPARQL-based question answering system for a given user \
+question.
+
 There are two possible cases:
 
 1) The system was able to find an answer
@@ -356,27 +355,6 @@ it uses, and its execution result.
 You are given the system's explanation for why it failed to find an answer. \
 Optionally, you are provided with the system's best attempt at a SPARQL query \
 so far including the same additional information as in case 1."""
-
-    return "\n\n".join(
-        [
-            "You are a question answering assistant providing feedback on the "
-            "output of a SPARQL-based question answering system for a given user "
-            "question.",
-            format_section(
-                "Available knowledge graphs",
-                format_kgs(managers, kg_notes),
-            ),
-            format_section(
-                "General notes across knowledge graphs",
-                format_notes(notes, enumerated=True),
-            ),
-            format_section(
-                "Rules to follow",
-                format_enumerate(rules()) if rules() else "None",
-            ),
-            cases,
-        ]
-    )
 
 
 def feedback_instructions(questions: list[str], output: dict) -> str:
@@ -413,8 +391,22 @@ def feedback_instructions(questions: list[str], output: dict) -> str:
     return "\n\n".join(sections)
 
 
-class SparqlQaTask(GraspTask, FeedbackTask):
+class SparqlQaFeedbackTask(FeedbackTask):
+    name = "sparql-qa-feedback"
+
+    def system_information(self) -> str:
+        return feedback_system_information()
+
+    def rules(self) -> list[str]:
+        return rules()
+
+    def setup(self, input: dict) -> str:
+        return feedback_instructions(input["inputs"], input["output"])
+
+
+class SparqlQaTask(GraspTask):
     name = "sparql-qa"
+    feedback_task = SparqlQaFeedbackTask.name
 
     # set to True when a stopping call (answer/cancel) was rejected because it
     # used IRIs that are not yet known from the trace; keeps the task from
@@ -510,11 +502,3 @@ class SparqlQaTask(GraspTask, FeedbackTask):
     @classmethod
     def sample_cls(cls) -> type[SparqlQaSample] | None:
         return SparqlQaSample
-
-    def feedback_system_message(
-        self, kg_notes: dict[str, list[str]], notes: list[str]
-    ) -> str:
-        return feedback_system_message(self.managers, kg_notes, notes)
-
-    def feedback_instructions(self, inputs: list[str], output: dict) -> str:
-        return feedback_instructions(inputs, output)

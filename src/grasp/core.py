@@ -33,7 +33,7 @@ from grasp.provenance.state import ProvenanceState
 from grasp.tasks import get_task
 from grasp.tasks import rules as general_rules
 from grasp.tasks.base import GraspTask
-from grasp.tasks.feedback import format_feedback, generate_feedback
+from grasp.tasks.feedback import Feedback, format_feedback
 from grasp.tasks.sparql_qa.examples import find_examples
 from grasp.utils import (
     format_enumerate,
@@ -169,6 +169,51 @@ def load_notes(config: GraspConfig) -> tuple[list[str], dict[str, list[str]]]:
     return general_notes, kg_notes  # type: ignore
 
 
+def generate_feedback(
+    task_name: str,
+    inputs: list[str],
+    output: dict,
+    config: GraspConfig,
+    managers: list[KgManager],
+    kg_notes: dict[str, list[str]],
+    notes: list[str],
+    example_indices: dict[str, ExampleIndex] | None,
+    logger: Logger,
+    custom_model: Model | None,
+) -> Feedback:
+    # the feedback task is a run of its own, with the notes, its own number
+    # of steps and without feedback
+    config = config.model_copy(deep=True)
+    config.feedback = False
+    config.notes_only_for_feedback = False
+    config.max_steps = config.feedback_max_steps
+
+    *_, run = generate(
+        task_name,
+        {"inputs": inputs, "output": output},
+        config,
+        managers,
+        kg_notes,
+        notes,
+        example_indices,
+        logger=logger,
+        yield_output=True,
+        custom_model=custom_model,
+    )
+
+    feedback = run["output"]
+    if feedback is None:
+        error = run["error"]
+        reason = error["content"] if error else "no valid feedback given"
+        raise RuntimeError(f"Feedback task {task_name} failed: {reason}")
+
+    return Feedback(
+        status=feedback["status"],
+        feedback=feedback["feedback"],
+        trace=run["messages"],
+    )
+
+
 def generate(
     task_name: str,
     input: Any,
@@ -215,13 +260,15 @@ def generate(
     task.provenance.attribute_known()
 
     # setup functions (after setup so tasks can configure based on input)
-    fns = kg_functions(
-        managers,
-        config.fn_set,
-        config.list_k,
-        config.search_k,
-        config.search_max_pages,
-    )
+    fns = []
+    if task.kg_functions:
+        fns = kg_functions(
+            managers,
+            config.fn_set,
+            config.list_k,
+            config.search_k,
+            config.search_max_pages,
+        )
     fns.extend(task.function_definitions())
     task.provenance.add_functions(fns)
     yield {"type": "input", "input": input}
@@ -502,7 +549,7 @@ def generate(
 
         # get latest output
         output = task.output(messages)
-        if output is None:
+        if output is None or task.feedback_task is None:
             break
 
         # provide feedback
@@ -513,13 +560,16 @@ def generate(
                 if isinstance(message.content, str) and message.role == "user"
             ]
             feedback = generate_feedback(
-                model,
-                task,
+                task.feedback_task,
+                inputs,
+                output,
+                config,
+                managers,
                 feedback_kg_notes or kg_notes or {},
                 feedback_notes or notes or [],
-                inputs,  # type: ignore
-                output,
+                example_indices,
                 logger,
+                custom_model,
             )
         except Exception as e:
             error = {
@@ -529,18 +579,22 @@ def generate(
             logger.error(format_error(**error))
             break
 
-        if feedback is None:
-            # no feedback
-            break
-
-        messages.append(Message.user(format_feedback(feedback), name="feedback"))
+        # the trace behind the feedback is kept with its message
+        messages.append(
+            Message(
+                name="feedback",
+                role="user",
+                content=format_feedback(feedback),
+                trace=feedback.trace,
+            )
+        )
         yield {
             "type": "feedback",
-            "status": feedback["status"],
-            "feedback": feedback["feedback"],
+            "status": feedback.status,
+            "feedback": feedback.feedback,
         }
 
-        if feedback["status"] == "done":
+        if feedback.status == "done":
             break
 
         # if not done, continue

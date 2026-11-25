@@ -8,13 +8,12 @@ from grasp.examples import Sample
 from grasp.function_args import Iri
 from grasp.manager import KgManager, find_manager
 from grasp.model import FunctionDefinition, Message
-from grasp.tasks.base import FeedbackTask, GraspTask
+from grasp.tasks.base import GraspTask
 from grasp.tasks.entities import (
+    AnnotationFeedbackTask,
     AnnotationsResult,
     Entity,
     annotated_entities,
-    annotation_feedback_instructions,
-    annotation_feedback_system_message,
     format_annotated_entities,
     prepare_annotation,
 )
@@ -571,8 +570,17 @@ def call_function(
         raise ValueError(f"Unknown function '{fn_name}'")
 
 
-class EntityLinkingTask(GraspTask, FeedbackTask):
+class EntityLinkingFeedbackTask(AnnotationFeedbackTask):
+    name = "entity-linking-feedback"
+    kind = "text"
+
+    def rules(self) -> list[str]:
+        return rules()
+
+
+class EntityLinkingTask(GraspTask):
     name = "entity-linking"
+    feedback_task = EntityLinkingFeedbackTask.name
 
     def system_information(self) -> str:
         return system_information()
@@ -617,19 +625,3 @@ class EntityLinkingTask(GraspTask, FeedbackTask):
     @classmethod
     def sample_cls(cls) -> type[EntityLinkingSample] | None:
         return EntityLinkingSample
-
-    def feedback_system_message(
-        self,
-        kg_notes: dict[str, list[str]],
-        notes: list[str],
-    ) -> str:
-        return annotation_feedback_system_message(
-            self.managers,
-            kg_notes,
-            notes,
-            rules(),
-            "text",
-        )
-
-    def feedback_instructions(self, inputs: list[str], output: dict) -> str:
-        return annotation_feedback_instructions(inputs, output)
