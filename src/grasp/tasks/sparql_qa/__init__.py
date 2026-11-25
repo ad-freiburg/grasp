@@ -400,8 +400,8 @@ class SparqlQaFeedbackTask(FeedbackTask):
     def rules(self) -> list[str]:
         return rules()
 
-    def instructions(self, inputs: list[str], output: dict) -> str:
-        return feedback_instructions(inputs, output)
+    def setup(self, input: dict) -> str:
+        return feedback_instructions(input["inputs"], input["output"])
 
 
 class SparqlQaTask(GraspTask):

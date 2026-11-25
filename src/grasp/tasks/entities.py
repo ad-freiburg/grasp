@@ -157,5 +157,5 @@ class AnnotationFeedbackTask(FeedbackTask):
             "\n\nProvide your feedback with the give_feedback function."
         )
 
-    def instructions(self, inputs: list[str], output: dict) -> str:
-        return annotation_feedback_instructions(inputs, output)
+    def setup(self, input: dict) -> str:
+        return annotation_feedback_instructions(input["inputs"], input["output"])

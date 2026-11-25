@@ -1,5 +1,4 @@
-from abc import abstractmethod
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -43,12 +42,6 @@ and provide suggestions for improving the output if applicable.""",
 
 class FeedbackTask(GraspTask):
     # feedback on another task's output, with KG functions for more than one step
-
-    @abstractmethod
-    def instructions(self, inputs: list[str], output: dict) -> str: ...
-
-    def setup(self, input: Any) -> str:
-        return self.instructions(input["inputs"], input["output"])
 
     @property
     def kg_functions(self) -> bool:

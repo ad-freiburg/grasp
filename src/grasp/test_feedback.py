@@ -25,8 +25,8 @@ class DummyFeedbackTask(FeedbackTask):
     def rules(self) -> list[str]:
         return []
 
-    def instructions(self, inputs: list[str], output: dict) -> str:
-        return f"Feedback on {output} for {inputs}."
+    def setup(self, input: dict) -> str:
+        return f"Feedback on {input['output']} for {input['inputs']}."
 
 
 class ScriptedModel(Model):
@@ -105,10 +105,9 @@ def test_single_step_feedback():
     # one call for the task, one for the feedback
     assert len(model.calls) == 2
     messages, names = model.calls[1]
-    # no knowledge graph functions, and the step has to call give_feedback
+    # no knowledge graph functions
     assert names == ["give_feedback"]
     assert configs["dummy-feedback"].max_steps == 1
-    assert configs["dummy-feedback"].tool_choice == "required"
     assert not configs["dummy-feedback"].feedback
     assert [m.role for m in messages] == ["system", "user"]
     assert messages[1].content == "Feedback on {'submitted': True} for ['go']."
@@ -141,7 +140,6 @@ def test_multi_step_feedback():
 
     model, events, configs = run(script, feedback_max_steps=5)
     assert configs["dummy-feedback"].max_steps == 5
-    assert configs["dummy-feedback"].tool_choice == "auto"
     # two rounds of submit, execute and feedback
     assert len(model.calls) == 6
 
@@ -234,13 +232,14 @@ def test_invalid_feedback_ends_run(max_steps: int):
     assert not feedback_messages(output)
 
 
-def test_no_feedback_given():
+@pytest.mark.parametrize("max_steps", [1, 5])
+def test_no_feedback_given(max_steps: int):
     def script(messages, names):
         if not is_feedback(messages):
             return "submit", {}
         return "Looks good to me."
 
-    _, events, _ = run(script, feedback_max_steps=5)
+    _, events, _ = run(script, feedback_max_steps=max_steps)
     assert not [e for e in events if e["type"] == "feedback"]
     output = events[-1]
     # the output of the task is kept

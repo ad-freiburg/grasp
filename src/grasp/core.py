@@ -187,9 +187,6 @@ def generate_feedback(
     config.feedback = False
     config.notes_only_for_feedback = False
     config.max_steps = config.feedback_max_steps
-    if config.max_steps == 1:
-        # a single step has to give the feedback
-        config.tool_choice = "required"
 
     *_, run = generate(
         task_name,
