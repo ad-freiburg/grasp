@@ -1,4 +1,4 @@
-/* global __API_BASE__, __QLEVER_HOSTS__ */
+/* global __API_BASE__, __MATERIAL_URL__, __QLEVER_HOSTS__ */
 
 export const APP_COLORS = Object.freeze({
   uniBlue: '#344A9A',
@@ -14,8 +14,9 @@ export const APP_COLORS = Object.freeze({
 export const BRAND_LINKS = Object.freeze({
   chair: 'https://ad.cs.uni-freiburg.de',
   repo: 'https://github.com/ad-freiburg/grasp',
-  // papers, their material and evaluation apps are listed on this page
-  material: 'https://ad-publications.cs.uni-freiburg.de/grasp/'
+  // papers, their material and evaluation apps are listed on this page, set
+  // at build time via the MATERIAL_URL env var
+  material: __MATERIAL_URL__
 });
 
 /**

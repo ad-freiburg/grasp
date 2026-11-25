@@ -1,6 +1,6 @@
 <script>
   import { onMount, onDestroy, tick } from 'svelte';
-  import { wsEndpoint, kgEndpoint, COPYRIGHT, MATERIAL_URL } from '../constants.js';
+  import { wsEndpoint, kgEndpoint, COPYRIGHT, CHAIR_URL, MATERIAL_URL, REPO_URL } from '../constants.js';
   import StepCard from './StepCard.svelte';
   import OutputCard from './OutputCard.svelte';
   import SkeletonTrace from './SkeletonTrace.svelte';
@@ -272,10 +272,16 @@
 
 <section class="app-shell">
   <footer class="footer">
-    <p>&copy; {new Date().getFullYear()} {COPYRIGHT}</p>
+    <p>
+      &copy; {new Date().getFullYear()} {COPYRIGHT} –{' '}
+      <a class="chair-link" href={CHAIR_URL} target="_blank" rel="noreferrer">
+        Chair for Algorithms and Data Structures
+      </a>
+    </p>
     <nav class="footer-links">
       <a href="evaluate">Evaluation</a>
       <a href={MATERIAL_URL}>Material</a>
+      <a href={REPO_URL} target="_blank" rel="noreferrer">GitHub</a>
     </nav>
   </footer>
 
@@ -487,6 +493,16 @@
 
   .footer-links a:hover,
   .footer-links a:focus-visible {
+    text-decoration: none;
+  }
+
+  .chair-link {
+    color: inherit;
+    text-decoration: underline;
+  }
+
+  .chair-link:hover,
+  .chair-link:focus-visible {
     text-decoration: none;
   }
 

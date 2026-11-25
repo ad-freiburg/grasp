@@ -2,7 +2,7 @@ FROM node:22-alpine AS build
 WORKDIR /app
 ARG API_BASE="/api"
 ARG COPYRIGHT="University of Freiburg"
-ARG MATERIAL_URL="grisp"
+ARG MATERIAL_URL="https://ad-publications.cs.uni-freiburg.de/grisp/"
 
 COPY package.json package-lock.json ./
 RUN npm ci

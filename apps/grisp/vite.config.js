@@ -6,6 +6,6 @@ export default defineConfig({
 	define: {
 		__API_BASE__: JSON.stringify(process.env.API_BASE || '/api'),
 		__COPYRIGHT__: JSON.stringify(process.env.COPYRIGHT || 'University of Freiburg'),
-		__MATERIAL_URL__: JSON.stringify(process.env.MATERIAL_URL || 'grisp')
+		__MATERIAL_URL__: JSON.stringify(process.env.MATERIAL_URL || 'https://ad-publications.cs.uni-freiburg.de/grisp/')
 	}
 });

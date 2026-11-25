@@ -32,6 +32,9 @@ export default defineConfig({
 	plugins: [shareRedirect, sveltekit()],
 	define: {
 		__API_BASE__: JSON.stringify(process.env.API_BASE || '/api'),
+		__MATERIAL_URL__: JSON.stringify(
+			process.env.MATERIAL_URL || 'https://ad-publications.cs.uni-freiburg.de/grasp/'
+		),
 		__QLEVER_HOSTS__: JSON.stringify(
 			QLEVER_HOSTS.split(',')
 				.map((host) => host.trim())

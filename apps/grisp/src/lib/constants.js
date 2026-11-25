@@ -8,10 +8,15 @@ export const COPYRIGHT = __COPYRIGHT__;
 
 /**
  * URL for the "Material" footer link, set at build time via the
- * MATERIAL_URL env var. Defaults to 'grisp' (resolved relative to the
- * current page URL, so it works at any mount point).
+ * MATERIAL_URL env var. Defaults to the GRISP page on ad-publications.
  */
 export const MATERIAL_URL = __MATERIAL_URL__;
+
+// chair website, linked in the copyright line of the footer
+export const CHAIR_URL = 'https://ad.cs.uni-freiburg.de';
+
+// "GitHub" footer link, the GRISP code in the GRASP repository
+export const REPO_URL = 'https://github.com/ad-freiburg/grasp/tree/main/src/grasp/baselines/grisp';
 
 /**
  * API base URL, set at build time via the API_BASE env var.

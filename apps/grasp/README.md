@@ -41,6 +41,7 @@ npm run preview
 |---|---|---|
 | `BASE_PATH` | `""` | SvelteKit path prefix (e.g. `/grasp`) for when the site is hosted under a subpath. |
 | `API_BASE` | `/api` | API base URL. Relative paths are prefixed with `BASE_PATH` (e.g. `BASE_PATH=/v1` + `API_BASE=/api` → `/v1/api`). Set to an absolute URL (e.g. `http://localhost:6789`) to talk directly to a GRASP server. |
+| `MATERIAL_URL` | `https://ad-publications.cs.uni-freiburg.de/grasp/` | URL of the "Papers & Material" footer link. |
 | `QLEVER_HOSTS` | `qlever.cs.uni-freiburg.de,qlever.informatik.uni-freiburg.de,qlever.dev,*.qlever.dev` | Comma-separated hosts whose SPARQL endpoint gets an "Execute on QLever" button below a generated query. An entry is either an exact host (`qlever.dev`) or a wildcard suffix (`*.qlever.dev`, matching any subdomain but not the bare domain). Set to an empty string to hide the button everywhere. |
 
 ## Docker
