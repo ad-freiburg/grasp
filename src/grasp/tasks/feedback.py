@@ -42,9 +42,7 @@ and provide suggestions for improving the output if applicable.""",
 
 
 class FeedbackTask(GraspTask):
-    # base for tasks that give feedback on the output of another task; with
-    # one step (config.feedback_max_steps) only give_feedback is offered, with
-    # more also the knowledge graph functions
+    # feedback on another task's output, with KG functions for more than one step
 
     @abstractmethod
     def instructions(self, inputs: list[str], output: dict) -> str: ...
